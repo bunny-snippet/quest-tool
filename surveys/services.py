@@ -11,7 +11,8 @@ from django.db import transaction
 from django.utils import timezone
 
 from .integrations import InnovateMRAPIError, InnovateMRClient, InnovateMRNotFound
-from .models import Survey, SurveyQuota, SyncRun, TargetingQuestion
+from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
+from .survey_flow import normalize_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -183,6 +184,77 @@ def replace_survey_details(client: InnovateMRClient, survey: Survey) -> None:
         survey.save(update_fields=["detail_synced_at", "updated_at"])
     if errors:
         raise errors[0]
+
+
+def _transaction_status(value: Any) -> str | None:
+    normalized = "".join(character for character in str(value or "").lower() if character.isalnum())
+    if normalized in {"1", "complete", "completed", "success", "qualified"}:
+        return SurveyAttempt.Status.COMPLETED
+    if normalized in {"4", "8"} or "quality" in normalized or "qualterm" in normalized:
+        return SurveyAttempt.Status.QUALITY_TERMINATED
+    if normalized in {"3", "7"} or "quota" in normalized:
+        return SurveyAttempt.Status.OVER_QUOTA
+    if normalized in {"2", "5"} or "fail" in normalized or "term" in normalized:
+        return SurveyAttempt.Status.TERMINATED
+    return None
+
+
+def _attempt_transaction(attempt: SurveyAttempt, rows: list[dict[str, Any]]) -> dict[str, Any]:
+    for row in rows:
+        identifiers = {str(row.get(key) or "") for key in ("trackId", "PID", "pid")}
+        if attempt.rid in identifiers:
+            return row
+    if not rows:
+        return {}
+    return max(
+        rows,
+        key=lambda row: parse_upstream_datetime(
+            row.get("completeDateTime") or row.get("st_date_time") or row.get("clkDateTime")
+        ) or datetime.min.replace(tzinfo=dt_timezone.utc),
+    )
+
+
+def reconcile_attempt_status(client: InnovateMRClient, attempt: SurveyAttempt) -> bool:
+    """Reconcile one redirected attempt when legacy redirect URLs bypass our callback."""
+    rows = client.get_survey_transactions_by_pid(attempt.survey.source_id, attempt.rid)
+    upstream = _attempt_transaction(attempt, rows)
+    checked_at = timezone.now()
+    terminal_status = _transaction_status(upstream.get("status")) if upstream else None
+
+    with transaction.atomic():
+        locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
+        locked.upstream_checked_at = checked_at
+        locked.upstream_transaction_data = upstream
+        update_fields = ["upstream_checked_at", "upstream_transaction_data", "updated_at"]
+
+        upstream_ip = normalize_client_ip(upstream.get("ip")) if upstream else None
+        if upstream_ip and not normalize_client_ip(locked.initiation_ip):
+            locked.initiation_ip = upstream_ip
+            update_fields.append("initiation_ip")
+
+        if terminal_status and locked.callback_at is None and locked.status in {
+            SurveyAttempt.Status.INITIATED,
+            SurveyAttempt.Status.REDIRECTED,
+        }:
+            completed_at = parse_upstream_datetime(
+                upstream.get("completeDateTime") or upstream.get("st_date_time")
+            ) or checked_at
+            if completed_at < locked.initiated_at:
+                completed_at = checked_at
+            locked.status = terminal_status
+            locked.status_source = "innovatemr_transaction"
+            locked.callback_at = completed_at
+            locked.last_callback_at = completed_at
+            locked.callback_ip = upstream_ip
+            locked.loi_seconds = max(0, int((completed_at - locked.initiated_at).total_seconds()))
+            locked.is_verified = str(upstream.get("verifyToken") or "").lower() == "valid"
+            update_fields.extend([
+                "status", "status_source", "callback_at", "last_callback_at", "callback_ip", "loi_seconds",
+                "is_verified",
+            ])
+
+        locked.save(update_fields=list(dict.fromkeys(update_fields)))
+    return bool(terminal_status)
 
 
 @dataclass

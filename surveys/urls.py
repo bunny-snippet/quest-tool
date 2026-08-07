@@ -1,7 +1,18 @@
 from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
-from .views import SurveyAttemptViewSet, SyncRunViewSet, SyncTriggerView, SurveyViewSet, dashboard_page, projects_page, survey_start, survey_status, workspace_home
+from .views import (
+    SurveyAttemptViewSet,
+    SyncRunViewSet,
+    SyncTriggerView,
+    SurveyViewSet,
+    dashboard_page,
+    projects_page,
+    studies_page,
+    survey_start,
+    survey_status,
+    workspace_home,
+)
 
 router = DefaultRouter()
 router.register("surveys", SurveyViewSet, basename="survey")
@@ -14,6 +25,7 @@ urlpatterns = [
     path("", workspace_home, name="home"),
     path("dashboard/", dashboard_page, name="dashboard"),
     path("projects/", projects_page, name="projects"),
+    path("studies/", studies_page, name="studies"),
     path("api/v1/sync/", SyncTriggerView.as_view(), name="sync-trigger"),
     path("api/v1/", include(router.urls)),
 ]

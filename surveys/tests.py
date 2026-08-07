@@ -8,9 +8,17 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
+from accounts.models import AccessFunction, UserFunctionOverride
+
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
-from .services import merge_inventory, parse_upstream_datetime, replace_survey_details, sync_surveys
+from .services import (
+    merge_inventory,
+    parse_upstream_datetime,
+    reconcile_attempt_status,
+    replace_survey_details,
+    sync_surveys,
+)
 
 
 def survey_payload(survey_id=12632, modified="09/11/2017, 11:50:27 pm PST", **overrides):
@@ -116,6 +124,17 @@ class InnovateMRClientTests(TestCase):
         self.assertEqual([row["surveyId"] for row in result.surveys], [1, 2])
         self.assertEqual(session.get.call_args_list[1].kwargs["params"]["next"], "abc")
         self.assertEqual(session.get.call_args_list[0].kwargs["headers"]["x-access-token"], "secret-test-token")
+
+    @override_settings(INNOVATEMR_API_TOKEN="secret-test-token")
+    def test_transaction_lookup_uses_survey_and_rid_as_pid(self):
+        response = Mock()
+        response.raise_for_status.return_value = None
+        response.json.return_value = {"apiStatus": "success", "result": [{"status": "Completed"}]}
+        session = Mock()
+        session.get.return_value = response
+        result = InnovateMRClient(session=session).get_survey_transactions_by_pid(15978952, "Aa1Bb2Cc3D")
+        self.assertEqual(result[0]["status"], "Completed")
+        self.assertTrue(session.get.call_args.args[0].endswith("/supply/getSurveyTransactionsByCond/15978952/Aa1Bb2Cc3D"))
 
 
 class SurveyAPITests(TestCase):
@@ -232,7 +251,7 @@ class SurveyFlowTests(TestCase):
             "supplierCode": "1150",
             "userId": "294",
             "code": self.survey.local_id,
-        }, REMOTE_ADDR="10.10.10.10")
+        }, REMOTE_ADDR="10.10.10.10", HTTP_USER_AGENT="Mozilla/5.0 (Windows NT 10.0) Chrome/126.0.0.0")
         self.assertEqual(start.status_code, 302)
         rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
         self.assertEqual(len(rid), 10)
@@ -254,7 +273,10 @@ class SurveyFlowTests(TestCase):
         self.assertEqual(params["trackId"], [rid])
         self.assertEqual(params["GENDER"], ["2"])
 
-        callback = self.client.get(reverse("survey-status"), {"status": "1", "rid": rid}, REMOTE_ADDR="20.20.20.20")
+        callback = self.client.get(
+            reverse("survey-status"), {"status": "1", "rid": rid}, REMOTE_ADDR="20.20.20.20",
+            HTTP_USER_AGENT="Mozilla/5.0 (Linux; Android 14; Mobile) Chrome/126.0.0.0",
+        )
         self.assertEqual(callback.status_code, 200)
         self.assertContains(callback, "Thank you for participating!")
         attempt = SurveyAttempt.objects.get(rid=rid)
@@ -264,12 +286,45 @@ class SurveyFlowTests(TestCase):
         self.assertEqual(attempt.supplier_code, "1150")
         self.assertEqual(attempt.initiation_ip, "10.10.10.10")
         self.assertEqual(attempt.callback_ip, "20.20.20.20")
+        self.assertEqual(attempt.entry_browser, "Chrome 126.0.0.0")
+        self.assertEqual(attempt.entry_device, "Desktop")
+        self.assertEqual(attempt.exit_device, "Mobile")
+        self.assertEqual(attempt.exit_os, "Android 14")
         self.assertIsNotNone(attempt.loi_seconds)
 
     def test_status_requires_known_rid(self):
         response = self.client.get(reverse("survey-status"), {"status": "3", "rid": "Aa1Bb2Cc3D"})
         self.assertEqual(response.status_code, 404)
         self.assertContains(response, "could not be attached", status_code=404)
+
+    @override_settings(TRUST_X_FORWARDED_FOR=True)
+    def test_trusted_proxy_records_public_entry_and_exit_ips(self):
+        start = self.client.get(reverse("survey-start"), {
+            "surveyId": self.survey.source_id,
+            "supplierCode": "1150",
+            "userId": self.platform_user.pk,
+            "code": self.survey.local_id,
+        }, REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="8.8.8.8, 127.0.0.1")
+        rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
+        callback = self.client.get(
+            reverse("survey-status"), {"status": "2", "rid": rid}, REMOTE_ADDR="127.0.0.1",
+            HTTP_X_REAL_IP="1.1.1.1",
+        )
+        self.assertEqual(callback.status_code, 200)
+        attempt = SurveyAttempt.objects.get(rid=rid)
+        self.assertEqual(attempt.initiation_ip, "8.8.8.8")
+        self.assertEqual(attempt.callback_ip, "1.1.1.1")
+        self.assertEqual(attempt.status_source, "browser_callback")
+
+    def test_direct_localhost_is_not_saved_as_respondent_network_ip(self):
+        start = self.client.get(reverse("survey-start"), {
+            "surveyId": self.survey.source_id,
+            "supplierCode": "1150",
+            "userId": self.platform_user.pk,
+            "code": self.survey.local_id,
+        }, REMOTE_ADDR="127.0.0.1")
+        rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
+        self.assertIsNone(SurveyAttempt.objects.get(rid=rid).initiation_ip)
 
     def test_invalid_start_values_never_create_attempt_or_show_questions(self):
         valid = {
@@ -310,3 +365,141 @@ class SurveyFlowTests(TestCase):
         self.platform_user.save(update_fields=["is_active"])
         inactive = self.client.get(reverse("survey-start"), {"rid": rid})
         self.assertContains(inactive, "Invalid survey link", status_code=404)
+
+
+class StudiesTrackingTests(TestCase):
+    def setUp(self):
+        self.owner = get_user_model().objects.create_superuser(
+            username="owner", email="owner@example.test", password="test-password"
+        )
+        self.kanik = get_user_model().objects.create_user(
+            username="kanik", first_name="Kanik", last_name="Sharma", email="kanik@example.test"
+        )
+        self.other = get_user_model().objects.create_user(username="other", first_name="Other")
+        self.survey = Survey.objects.create(
+            source_id=555123,
+            name="Consumer finance",
+            company_name="InnovateMR",
+            country_code="US",
+            language_code="EN",
+            cpi="2.50",
+            loi=10,
+        )
+        common = {
+            "survey": self.survey,
+            "supplier_code": "1150",
+            "initiation_ip": "10.0.0.1",
+            "callback_ip": "20.0.0.1",
+            "entry_browser": "Chrome 126",
+            "entry_device": "Desktop",
+            "entry_os": "Windows 10",
+        }
+        self.complete = SurveyAttempt.objects.create(
+            rid="Aa1Bb2Cc3D", platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.COMPLETED, loi_seconds=82, callback_at=timezone.now(), **common,
+        )
+        SurveyAttempt.objects.create(
+            rid="Ee4Ff5Gg6H", platform_user=self.other, user_id=str(self.other.pk),
+            status=SurveyAttempt.Status.TERMINATED, **common,
+        )
+        self.api = APIClient()
+        self.api.force_authenticate(self.owner)
+
+    def test_studies_page_and_filtered_api_show_compact_tracking_data(self):
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("studies"))
+        self.assertContains(page, "Respondent activity")
+        self.assertContains(page, "Export full CSV")
+        self.assertContains(page, "Kanik Sharma")
+
+        response = self.api.get(reverse("survey-attempt-list"), {
+            "user": self.kanik.pk,
+            "status": SurveyAttempt.Status.COMPLETED,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        result = response.data["results"][0]
+        self.assertEqual(result["rid"], self.complete.rid)
+        self.assertEqual(result["user_name"], "Kanik Sharma")
+        self.assertEqual(result["entry_ip"], "10.0.0.1")
+        self.assertEqual(result["exit_ip"], "20.0.0.1")
+
+    def test_filtered_csv_contains_full_backend_record_not_only_ui_columns(self):
+        response = self.api.get(reverse("survey-attempt-export"), {
+            "user": self.kanik.pk,
+            "status": SurveyAttempt.Status.COMPLETED,
+        })
+        self.assertEqual(response.status_code, 200)
+        content = b"".join(response.streaming_content).decode("utf-8")
+        self.assertIn("Entry user agent", content)
+        self.assertIn("Pre-screener answers", content)
+        self.assertIn("Outbound supplier URL", content)
+        self.assertIn("Kanik Sharma", content)
+        self.assertIn(self.complete.rid, content)
+        self.assertNotIn("Ee4Ff5Gg6H", content)
+
+    def test_view_permission_is_scoped_and_does_not_grant_csv_export(self):
+        viewer = get_user_model().objects.create_user(username="viewer", first_name="Scoped")
+        UserFunctionOverride.objects.create(
+            user=viewer,
+            function=AccessFunction.objects.get(code="attempts.view"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        own_attempt = SurveyAttempt.objects.create(
+            rid="Ii7Jj8Kk9L", survey=self.survey, platform_user=viewer, user_id=str(viewer.pk),
+            status=SurveyAttempt.Status.INITIATED,
+        )
+        scoped_api = APIClient()
+        scoped_api.force_authenticate(viewer)
+        listing = scoped_api.get(reverse("survey-attempt-list"))
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(listing.data["count"], 1)
+        self.assertEqual(listing.data["results"][0]["rid"], own_attempt.rid)
+        self.assertEqual(scoped_api.get(reverse("survey-attempt-export")).status_code, 403)
+
+        self.client.force_login(viewer)
+        page = self.client.get(reverse("studies"))
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, "Export full CSV")
+
+    def test_upstream_transaction_reconciles_legacy_redirect_status_ip_and_loi(self):
+        attempt = SurveyAttempt.objects.create(
+            rid="Mm1Nn2Oo3P", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.REDIRECTED,
+            initiated_at=timezone.now() - timedelta(minutes=3),
+            initiation_ip="127.0.0.1",
+        )
+        upstream_time = timezone.now()
+        client = Mock()
+        client.get_survey_transactions_by_pid.return_value = [{
+            "PID": attempt.rid,
+            "trackId": attempt.rid,
+            "status": "Completed",
+            "ip": "8.8.4.4",
+            "completeDateTime": upstream_time.isoformat(),
+            "verifyToken": "Valid",
+        }]
+        self.assertTrue(reconcile_attempt_status(client, attempt))
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, SurveyAttempt.Status.COMPLETED)
+        self.assertEqual(attempt.status_source, "innovatemr_transaction")
+        self.assertEqual(attempt.initiation_ip, "8.8.4.4")
+        self.assertEqual(attempt.callback_ip, "8.8.4.4")
+        self.assertGreaterEqual(attempt.loi_seconds, 179)
+        self.assertTrue(attempt.is_verified)
+        self.assertEqual(attempt.upstream_transaction_data["trackId"], attempt.rid)
+
+    def test_upstream_pre_survey_statuses_collapse_into_five_ui_outcomes(self):
+        cases = [("Pre-Survey Termination", "2"), ("Pre-Survey Over Quota", "3"), ("Pre-Survey Quality Term", "4")]
+        for index, (upstream_status, expected) in enumerate(cases):
+            attempt = SurveyAttempt.objects.create(
+                rid=f"Qq{index}Rr{index}Ss{index}T", survey=self.survey, platform_user=self.kanik,
+                user_id=str(self.kanik.pk), status=SurveyAttempt.Status.REDIRECTED,
+            )
+            client = Mock()
+            client.get_survey_transactions_by_pid.return_value = [{
+                "PID": attempt.rid, "status": upstream_status, "ip": "9.9.9.9",
+            }]
+            reconcile_attempt_status(client, attempt)
+            attempt.refresh_from_db()
+            self.assertEqual(attempt.status, expected)

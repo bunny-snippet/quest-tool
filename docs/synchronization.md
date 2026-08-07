@@ -30,6 +30,12 @@ The UI's Quota and Pre-screening actions apply the same stale test. When refresh
 ## Operational checks
 
 - `/api/v1/sync-runs/?status=failed` shows inventory failures.
+
+## Legacy redirect reconciliation
+
+`surveys.reconcile_pending_attempts` runs every `INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS` (60 seconds by default). It checks a bounded round-robin batch of recent attempts that reached InnovateMR but have no callback. Configure batch size with `INNOVATEMR_ATTEMPT_RECONCILE_BATCH` and the retry window with `INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS`.
+
+This is a compatibility fallback for old client redirect URLs. Once account-level or survey-specific redirect URLs and postbacks point to this application, browser callbacks/server notifications should remain the primary source and polling may be disabled by removing its Celery Beat entry.
 - `python manage.py sync_surveys` isolates Celery/Redis from upstream and database troubleshooting.
 - Swagger provides a direct authenticated-network test surface at `/api/docs/`.
 - Validate credentials, DNS, supplier account allocation, and upstream rate limits before increasing detail batch size.

@@ -534,6 +534,47 @@ paths:
         IPs and measured LOI.
       summary: List respondent survey attempts
       parameters:
+      - in: query
+        name: callback_from
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: callback_to
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: company
+        schema:
+          type: array
+          items:
+            type: string
+        description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: entry_ip
+        schema:
+          type: string
+      - in: query
+        name: exit_ip
+        schema:
+          type: string
+      - in: query
+        name: initiated_from
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: initiated_to
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: internal_id
+        schema:
+          type: string
       - name: ordering
         required: false
         in: query
@@ -561,33 +602,25 @@ paths:
       - in: query
         name: status
         schema:
-          type: string
-          enum:
-          - '1'
-          - '2'
-          - '3'
-          - '4'
-          - initiated
-          - redirected
-        description: |-
-          * `initiated` - Initiated
-          * `redirected` - Redirected to survey
-          * `1` - Completed
-          * `2` - Terminated
-          * `3` - Over quota
-          * `4` - Quality terminated
+          type: array
+          items:
+            type: string
+        description: Comma-separated attempt statuses
+        explode: false
+        style: form
       - in: query
-        name: supplier_code
-        schema:
-          type: string
-      - in: query
-        name: survey__source_id
+        name: survey_id
         schema:
           type: integer
       - in: query
-        name: user_id
+        name: user
         schema:
-          type: string
+          type: array
+          items:
+            type: string
+        description: Comma-separated platform user IDs
+        explode: false
+        style: form
       tags:
       - Survey attempts
       security:
@@ -623,6 +656,97 @@ paths:
             application/json:
               schema:
                 $ref: '#/components/schemas/SurveyAttempt'
+          description: ''
+  /api/v1/survey-attempts/export/:
+    get:
+      operationId: api_v1_survey_attempts_export_retrieve
+      description: Downloads every field associated with the currently filtered attempts,
+        including user and survey identifiers, entry/exit network metadata, client
+        metadata, timestamps, answers and callback audit data.
+      summary: Export all filtered survey attempt data
+      parameters:
+      - in: query
+        name: callback_from
+        schema:
+          type: string
+          format: date-time
+        description: Exit timestamp lower bound (ISO 8601).
+      - in: query
+        name: callback_to
+        schema:
+          type: string
+          format: date-time
+        description: Exit timestamp upper bound (ISO 8601).
+      - in: query
+        name: company
+        schema:
+          type: string
+        description: Comma-separated survey company names.
+      - in: query
+        name: entry_ip
+        schema:
+          type: string
+        description: Exact entry IP address.
+      - in: query
+        name: exit_ip
+        schema:
+          type: string
+        description: Exact exit IP address.
+      - in: query
+        name: initiated_from
+        schema:
+          type: string
+          format: date-time
+        description: Entry timestamp lower bound (ISO 8601).
+      - in: query
+        name: initiated_to
+        schema:
+          type: string
+          format: date-time
+        description: Entry timestamp upper bound (ISO 8601).
+      - in: query
+        name: internal_id
+        schema:
+          type: string
+        description: Exact internal 14-digit project ID.
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: Sort by initiated_at, callback_at, loi_seconds or status; prefix
+          - for descending.
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Search RID, user, survey, IP or client metadata.
+      - in: query
+        name: status
+        schema:
+          type: string
+        description: Comma-separated attempt status codes.
+      - in: query
+        name: survey_id
+        schema:
+          type: integer
+        description: Exact upstream survey ID.
+      - in: query
+        name: user
+        schema:
+          type: string
+        description: Comma-separated platform user IDs.
+      tags:
+      - Survey attempts
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            text/csv:
+              schema:
+                type: string
+                format: binary
           description: ''
   /api/v1/surveys/:
     get:
@@ -1551,7 +1675,16 @@ components:
         survey_source_id:
           type: integer
           readOnly: true
+        survey_name:
+          type: string
+          readOnly: true
         company_name:
+          type: string
+          readOnly: true
+        country_code:
+          type: string
+          readOnly: true
+        language_code:
           type: string
           readOnly: true
         platform_user:
@@ -1560,9 +1693,24 @@ components:
         user_id:
           type: string
           maxLength: 160
+        user_name:
+          type: string
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+          nullable: true
+        user_email:
+          type: string
+          format: email
+          readOnly: true
+          nullable: true
         supplier_code:
           type: string
           maxLength: 40
+        status_label:
+          type: string
+          readOnly: true
         status:
           $ref: '#/components/schemas/SurveyAttemptStatusEnum'
         initiated_at:
@@ -1590,12 +1738,57 @@ components:
           minimum: 0
           format: int64
           nullable: true
+        entry_ip:
+          type: string
+          readOnly: true
+          nullable: true
+        exit_ip:
+          type: string
+          readOnly: true
+          nullable: true
         initiation_ip:
           type: string
           nullable: true
         callback_ip:
           type: string
           nullable: true
+        entry_user_agent:
+          type: string
+        exit_user_agent:
+          type: string
+        entry_browser:
+          type: string
+          maxLength: 160
+        exit_browser:
+          type: string
+          maxLength: 160
+        entry_device:
+          type: string
+          maxLength: 80
+        exit_device:
+          type: string
+          maxLength: 80
+        entry_os:
+          type: string
+          maxLength: 160
+        exit_os:
+          type: string
+          maxLength: 160
+        entry_referrer:
+          type: string
+        entry_accept_language:
+          type: string
+          maxLength: 500
+        entry_client_data: {}
+        exit_client_data: {}
+        status_source:
+          type: string
+          maxLength: 40
+        upstream_checked_at:
+          type: string
+          format: date-time
+          nullable: true
+        upstream_transaction_data: {}
         answers: {}
         outbound_url:
           type: string
@@ -1619,12 +1812,21 @@ components:
           readOnly: true
       required:
       - company_name
+      - country_code
       - created_at
+      - entry_ip
+      - exit_ip
+      - language_code
       - rid
+      - status_label
       - survey_local_id
+      - survey_name
       - survey_source_id
       - updated_at
+      - user_email
       - user_id
+      - user_name
+      - username
     SurveyAttemptStatusEnum:
       enum:
       - initiated

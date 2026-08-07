@@ -1,8 +1,10 @@
+import csv
+import json
 from urllib.parse import quote
 
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.http import HttpResponseRedirect
+from django.http import HttpResponseRedirect, StreamingHttpResponse
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
@@ -16,9 +18,15 @@ from rest_framework.exceptions import APIException
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.access import HasFunctionPermission, effective_permission_codes, function_permission_required, has_function_access
+from accounts.access import (
+    HasFunctionPermission,
+    effective_permission_codes,
+    function_permission_required,
+    has_function_access,
+    subordinate_user_ids,
+)
 
-from .filters import SurveyFilter
+from .filters import SurveyAttemptFilter, SurveyFilter
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .models import Survey, SurveyAttempt, SyncRun
 from .serializers import (
@@ -34,6 +42,7 @@ from .services import replace_survey_quotas, replace_survey_targeting, sync_surv
 from .survey_flow import (
     build_outbound_url,
     create_attempt,
+    get_request_client_data,
     get_request_ip,
     status_rid_from_request,
     supplier_code_from_entry_link,
@@ -76,6 +85,29 @@ def projects_page(request):
     })
 
 
+@function_permission_required("attempts.view")
+def studies_page(request):
+    user_ids = subordinate_user_ids(request.user)
+    user_ids.add(request.user.pk)
+    if request.user.is_superuser:
+        tracked_users = get_user_model().objects.filter(survey_attempts__isnull=False)
+    else:
+        tracked_users = get_user_model().objects.filter(pk__in=user_ids, survey_attempts__isnull=False)
+    tracked_users = tracked_users.distinct().order_by("first_name", "last_name", "username")
+    return render(request, "surveys/studies.html", {
+        "active_page": "studies",
+        "tracked_users": tracked_users,
+        "attempt_statuses": [
+            ("initiated,redirected", "Initiated"),
+            (SurveyAttempt.Status.COMPLETED, "Completed"),
+            (SurveyAttempt.Status.TERMINATED, "Terminated"),
+            (SurveyAttempt.Status.OVER_QUOTA, "Over quota"),
+            (SurveyAttempt.Status.QUALITY_TERMINATED, "Quality terminated"),
+        ],
+        "can_export": has_function_access(request.user, "attempts.export"),
+    })
+
+
 def workspace_home(request):
     if not request.user.is_authenticated:
         from django.contrib.auth.views import redirect_to_login
@@ -84,6 +116,8 @@ def workspace_home(request):
         return HttpResponseRedirect(reverse("projects"))
     if has_function_access(request.user, "dashboard.view"):
         return HttpResponseRedirect(reverse("dashboard"))
+    if has_function_access(request.user, "attempts.view"):
+        return HttpResponseRedirect(reverse("studies"))
     if any(has_function_access(request.user, code) for code in ("access.manage", "users.view", "users.create", "roles.view", "roles.create")):
         return HttpResponseRedirect(reverse("access-control"))
     from django.core.exceptions import PermissionDenied
@@ -232,7 +266,12 @@ def survey_start(request):
             except InnovateMRAPIError:
                 if not survey.targeting_questions.exists():
                     targeting_warning = "Pre-screening criteria are temporarily unavailable. You can still continue."
-        attempt = create_attempt(survey, platform_user, get_request_ip(request))
+        attempt = create_attempt(
+            survey,
+            platform_user,
+            get_request_ip(request),
+            client_data=get_request_client_data(request),
+        )
         if targeting_warning:
             request.session[f"attempt_warning_{attempt.rid}"] = targeting_warning
         return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(attempt.rid)}")
@@ -312,15 +351,24 @@ def survey_status(request):
         with transaction.atomic():
             attempt = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
             now = timezone.now()
+            exit_client_data = get_request_client_data(request)
             if attempt.callback_at is None:
                 attempt.callback_at = now
                 attempt.callback_ip = ip_address
                 attempt.loi_seconds = max(0, int((now - attempt.initiated_at).total_seconds()))
                 attempt.status = status_code
+                attempt.exit_user_agent = exit_client_data.get("user_agent", "")
+                attempt.exit_browser = exit_client_data.get("browser", "")
+                attempt.exit_device = exit_client_data.get("device", "")
+                attempt.exit_os = exit_client_data.get("os", "")
+                attempt.exit_client_data = exit_client_data
+                attempt.status_source = "browser_callback"
             attempt.last_callback_at = now
             attempt.callback_count += 1
             attempt.save(update_fields=[
-                "callback_at", "callback_ip", "loi_seconds", "status", "last_callback_at", "callback_count", "updated_at"
+                "callback_at", "callback_ip", "loi_seconds", "status", "exit_user_agent", "exit_browser",
+                "exit_device", "exit_os", "exit_client_data", "status_source", "last_callback_at",
+                "callback_count", "updated_at"
             ])
         status_label = attempt.get_status_display()
     else:
@@ -476,13 +524,122 @@ class SyncRunViewSet(viewsets.ReadOnlyModelViewSet):
     ),
 )
 class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = SurveyAttempt.objects.select_related("survey").all()
     serializer_class = SurveyAttemptSerializer
     permission_classes = [HasFunctionPermission]
-    required_function_permission = "attempts.view"
     lookup_field = "rid"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    filterset_fields = ["status", "supplier_code", "user_id", "survey__source_id"]
-    search_fields = ["rid", "user_id", "survey__local_id", "=survey__source_id"]
+    filterset_class = SurveyAttemptFilter
+    search_fields = [
+        "rid", "user_id", "survey__local_id", "=survey__source_id", "survey__name", "survey__company_name",
+        "platform_user__username", "platform_user__first_name", "platform_user__last_name", "platform_user__email",
+        "initiation_ip", "callback_ip", "entry_browser", "entry_device", "entry_os",
+    ]
     ordering_fields = ["initiated_at", "callback_at", "loi_seconds", "status"]
     ordering = ["-initiated_at"]
+
+    def get_required_function_permission(self):
+        return "attempts.export" if self.action == "export" else "attempts.view"
+
+    def get_queryset(self):
+        queryset = SurveyAttempt.objects.select_related(
+            "survey", "platform_user", "platform_user__employee_profile", "platform_user__employee_profile__role"
+        ).all()
+        if self.request.user.is_superuser:
+            return queryset
+        visible_user_ids = subordinate_user_ids(self.request.user)
+        visible_user_ids.add(self.request.user.pk)
+        return queryset.filter(platform_user_id__in=visible_user_ids)
+
+    @extend_schema(
+        tags=["Survey attempts"],
+        summary="Export all filtered survey attempt data",
+        description=(
+            "Downloads every field associated with the currently filtered attempts, including user and survey "
+            "identifiers, entry/exit network metadata, client metadata, timestamps, answers and callback audit data."
+        ),
+        parameters=[
+            OpenApiParameter("search", OpenApiTypes.STR, description="Search RID, user, survey, IP or client metadata."),
+            OpenApiParameter("user", OpenApiTypes.STR, description="Comma-separated platform user IDs."),
+            OpenApiParameter("status", OpenApiTypes.STR, description="Comma-separated attempt status codes."),
+            OpenApiParameter("company", OpenApiTypes.STR, description="Comma-separated survey company names."),
+            OpenApiParameter("survey_id", OpenApiTypes.INT, description="Exact upstream survey ID."),
+            OpenApiParameter("internal_id", OpenApiTypes.STR, description="Exact internal 14-digit project ID."),
+            OpenApiParameter("entry_ip", OpenApiTypes.STR, description="Exact entry IP address."),
+            OpenApiParameter("exit_ip", OpenApiTypes.STR, description="Exact exit IP address."),
+            OpenApiParameter("initiated_from", OpenApiTypes.DATETIME, description="Entry timestamp lower bound (ISO 8601)."),
+            OpenApiParameter("initiated_to", OpenApiTypes.DATETIME, description="Entry timestamp upper bound (ISO 8601)."),
+            OpenApiParameter("callback_from", OpenApiTypes.DATETIME, description="Exit timestamp lower bound (ISO 8601)."),
+            OpenApiParameter("callback_to", OpenApiTypes.DATETIME, description="Exit timestamp upper bound (ISO 8601)."),
+            OpenApiParameter("ordering", OpenApiTypes.STR, description="Sort by initiated_at, callback_at, loi_seconds or status; prefix - for descending."),
+        ],
+        responses={(200, "text/csv"): OpenApiTypes.BINARY},
+    )
+    @action(detail=False, methods=["get"], url_path="export")
+    def export(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        local_now = timezone.localtime()
+        response = StreamingHttpResponse(
+            _attempt_csv_rows(queryset),
+            content_type="text/csv; charset=utf-8",
+        )
+        response["Content-Disposition"] = f'attachment; filename="studies-{local_now:%Y%m%d-%H%M%S}-IST.csv"'
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
+class _CsvEcho:
+    def write(self, value):
+        return value
+
+
+def _csv_safe(value):
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        value = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+    elif hasattr(value, "isoformat"):
+        value = timezone.localtime(value).isoformat() if timezone.is_aware(value) else value.isoformat()
+    else:
+        value = str(value)
+    return f"'{value}" if value.startswith(("=", "+", "-", "@")) else value
+
+
+def _attempt_csv_rows(queryset):
+    headers = [
+        "Respondent ID (RID)", "Status code", "Status", "Status source", "Platform user ID", "Username", "Employee name",
+        "Email", "Employee ID", "Account type", "Role", "Internal project ID", "Survey ID", "Survey name",
+        "Company", "Country", "Language", "Supplier code", "Survey CPI", "Expected LOI (minutes)",
+        "Actual LOI (seconds)", "Entry IP", "Exit IP", "Entry browser", "Exit browser", "Entry device",
+        "Exit device", "Entry OS", "Exit OS", "Entry user agent", "Exit user agent", "Entry referrer",
+        "Entry accept language", "Initiated at (IST)", "Pre-screener submitted at (IST)",
+        "Redirected at (IST)", "First callback at (IST)", "Last callback at (IST)", "Callback count",
+        "Verified", "Last upstream check (IST)", "Upstream transaction", "Pre-screener answers",
+        "Outbound supplier URL", "Entry client metadata", "Exit client metadata", "Record created at (IST)",
+        "Record updated at (IST)",
+    ]
+    writer = csv.writer(_CsvEcho())
+    yield "\ufeff" + writer.writerow(headers)
+    for attempt in queryset.iterator(chunk_size=1000):
+        user = attempt.platform_user
+        profile = getattr(user, "employee_profile", None) if user else None
+        role = getattr(profile, "role", None) if profile else None
+        survey = attempt.survey
+        values = [
+            attempt.rid, attempt.status,
+            "Initiated" if attempt.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED} else attempt.get_status_display(),
+            attempt.status_source, user.pk if user else attempt.user_id,
+            user.username if user else "", (user.get_full_name() or user.username) if user else "Deleted user",
+            user.email if user else "", getattr(profile, "employee_id", ""),
+            profile.get_account_type_display() if profile else "", role.name if role else "",
+            survey.local_id, survey.source_id, survey.name, survey.company_name, survey.country_code,
+            survey.language_code, attempt.supplier_code, survey.cpi, survey.loi, attempt.loi_seconds,
+            attempt.initiation_ip, attempt.callback_ip, attempt.entry_browser, attempt.exit_browser,
+            attempt.entry_device, attempt.exit_device, attempt.entry_os, attempt.exit_os,
+            attempt.entry_user_agent, attempt.exit_user_agent, attempt.entry_referrer,
+            attempt.entry_accept_language, attempt.initiated_at, attempt.submitted_at, attempt.redirected_at,
+            attempt.callback_at, attempt.last_callback_at, attempt.callback_count, attempt.is_verified,
+            attempt.upstream_checked_at, attempt.upstream_transaction_data, attempt.answers, attempt.outbound_url,
+            attempt.entry_client_data, attempt.exit_client_data,
+            attempt.created_at, attempt.updated_at,
+        ]
+        yield writer.writerow([_csv_safe(value) for value in values])

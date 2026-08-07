@@ -1,5 +1,7 @@
 import secrets
 import string
+import re
+from ipaddress import ip_address
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from django.conf import settings
@@ -23,12 +25,32 @@ def generate_rid() -> str:
     return "".join(characters)
 
 
+def normalize_client_ip(value) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = ip_address(str(value).strip())
+    except ValueError:
+        return None
+    if parsed.is_loopback or parsed.is_unspecified:
+        return None
+    return str(parsed)
+
+
 def get_request_ip(request) -> str | None:
+    """Return the original client IP, trusting proxy headers only when configured."""
     if settings.TRUST_X_FORWARDED_FOR:
         forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-        if forwarded:
-            return forwarded.split(",", 1)[0].strip() or None
-    return request.META.get("REMOTE_ADDR") or None
+        candidates = [
+            request.META.get("HTTP_CF_CONNECTING_IP"),
+            *(part.strip() for part in forwarded.split(",") if part.strip()),
+            request.META.get("HTTP_X_REAL_IP"),
+        ]
+        for candidate in candidates:
+            normalized = normalize_client_ip(candidate)
+            if normalized:
+                return normalized
+    return normalize_client_ip(request.META.get("REMOTE_ADDR"))
 
 
 def supplier_code_from_entry_link(entry_link: str) -> str:
@@ -36,7 +58,58 @@ def supplier_code_from_entry_link(entry_link: str) -> str:
     return str(query.get("supCode") or query.get("supplierCode") or "")
 
 
-def create_attempt(survey: Survey, platform_user, ip_address: str | None) -> SurveyAttempt:
+def _versioned_match(user_agent: str, patterns: list[tuple[str, str]]) -> str:
+    for name, pattern in patterns:
+        match = re.search(pattern, user_agent, re.IGNORECASE)
+        if match:
+            version = match.group(1).replace("_", ".") if match.lastindex else ""
+            return f"{name} {version}".strip()
+    return "Unknown"
+
+
+def get_request_client_data(request) -> dict:
+    """Return a deliberately limited, non-cookie client audit snapshot."""
+    user_agent = request.META.get("HTTP_USER_AGENT", "")[:4000]
+    browser = _versioned_match(user_agent, [
+        ("Edge", r"(?:Edg|EdgiOS|EdgA)/([\d.]+)"),
+        ("Opera", r"(?:OPR|Opera)/([\d.]+)"),
+        ("Chrome", r"(?:Chrome|CriOS)/([\d.]+)"),
+        ("Firefox", r"(?:Firefox|FxiOS)/([\d.]+)"),
+        ("Safari", r"Version/([\d.]+).*Safari"),
+        ("Internet Explorer", r"(?:MSIE\s|rv:)([\d.]+)"),
+    ])
+    os_name = _versioned_match(user_agent, [
+        ("Windows", r"Windows NT\s([\d.]+)"),
+        ("Android", r"Android\s([\d.]+)"),
+        ("iOS", r"(?:iPhone OS|CPU OS)\s([\d_]+)"),
+        ("macOS", r"Mac OS X\s([\d_]+)"),
+        ("Chrome OS", r"CrOS\s[^\s]+\s([\d.]+)"),
+    ])
+    lowered = user_agent.lower()
+    if any(token in lowered for token in ("bot", "crawler", "spider", "slurp")):
+        device = "Bot"
+    elif "ipad" in lowered or "tablet" in lowered:
+        device = "Tablet"
+    elif any(token in lowered for token in ("mobile", "iphone", "android")):
+        device = "Mobile"
+    else:
+        device = "Desktop" if user_agent else "Unknown"
+
+    return {
+        "user_agent": user_agent,
+        "browser": browser,
+        "device": device,
+        "os": os_name,
+        "accept_language": request.META.get("HTTP_ACCEPT_LANGUAGE", "")[:500],
+        "referrer": request.META.get("HTTP_REFERER", "")[:4000],
+        "sec_ch_ua": request.META.get("HTTP_SEC_CH_UA", "")[:500],
+        "sec_ch_ua_mobile": request.META.get("HTTP_SEC_CH_UA_MOBILE", "")[:40],
+        "sec_ch_ua_platform": request.META.get("HTTP_SEC_CH_UA_PLATFORM", "")[:120],
+    }
+
+
+def create_attempt(survey: Survey, platform_user, ip_address: str | None, client_data: dict | None = None) -> SurveyAttempt:
+    client_data = client_data or {}
     for _ in range(10):
         try:
             with transaction.atomic():
@@ -47,6 +120,13 @@ def create_attempt(survey: Survey, platform_user, ip_address: str | None) -> Sur
                     user_id=str(platform_user.pk),
                     supplier_code=supplier_code_from_entry_link(survey.entry_link),
                     initiation_ip=ip_address,
+                    entry_user_agent=client_data.get("user_agent", ""),
+                    entry_browser=client_data.get("browser", ""),
+                    entry_device=client_data.get("device", ""),
+                    entry_os=client_data.get("os", ""),
+                    entry_referrer=client_data.get("referrer", ""),
+                    entry_accept_language=client_data.get("accept_language", ""),
+                    entry_client_data=client_data,
                 )
         except IntegrityError:
             continue

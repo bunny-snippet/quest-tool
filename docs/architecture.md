@@ -41,7 +41,9 @@ Immutable operational history with endpoint counts, merged total, create/update/
 
 ### `SurveyAttempt`
 
-One record per respondent journey. RID is a random 10-character identifier and is supplied as both InnovateMR PID and `trackId`. The row connects survey and user ID, captures pre-screening answers, supplier code derived from the allocated entry link, initiation/submission/redirect/callback timestamps, initiation and callback IPs, callback count, terminal status and measured LOI. Browser callbacks are unverified until a trusted notification or hash confirms them.
+One record per respondent journey. RID is a random 10-character identifier and is supplied as both InnovateMR PID and `trackId`. The row connects survey and user ID, captures pre-screening answers, supplier code derived from the allocated entry link, initiation/submission/redirect/callback timestamps, entry and exit IPs, entry/exit browser-device-OS-user-agent snapshots, safe client hints, callback count, terminal status and measured LOI. Browser callbacks are unverified until a trusted notification or hash confirms them.
+
+The responsive Studies UI deliberately renders a compact operational subset. Its filtered CSV stream joins attempt, survey, platform-user, employee-profile and role context and includes the full audit payload. Streaming iteration keeps large exports memory-bounded, while CSV formula escaping prevents spreadsheet formula injection.
 
 ### `LocalIdSequence`
 

@@ -149,7 +149,7 @@
   function rowTemplate(survey) {
     const percent = Math.min(100, Number(survey.progress_percent || 0));
     const cells = [];
-    if (projectColumns.has('project_id')) cells.push(`<td><button class="id-link" data-copy="${escapeHtml(survey.local_id)}" title="Copy Project ID">${escapeHtml(survey.local_id)}</button><small class="sub-id">IMR ${escapeHtml(survey.source_id)}</small></td>`);
+    if (projectColumns.has('project_id')) cells.push(`<td><button class="id-link" data-copy="${escapeHtml(survey.local_id)}" title="Copy Project ID">${escapeHtml(survey.local_id)}</button></td>`);
     if (projectColumns.has('survey')) cells.push(`<td><div class="survey-name"><strong>${escapeHtml(survey.name || 'Untitled survey')}</strong><span>${escapeHtml(survey.company_name || 'InnovateMR')}</span></div></td>`);
     if (projectColumns.has('market')) cells.push(`<td><span class="market-pill">${escapeHtml(survey.country_code || '—')} <i>${escapeHtml(survey.language_code || '')}</i></span><small class="country-name">${escapeHtml(survey.country || '')}</small></td>`);
     if (projectColumns.has('completes')) cells.push(`<td><div class="complete-value"><strong>${survey.completes.toLocaleString()} / ${survey.sample_size.toLocaleString()}</strong><span><i style="width:${percent}%"></i></span></div></td>`);

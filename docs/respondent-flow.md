@@ -13,7 +13,7 @@ All four values are required and the copied link is generated with the authentic
 
 An invalid or inconsistent user, code, survey, supplier, or additional query parameter returns the generic Invalid survey link page and creates no attempt.
 
-The server creates a unique RID and records the validated user foreign key, a user-ID snapshot, `initiated`, initiation time and IP before redirecting to the canonical RID form. RID is exactly 10 characters and always includes uppercase, lowercase and numeric characters. The canonical `?rid=` route also rejects unknown RIDs, extra parameters, and attempts whose user was removed or disabled.
+The server creates a unique RID and records the validated user foreign key, a user-ID snapshot, `initiated`, initiation time/IP, browser, device, OS, user-agent, accepted language and safe client hints before redirecting to the canonical RID form. Cookies and authorization headers are never copied into this audit snapshot. RID is exactly 10 characters and always includes uppercase, lowercase and numeric characters. The canonical `?rid=` route also rejects unknown RIDs, extra parameters, and attempts whose user was removed or disabled.
 
 ## Pre-screener
 
@@ -40,7 +40,9 @@ Use status 1, 2, 3 and 4 for complete, terminate, over-quota and quality-termina
 
 `GET /survey?status={1|2|3|4}&rid={RID}`
 
-The first callback sets the terminal status, callback time/IP and `loi_seconds = callback_at - initiated_at`. Later requests only update `last_callback_at` and `callback_count`, protecting the original outcome and LOI from refreshes.
+The first callback sets the terminal status, callback time/exit IP, exit browser/device/OS/user-agent and `loi_seconds = callback_at - initiated_at`. Later requests only update `last_callback_at` and `callback_count`, protecting the original outcome, exit audit and LOI from refreshes.
+
+When a survey still has a legacy redirect configured, the browser cannot return its result to this application. As a temporary fallback, Celery polls InnovateMR's authenticated `getSurveyTransactionsByCond/{surveyId}/{PID}` endpoint for recent redirected attempts. PID and `trackId` both contain our RID, so the task can reconcile the terminal status, upstream public IP, end time and LOI without access to the legacy destination. Direct callbacks remain preferred and win any race with polling.
 
 Status mapping:
 
@@ -49,8 +51,12 @@ Status mapping:
 3. Over quota
 4. Quality terminated
 
+Pre-survey statuses are collapsed into the same five operational UI states: pending/redirected both display as Initiated, pre-survey termination maps to 2, pre-survey over-quota maps to 3, and pre-survey quality termination maps to 4.
+
 The landing page accepts RID aliases `PID`, `pid`, `QSID`, `qsid`, and `trackId` for integration tolerance. The canonical parameter remains `rid`.
 
 ## Trust and verification
 
-Browser redirects can be forged. Every callback starts as `is_verified=false`. Add InnovateMR server-to-server notification or redirect-hash validation before using a completion for rewards, invoices or financial reporting. The staff-only `/api/v1/survey-attempts/` endpoint and Django Admin expose the audit trail.
+Browser redirects can be forged. Every callback starts as `is_verified=false`. Add InnovateMR server-to-server notification or redirect-hash validation before using a completion for rewards, invoices or financial reporting. The staff-only `/studies/` page, `/api/v1/survey-attempts/` endpoint and Django Admin expose the audit trail.
+
+The Studies page applies user, status, text and entry/exit-date filters server-side. `/api/v1/survey-attempts/export/` applies the identical filter contract but exports the complete related audit dataset rather than only the compact UI columns. Viewing requires `attempts.view`; downloading requires the independently assignable `attempts.export` function permission.

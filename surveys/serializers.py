@@ -105,13 +105,37 @@ class SyncTriggerResponseSerializer(serializers.Serializer):
 class SurveyAttemptSerializer(serializers.ModelSerializer):
     survey_local_id = serializers.CharField(source="survey.local_id", read_only=True)
     survey_source_id = serializers.IntegerField(source="survey.source_id", read_only=True)
+    survey_name = serializers.CharField(source="survey.name", read_only=True)
     company_name = serializers.CharField(source="survey.company_name", read_only=True)
+    country_code = serializers.CharField(source="survey.country_code", read_only=True)
+    language_code = serializers.CharField(source="survey.language_code", read_only=True)
+    user_name = serializers.SerializerMethodField()
+    username = serializers.CharField(source="platform_user.username", read_only=True, allow_null=True)
+    user_email = serializers.EmailField(source="platform_user.email", read_only=True, allow_null=True)
+    status_label = serializers.SerializerMethodField()
+    entry_ip = serializers.IPAddressField(source="initiation_ip", read_only=True, allow_null=True)
+    exit_ip = serializers.IPAddressField(source="callback_ip", read_only=True, allow_null=True)
 
     class Meta:
         model = SurveyAttempt
         fields = [
-            "rid", "survey_local_id", "survey_source_id", "company_name", "platform_user", "user_id", "supplier_code",
+            "rid", "survey_local_id", "survey_source_id", "survey_name", "company_name", "country_code",
+            "language_code", "platform_user", "user_id", "user_name", "username", "user_email", "supplier_code",
+            "status_label",
             "status", "initiated_at", "submitted_at", "redirected_at", "callback_at", "last_callback_at",
-            "loi_seconds", "initiation_ip", "callback_ip", "answers", "outbound_url", "callback_count",
+            "loi_seconds", "entry_ip", "exit_ip", "initiation_ip", "callback_ip", "entry_user_agent",
+            "exit_user_agent", "entry_browser", "exit_browser", "entry_device", "exit_device", "entry_os",
+            "exit_os", "entry_referrer", "entry_accept_language", "entry_client_data", "exit_client_data",
+            "status_source", "upstream_checked_at", "upstream_transaction_data", "answers", "outbound_url", "callback_count",
             "is_verified", "created_at", "updated_at",
         ]
+
+    def get_user_name(self, obj) -> str:
+        if not obj.platform_user:
+            return "Deleted user"
+        return obj.platform_user.get_full_name() or obj.platform_user.username
+
+    def get_status_label(self, obj) -> str:
+        if obj.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED}:
+            return "Initiated"
+        return obj.get_status_display()

@@ -94,3 +94,7 @@ class InnovateMRClient:
 
     def get_survey_targeting(self, survey_id: int) -> list[dict[str, Any]]:
         return self._result_list(self._get(f"/supply/getSurveyTargeting/{survey_id}"))
+
+    def get_survey_transactions_by_pid(self, survey_id: int, pid: str) -> list[dict[str, Any]]:
+        """Fetch transactions for one survey/PID pair; our PID is the attempt RID."""
+        return self._result_list(self._get(f"/supply/getSurveyTransactionsByCond/{survey_id}/{pid}"))
