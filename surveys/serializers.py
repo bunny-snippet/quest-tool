@@ -54,16 +54,16 @@ class SurveyListSerializer(serializers.ModelSerializer):
     def get_start_link(self, obj) -> str | None:
         """Return the shareable platform pre-screener URL, never the supplier entry URL."""
         request = self.context.get("request")
-        if request and not has_function_access(request.user, "survey_links.copy"):
+        if not request or not request.user.is_authenticated or not has_function_access(request.user, "survey_links.copy"):
             return None
         if not obj.entry_link:
             return None
         query = urlencode({
             "surveyId": obj.source_id,
             "supplierCode": supplier_code_from_entry_link(obj.entry_link),
-            "userId": "__USER_ID__",
+            "userId": request.user.pk,
             "code": obj.local_id,
-        }).replace("__USER_ID__", "[%%userId%%]")
+        })
         path = f"{reverse('survey-start')}?{query}"
         return request.build_absolute_uri(path) if request else path
 
@@ -110,7 +110,7 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     class Meta:
         model = SurveyAttempt
         fields = [
-            "rid", "survey_local_id", "survey_source_id", "company_name", "user_id", "supplier_code",
+            "rid", "survey_local_id", "survey_source_id", "company_name", "platform_user", "user_id", "supplier_code",
             "status", "initiated_at", "submitted_at", "redirected_at", "callback_at", "last_callback_at",
             "loi_seconds", "initiation_ip", "callback_ip", "answers", "outbound_url", "callback_count",
             "is_verified", "created_at", "updated_at",

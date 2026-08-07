@@ -2,11 +2,18 @@
 
 ## Entry contract
 
-`GET /survey/start?surveyId={source_id}&userId={user_id}&code={local_id}`
+`GET /survey/start?surveyId={source_id}&supplierCode={supplier_code}&userId={user_id}&code={local_id}`
 
-All three values are required. `surveyId` and `code` must resolve to the same live local survey with a non-empty allocated entry link. `userId` is currently captured from the caller; replace this trust boundary with the planned profile API lookup when its contract is available.
+All four values are required and the copied link is generated with the authenticated employee's real database user ID. Before rendering any questions, the server rejects duplicated/extra parameters and verifies that:
 
-The server creates a unique RID and records `initiated`, initiation time and IP before redirecting to the canonical RID form. RID is exactly 10 characters and always includes uppercase, lowercase and numeric characters.
+- the user exists, is active, and still has Projects and Copy Link access;
+- `surveyId` and the 14-digit `code` resolve to the same live local survey;
+- `supplierCode` matches the supplier code in that survey's stored allocated entry link; and
+- the survey has a non-empty allocated entry link.
+
+An invalid or inconsistent user, code, survey, supplier, or additional query parameter returns the generic Invalid survey link page and creates no attempt.
+
+The server creates a unique RID and records the validated user foreign key, a user-ID snapshot, `initiated`, initiation time and IP before redirecting to the canonical RID form. RID is exactly 10 characters and always includes uppercase, lowercase and numeric characters. The canonical `?rid=` route also rejects unknown RIDs, extra parameters, and attempts whose user was removed or disabled.
 
 ## Pre-screener
 
@@ -22,6 +29,12 @@ Answers are persisted but are not used as an authoritative local rejection. Inno
 ## Supplier redirect
 
 The exact stored `entryLink` is parsed. Its PID is replaced with RID, `trackId=RID` is added, and captured `QuestionKey=OptionId` pairs are appended. `survNum` and `supCode` are preserved from the allocated link; they are never reconstructed from client parameters.
+
+InnovateMR owns the browser redirect after the respondent leaves this application. Configure the account-level or survey-level return URLs in InnovateMR to point to the public deployment, using `%%trackId%%` as the RID, for example:
+
+`https://survey.example.com/survey?status=1&rid=%%trackId%%`
+
+Use status 1, 2, 3 and 4 for complete, terminate, over-quota and quality-terminate destinations respectively. A redirect to another domain such as `api.quantichamps.com` and a `code=null` value are produced by that upstream redirect configuration, not by the local Django callback route.
 
 ## Callback contract
 

@@ -36,14 +36,15 @@ def supplier_code_from_entry_link(entry_link: str) -> str:
     return str(query.get("supCode") or query.get("supplierCode") or "")
 
 
-def create_attempt(survey: Survey, user_id: str, ip_address: str | None) -> SurveyAttempt:
+def create_attempt(survey: Survey, platform_user, ip_address: str | None) -> SurveyAttempt:
     for _ in range(10):
         try:
             with transaction.atomic():
                 return SurveyAttempt.objects.create(
                     rid=generate_rid(),
                     survey=survey,
-                    user_id=user_id,
+                    platform_user=platform_user,
+                    user_id=str(platform_user.pk),
                     supplier_code=supplier_code_from_entry_link(survey.entry_link),
                     initiation_ip=ip_address,
                 )
@@ -88,4 +89,3 @@ def status_rid_from_request(request) -> str:
         if value:
             return value.strip()
     return ""
-

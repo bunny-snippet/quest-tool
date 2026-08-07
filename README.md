@@ -2,6 +2,8 @@
 
 Django-based internal survey workspace that synchronizes live InnovateMR Supplier API inventory, stores it locally, and exposes responsive Projects UI plus a documented REST API.
 
+Hostinger Ubuntu VPS deployment with MySQL, Nginx, Gunicorn, Redis and Celery is covered in [`deploy/README.md`](deploy/README.md).
+
 ## What is included
 
 - Dashboard placeholder and responsive Projects workspace matching the supplied table reference.
@@ -9,7 +11,7 @@ Django-based internal survey workspace that synchronizes live InnovateMR Supplie
 - Deterministic merge by `surveyId`; the payload with the newest `modifiedDate` wins.
 - Immutable 14-digit project IDs in `YYYYMM########` format, for example `20260800000001`.
 - Quota and survey-targeting/pre-screening persistence with stale-data refresh.
-- Celery Beat jobs every 60 seconds for inventory and bounded detail refresh.
+- Environment-configurable Celery Beat jobs (60-second defaults) for inventory and bounded detail refresh.
 - Search, multi-select company/market/status filters, date/CPI filters, ordering, pagination, and mobile survey cards.
 - Direct survey detail drawer with equal-width Pre-screening and Quota tabs.
 - Dynamic respondent pre-screener with 10-character RID, answer capture, supplier redirect, four callback outcomes, IP tracking and measured LOI.

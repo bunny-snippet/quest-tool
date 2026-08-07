@@ -1,5 +1,6 @@
 from datetime import timedelta
 
+from django.conf import settings
 from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.utils import timezone
@@ -170,6 +171,9 @@ class SurveyAttempt(models.Model):
 
     rid = models.CharField(max_length=10, unique=True, db_index=True)
     survey = models.ForeignKey(Survey, related_name="attempts", on_delete=models.PROTECT)
+    platform_user = models.ForeignKey(
+        settings.AUTH_USER_MODEL, null=True, blank=True, related_name="survey_attempts", on_delete=models.SET_NULL
+    )
     user_id = models.CharField(max_length=160, db_index=True)
     supplier_code = models.CharField(max_length=40, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.INITIATED, db_index=True)

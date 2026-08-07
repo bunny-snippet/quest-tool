@@ -1554,6 +1554,9 @@ components:
         company_name:
           type: string
           readOnly: true
+        platform_user:
+          type: integer
+          nullable: true
         user_id:
           type: string
           maxLength: 160

@@ -151,7 +151,7 @@ class SurveyAPITests(TestCase):
         self.assertIn("source_modified_display", response.data["results"][0])
         self.assertEqual(
             response.data["results"][0]["start_link"],
-            f"http://testserver/survey/start?surveyId=9876&supplierCode=1150&userId=[%%userId%%]&code={self.survey.local_id}",
+            f"http://testserver/survey/start?surveyId=9876&supplierCode=1150&userId={self.user.pk}&code={self.survey.local_id}",
         )
 
     def test_multi_value_filters_use_or_within_each_filter(self):
@@ -201,6 +201,9 @@ class SurveyAPITests(TestCase):
 class SurveyFlowTests(TestCase):
     def setUp(self):
         now = timezone.now()
+        self.platform_user = get_user_model().objects.create_user(
+            id=294, username="respondent", password="test-password"
+        )
         self.survey = Survey.objects.create(
             source_id=32655971,
             name="Financial services",
@@ -226,6 +229,7 @@ class SurveyFlowTests(TestCase):
     def test_full_prescreener_redirect_and_status_lifecycle(self):
         start = self.client.get(reverse("survey-start"), {
             "surveyId": self.survey.source_id,
+            "supplierCode": "1150",
             "userId": "294",
             "code": self.survey.local_id,
         }, REMOTE_ADDR="10.10.10.10")
@@ -255,6 +259,7 @@ class SurveyFlowTests(TestCase):
         self.assertContains(callback, "Thank you for participating!")
         attempt = SurveyAttempt.objects.get(rid=rid)
         self.assertEqual(attempt.status, SurveyAttempt.Status.COMPLETED)
+        self.assertEqual(attempt.platform_user, self.platform_user)
         self.assertEqual(attempt.user_id, "294")
         self.assertEqual(attempt.supplier_code, "1150")
         self.assertEqual(attempt.initiation_ip, "10.10.10.10")
@@ -265,3 +270,43 @@ class SurveyFlowTests(TestCase):
         response = self.client.get(reverse("survey-status"), {"status": "3", "rid": "Aa1Bb2Cc3D"})
         self.assertEqual(response.status_code, 404)
         self.assertContains(response, "could not be attached", status_code=404)
+
+    def test_invalid_start_values_never_create_attempt_or_show_questions(self):
+        valid = {
+            "surveyId": str(self.survey.source_id),
+            "supplierCode": "1150",
+            "userId": str(self.platform_user.pk),
+            "code": self.survey.local_id,
+        }
+        invalid_variants = [
+            {**valid, "userId": "999999"},
+            {**valid, "code": "20260800000000"},
+            {**valid, "supplierCode": "9999"},
+            {**valid, "unexpected": "injected"},
+        ]
+
+        for query in invalid_variants:
+            with self.subTest(query=query):
+                response = self.client.get(reverse("survey-start"), query)
+                self.assertIn(response.status_code, {400, 404})
+                self.assertContains(response, "Invalid survey link", status_code=response.status_code)
+                self.assertNotContains(response, "What is your gender?", status_code=response.status_code)
+
+        self.assertEqual(SurveyAttempt.objects.count(), 0)
+
+    def test_canonical_rid_rejects_extra_params_and_inactive_user(self):
+        start = self.client.get(reverse("survey-start"), {
+            "surveyId": self.survey.source_id,
+            "supplierCode": "1150",
+            "userId": self.platform_user.pk,
+            "code": self.survey.local_id,
+        })
+        rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
+
+        injected = self.client.get(reverse("survey-start"), {"rid": rid, "userId": self.platform_user.pk})
+        self.assertContains(injected, "Invalid survey link", status_code=400)
+
+        self.platform_user.is_active = False
+        self.platform_user.save(update_fields=["is_active"])
+        inactive = self.client.get(reverse("survey-start"), {"rid": rid})
+        self.assertContains(inactive, "Invalid survey link", status_code=404)

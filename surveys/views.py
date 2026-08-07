@@ -1,8 +1,9 @@
 from urllib.parse import quote
 
+from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.http import HttpResponseBadRequest, HttpResponseRedirect
-from django.shortcuts import get_object_or_404, render
+from django.http import HttpResponseRedirect
+from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
 from django.views.decorators.http import require_http_methods
@@ -30,7 +31,13 @@ from .serializers import (
     TargetingQuestionSerializer,
 )
 from .services import replace_survey_quotas, replace_survey_targeting, sync_surveys
-from .survey_flow import build_outbound_url, create_attempt, get_request_ip, status_rid_from_request
+from .survey_flow import (
+    build_outbound_url,
+    create_attempt,
+    get_request_ip,
+    status_rid_from_request,
+    supplier_code_from_entry_link,
+)
 from .tasks import sync_innovatemr_surveys_task
 
 
@@ -163,25 +170,57 @@ def _collect_prescreener_answers(request, survey):
     return answers, errors
 
 
+def _invalid_survey_link(request, message="This link is invalid or is no longer available.", status_code=400):
+    return render(request, "surveys/flow_error.html", {
+        "title": "Invalid survey link",
+        "message": message,
+    }, status=status_code)
+
+
+def _has_exact_query(request, expected_names):
+    """Reject duplicated or client-injected start-link parameters."""
+    return set(request.GET.keys()) == set(expected_names) and all(
+        len(request.GET.getlist(name)) == 1 for name in expected_names
+    )
+
+
 @require_http_methods(["GET", "POST"])
 def survey_start(request):
     if request.method == "GET" and not request.GET.get("rid"):
+        required_params = {"surveyId", "supplierCode", "userId", "code"}
+        if not _has_exact_query(request, required_params):
+            return _invalid_survey_link(request)
+
         survey_id = request.GET.get("surveyId", "").strip()
+        supplier_code = request.GET.get("supplierCode", "").strip()
         internal_code = request.GET.get("code", "").strip()
-        user_id = (request.GET.get("userId") or request.GET.get("user_id") or "").strip()
-        if not survey_id.isdigit() or not internal_code or not user_id:
-            return render(request, "surveys/flow_error.html", {
-                "title": "Invalid survey link",
-                "message": "surveyId, userId and the internal code are required.",
-            }, status=400)
+        user_id = request.GET.get("userId", "").strip()
+        if (
+            not survey_id.isdigit()
+            or not user_id.isdigit()
+            or not internal_code.isdigit()
+            or len(internal_code) != 14
+            or not supplier_code
+        ):
+            return _invalid_survey_link(request)
+
+        platform_user = get_user_model().objects.filter(pk=int(user_id), is_active=True).first()
+        if (
+            platform_user is None
+            or not has_function_access(platform_user, "projects.view")
+            or not has_function_access(platform_user, "survey_links.copy")
+        ):
+            return _invalid_survey_link(request)
+
         survey = Survey.objects.filter(
             source_id=int(survey_id), local_id=internal_code, status=Survey.Status.LIVE
         ).first()
-        if survey is None or not survey.entry_link:
-            return render(request, "surveys/flow_error.html", {
-                "title": "Survey unavailable",
-                "message": "This survey link is invalid, closed, or has no supplier entry link.",
-            }, status=404)
+        if (
+            survey is None
+            or not survey.entry_link
+            or supplier_code_from_entry_link(survey.entry_link) != supplier_code
+        ):
+            return _invalid_survey_link(request)
 
         stale = survey.targeting_synced_at is None or (
             survey.source_modified_at and survey.targeting_synced_at < survey.source_modified_at
@@ -193,13 +232,20 @@ def survey_start(request):
             except InnovateMRAPIError:
                 if not survey.targeting_questions.exists():
                     targeting_warning = "Pre-screening criteria are temporarily unavailable. You can still continue."
-        attempt = create_attempt(survey, user_id[:160], get_request_ip(request))
+        attempt = create_attempt(survey, platform_user, get_request_ip(request))
         if targeting_warning:
             request.session[f"attempt_warning_{attempt.rid}"] = targeting_warning
         return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(attempt.rid)}")
 
-    rid = (request.GET.get("rid") if request.method == "GET" else request.POST.get("rid", "")).strip()
-    attempt = get_object_or_404(SurveyAttempt.objects.select_related("survey"), rid=rid)
+    if request.method == "GET" and not _has_exact_query(request, {"rid"}):
+        return _invalid_survey_link(request)
+
+    rid = (request.GET.get("rid", "") if request.method == "GET" else request.POST.get("rid", "")).strip()
+    if len(rid) != 10 or not rid.isalnum():
+        return _invalid_survey_link(request)
+    attempt = SurveyAttempt.objects.select_related("survey", "platform_user").filter(rid=rid).first()
+    if attempt is None or attempt.platform_user is None or not attempt.platform_user.is_active:
+        return _invalid_survey_link(request, status_code=404)
 
     if request.method == "POST":
         answers, errors = _collect_prescreener_answers(request, attempt.survey)
