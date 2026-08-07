@@ -1,0 +1,196 @@
+from datetime import timedelta
+
+from django.core.validators import MinValueValidator
+from django.db import models, transaction
+from django.utils import timezone
+
+
+class LocalIdSequence(models.Model):
+    """Monthly counter used to issue 14-digit IDs such as 20260800000001."""
+
+    year_month = models.CharField(max_length=6, primary_key=True)
+    last_value = models.PositiveIntegerField(default=0)
+
+    class Meta:
+        verbose_name = "local ID sequence"
+
+    @classmethod
+    def next_id(cls) -> str:
+        prefix = timezone.localdate().strftime("%Y%m")
+        with transaction.atomic():
+            sequence, _ = cls.objects.select_for_update().get_or_create(year_month=prefix)
+            sequence.last_value += 1
+            sequence.save(update_fields=["last_value"])
+            return f"{prefix}{sequence.last_value:08d}"
+
+
+class SyncLease(models.Model):
+    """Database-backed single-flight lease for recurring jobs."""
+
+    name = models.CharField(max_length=80, primary_key=True)
+    locked_until = models.DateTimeField(null=True, blank=True)
+
+    @classmethod
+    def acquire(cls, name: str, seconds: int = 300) -> bool:
+        with transaction.atomic():
+            cls.objects.get_or_create(name=name)
+            lease = cls.objects.select_for_update().get(name=name)
+            now = timezone.now()
+            if lease.locked_until and lease.locked_until > now:
+                return False
+            lease.locked_until = now + timedelta(seconds=seconds)
+            lease.save(update_fields=["locked_until"])
+            return True
+
+    @classmethod
+    def release(cls, name: str) -> None:
+        cls.objects.filter(name=name).update(locked_until=None)
+
+
+class Survey(models.Model):
+    class Status(models.TextChoices):
+        LIVE = "live", "Live"
+        CLOSED = "closed", "Closed"
+
+    local_id = models.CharField(max_length=14, unique=True, editable=False, db_index=True)
+    source_id = models.PositiveBigIntegerField(unique=True, db_index=True, help_text="InnovateMR surveyId")
+    company_name = models.CharField(max_length=160, default="InnovateMR", db_index=True)
+    name = models.CharField(max_length=500, blank=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.LIVE, db_index=True)
+    sample_size = models.PositiveIntegerField(default=0)
+    completes = models.PositiveIntegerField(default=0)
+    remaining = models.PositiveIntegerField(default=0)
+    starts = models.PositiveIntegerField(default=0)
+    cpi = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True, validators=[MinValueValidator(0)])
+    loi = models.PositiveIntegerField(null=True, blank=True)
+    incidence_rate = models.DecimalField(max_digits=6, decimal_places=2, null=True, blank=True)
+    country = models.CharField(max_length=120, blank=True, db_index=True)
+    country_code = models.CharField(max_length=8, blank=True, db_index=True)
+    language = models.CharField(max_length=80, blank=True)
+    language_code = models.CharField(max_length=8, blank=True)
+    group_type = models.CharField(max_length=80, blank=True)
+    device_type = models.CharField(max_length=80, blank=True)
+    entry_link = models.URLField(max_length=2000, blank=True)
+    test_entry_link = models.URLField(max_length=2000, blank=True)
+    job_category = models.CharField(max_length=180, blank=True)
+    has_quota = models.BooleanField(default=False)
+    is_pii_required = models.BooleanField(default=False)
+    is_recontact = models.BooleanField(default=False)
+    source_created_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    source_modified_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_seen_at = models.DateTimeField(default=timezone.now, db_index=True)
+    detail_synced_at = models.DateTimeField(null=True, blank=True)
+    quota_synced_at = models.DateTimeField(null=True, blank=True)
+    targeting_synced_at = models.DateTimeField(null=True, blank=True)
+    raw_data = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    updated_at = models.DateTimeField(auto_now=True, db_index=True)
+
+    class Meta:
+        ordering = ["-source_modified_at", "-created_at"]
+        indexes = [models.Index(fields=["status", "country_code"])]
+
+    def save(self, *args, **kwargs):
+        if not self.local_id:
+            self.local_id = LocalIdSequence.next_id()
+        super().save(*args, **kwargs)
+
+    def __str__(self):
+        return f"{self.local_id} · {self.name or self.source_id}"
+
+
+class SurveyQuota(models.Model):
+    survey = models.ForeignKey(Survey, related_name="quotas", on_delete=models.CASCADE)
+    source_key = models.CharField(max_length=120)
+    quota_id = models.BigIntegerField(null=True, blank=True)
+    title = models.TextField(blank=True)
+    name = models.CharField(max_length=500, blank=True)
+    sample_size = models.PositiveIntegerField(default=0)
+    remaining = models.PositiveIntegerField(default=0)
+    completes = models.PositiveIntegerField(default=0)
+    clicks = models.PositiveIntegerField(default=0)
+    status = models.CharField(max_length=80, blank=True)
+    targeting = models.JSONField(default=dict, blank=True)
+    raw_data = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["survey", "source_key"], name="unique_survey_quota")]
+        ordering = ["id"]
+
+
+class TargetingQuestion(models.Model):
+    survey = models.ForeignKey(Survey, related_name="targeting_questions", on_delete=models.CASCADE)
+    question_id = models.BigIntegerField()
+    key = models.CharField(max_length=180, blank=True)
+    text = models.TextField(blank=True)
+    question_type = models.CharField(max_length=120, blank=True)
+    category = models.CharField(max_length=120, blank=True)
+    options = models.JSONField(default=list, blank=True)
+    raw_data = models.JSONField(default=dict, blank=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [models.UniqueConstraint(fields=["survey", "question_id"], name="unique_survey_question")]
+        ordering = ["question_id"]
+
+
+class SyncRun(models.Model):
+    class Status(models.TextChoices):
+        RUNNING = "running", "Running"
+        SUCCESS = "success", "Success"
+        PARTIAL = "partial", "Partial"
+        FAILED = "failed", "Failed"
+
+    started_at = models.DateTimeField(auto_now_add=True)
+    finished_at = models.DateTimeField(null=True, blank=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.RUNNING)
+    fetched_full = models.PositiveIntegerField(default=0)
+    fetched_paged = models.PositiveIntegerField(default=0)
+    unique_surveys = models.PositiveIntegerField(default=0)
+    created = models.PositiveIntegerField(default=0)
+    updated = models.PositiveIntegerField(default=0)
+    unchanged = models.PositiveIntegerField(default=0)
+    closed = models.PositiveIntegerField(default=0)
+    detail_failures = models.PositiveIntegerField(default=0)
+    error = models.TextField(blank=True)
+
+    class Meta:
+        ordering = ["-started_at"]
+
+
+class SurveyAttempt(models.Model):
+    class Status(models.TextChoices):
+        INITIATED = "initiated", "Initiated"
+        REDIRECTED = "redirected", "Redirected to survey"
+        COMPLETED = "1", "Completed"
+        TERMINATED = "2", "Terminated"
+        OVER_QUOTA = "3", "Over quota"
+        QUALITY_TERMINATED = "4", "Quality terminated"
+
+    rid = models.CharField(max_length=10, unique=True, db_index=True)
+    survey = models.ForeignKey(Survey, related_name="attempts", on_delete=models.PROTECT)
+    user_id = models.CharField(max_length=160, db_index=True)
+    supplier_code = models.CharField(max_length=40, blank=True)
+    status = models.CharField(max_length=20, choices=Status.choices, default=Status.INITIATED, db_index=True)
+    initiated_at = models.DateTimeField(default=timezone.now, db_index=True)
+    submitted_at = models.DateTimeField(null=True, blank=True)
+    redirected_at = models.DateTimeField(null=True, blank=True)
+    callback_at = models.DateTimeField(null=True, blank=True)
+    last_callback_at = models.DateTimeField(null=True, blank=True)
+    loi_seconds = models.PositiveIntegerField(null=True, blank=True)
+    initiation_ip = models.GenericIPAddressField(null=True, blank=True)
+    callback_ip = models.GenericIPAddressField(null=True, blank=True)
+    answers = models.JSONField(default=dict, blank=True)
+    outbound_url = models.URLField(max_length=3000, blank=True)
+    callback_count = models.PositiveIntegerField(default=0)
+    is_verified = models.BooleanField(default=False, help_text="True only after a trusted S2S notification/hash verification.")
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-initiated_at"]
+        indexes = [models.Index(fields=["survey", "user_id", "-initiated_at"])]
+
+    def __str__(self):
+        return f"{self.rid} · {self.survey.source_id} · {self.user_id}"

@@ -1,0 +1,62 @@
+{% load static %}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Survey inventory workspace">
+  <title>{% block title %}Survey Workspace{% endblock %}</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{% static 'surveys/app.css' %}?v=4">
+  {% block extra_head %}{% endblock %}
+</head>
+<body>
+  <div class="app-shell" data-sidebar="open">
+    <aside class="sidebar" id="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="{% url 'home' %}" aria-label="Survey Workspace home">
+        <span class="brand-mark"><span></span><span></span><span></span></span>
+        <span class="brand-copy"><strong>Survey Hub</strong><small>Inventory workspace</small></span>
+      </a>
+
+      <nav class="nav-list">
+        {% if 'dashboard.view' in access_codes %}<a class="nav-item {% if active_page == 'dashboard' %}active{% endif %}" href="{% url 'dashboard' %}">
+          <span class="nav-icon">⌁</span><span>Dashboard</span>
+        </a>{% endif %}
+        {% if 'projects.view' in access_codes %}<a class="nav-item {% if active_page == 'projects' %}active{% endif %}" href="{% url 'projects' %}">
+          <span class="nav-icon">▤</span><span>Projects</span><span class="nav-caret">⌃</span>
+        </a>
+        {% if active_page == 'projects' %}<span class="nav-child"><i></i>All surveys</span>{% endif %}{% endif %}
+        {% if 'access.manage' in access_codes or 'users.view' in access_codes or 'users.create' in access_codes or 'roles.view' in access_codes or 'roles.create' in access_codes %}
+        <a class="nav-item {% if active_page == 'access-control' %}active{% endif %}" href="{% url 'access-control' %}">
+          <span class="nav-icon">âš™</span><span>Access control</span>
+        </a>
+        {% endif %}
+      </nav>
+
+      <div class="sidebar-foot">
+        <div class="workspace-card"><span>{{ request.user.username|first|upper }}</span><div><strong>{{ request.user.get_full_name|default:request.user.username }}</strong><small>{% if current_employee_profile.role %}{{ current_employee_profile.role.name }}{% else %}Employee{% endif %}</small></div></div>
+      </div>
+    </aside>
+
+    <button class="scrim" id="scrim" aria-label="Close navigation"></button>
+
+    <main class="main-area">
+      <header class="topbar">
+        <button class="icon-button menu-button" id="menuButton" aria-label="Toggle navigation" aria-expanded="true"><span></span><span></span><span></span></button>
+        <div class="topbar-title">{% block header_title %}Workspace{% endblock %}</div>
+        <div class="topbar-actions">
+          {% if 'api_docs.view' in access_codes %}<a class="docs-link" href="{% url 'swagger-ui' %}">API docs</a>{% endif %}
+          <div class="avatar" title="{{ request.user.username }}">{{ request.user.username|first|upper }}</div>
+          <form method="post" action="{% url 'logout' %}" class="logout-form">{% csrf_token %}<button type="submit">Logout</button></form>
+        </div>
+      </header>
+      <div class="content">{% block content %}{% endblock %}</div>
+    </main>
+  </div>
+  <div class="toast-region" id="toastRegion" aria-live="polite"></div>
+  <script src="{% static 'surveys/app.js' %}?v=4" defer></script>
+  {% block scripts %}{% endblock %}
+</body>
+</html>

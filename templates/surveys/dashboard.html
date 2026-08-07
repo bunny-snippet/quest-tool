@@ -1,0 +1,12 @@
+{% extends 'surveys/base.html' %}
+{% block title %}Dashboard · Survey Workspace{% endblock %}
+{% block header_title %}Dashboard{% endblock %}
+{% block content %}
+<section class="empty-dashboard">
+  <div class="empty-orbit"><span>⌁</span></div>
+  <p class="eyebrow">Workspace overview</p>
+  <h1>Your dashboard is ready.</h1>
+  <p>Metrics and reporting will appear here when you are ready to add them. Survey operations live in Projects.</p>
+  {% if 'projects.view' in access_codes %}<a class="primary-button" href="{% url 'projects' %}">Open projects <span>→</span></a>{% endif %}
+</section>
+{% endblock %}

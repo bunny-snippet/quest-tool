@@ -1,0 +1,252 @@
+import hashlib
+import json
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timezone as dt_timezone
+from decimal import Decimal, InvalidOperation
+from typing import Any
+
+from dateutil import parser as date_parser
+from django.db import transaction
+from django.utils import timezone
+
+from .integrations import InnovateMRAPIError, InnovateMRClient, InnovateMRNotFound
+from .models import Survey, SurveyQuota, SyncRun, TargetingQuestion
+
+logger = logging.getLogger(__name__)
+
+
+def _integer(value: Any, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _decimal(value: Any) -> Decimal | None:
+    if value in (None, ""):
+        return None
+    try:
+        return Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _stable_question_id(item: dict[str, Any]) -> int:
+    parsed = _integer(item.get("QuestionId"), -1)
+    if parsed >= 0:
+        return parsed
+    digest = hashlib.sha256(json.dumps(item, sort_keys=True, default=str).encode()).hexdigest()
+    return -int(digest[:12], 16)
+
+
+def parse_upstream_datetime(value: Any) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = date_parser.parse(
+            str(value),
+            fuzzy=True,
+            tzinfos={"PST": -8 * 3600, "PDT": -7 * 3600, "UTC": 0, "GMT": 0},
+        )
+        if timezone.is_naive(parsed):
+            parsed = timezone.make_aware(parsed, timezone.get_default_timezone())
+        return parsed.astimezone(dt_timezone.utc)
+    except (ValueError, TypeError, OverflowError):
+        logger.warning("Could not parse InnovateMR datetime %r", value)
+        return None
+
+
+def payload_modified_at(payload: dict[str, Any]) -> datetime:
+    return parse_upstream_datetime(payload.get("modifiedDate")) or parse_upstream_datetime(payload.get("createdDate")) or datetime.min.replace(tzinfo=dt_timezone.utc)
+
+
+def merge_inventory(*inventories: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+    """Deduplicate by surveyId; latest modifiedDate wins (later source wins ties)."""
+    merged: dict[int, dict[str, Any]] = {}
+    for inventory in inventories:
+        for payload in inventory:
+            source_id = _integer(payload.get("surveyId"), -1)
+            if source_id < 0:
+                logger.warning("Ignoring survey payload without a valid surveyId")
+                continue
+            current = merged.get(source_id)
+            if current is None or payload_modified_at(payload) >= payload_modified_at(current):
+                merged[source_id] = payload
+    return merged
+
+
+def _survey_values(payload: dict[str, Any], seen_at: datetime) -> dict[str, Any]:
+    return {
+        "company_name": "InnovateMR",
+        "name": str(payload.get("surveyName") or ""),
+        "status": Survey.Status.LIVE,
+        "sample_size": max(0, _integer(payload.get("N"))),
+        "completes": max(0, _integer(payload.get("supCmps"))),
+        "remaining": max(0, _integer(payload.get("remainingN"))),
+        "starts": max(0, _integer(payload.get("numberOfStarts"))),
+        "cpi": _decimal(payload.get("CPI")),
+        "loi": max(0, _integer(payload.get("LOI"))) if payload.get("LOI") is not None else None,
+        "incidence_rate": _decimal(payload.get("IR")),
+        "country": str(payload.get("Country") or ""),
+        "country_code": str(payload.get("CountryCode") or "").upper(),
+        "language": str(payload.get("Language") or ""),
+        "language_code": str(payload.get("LanguageCode") or "").upper(),
+        "group_type": str(payload.get("groupType") or ""),
+        "device_type": str(payload.get("deviceType") or ""),
+        "entry_link": str(payload.get("entryLink") or ""),
+        "test_entry_link": str(payload.get("testEntryLink") or ""),
+        "job_category": str(payload.get("jobCategory") or ""),
+        "has_quota": bool(payload.get("isQuota")),
+        "is_pii_required": bool(payload.get("isPIIRequired")),
+        "is_recontact": bool(payload.get("reContact")),
+        "source_created_at": parse_upstream_datetime(payload.get("createdDate")),
+        "source_modified_at": parse_upstream_datetime(payload.get("modifiedDate")),
+        "last_seen_at": seen_at,
+        "raw_data": payload,
+    }
+
+
+def _detail_changed(existing: Survey, incoming: dict[str, Any]) -> bool:
+    incoming_modified = payload_modified_at(incoming)
+    existing_modified = existing.source_modified_at or existing.source_created_at or datetime.min.replace(tzinfo=dt_timezone.utc)
+    if incoming_modified > existing_modified:
+        return True
+    comparable_existing = json.dumps(existing.raw_data, sort_keys=True, default=str)
+    comparable_incoming = json.dumps(incoming, sort_keys=True, default=str)
+    return comparable_existing != comparable_incoming or existing.status != Survey.Status.LIVE
+
+
+def replace_survey_quotas(client: InnovateMRClient, survey: Survey) -> None:
+    try:
+        quotas = client.get_quota_for_survey(survey.source_id)
+    except InnovateMRNotFound:
+        quotas = []
+    with transaction.atomic():
+        survey.quotas.all().delete()
+        SurveyQuota.objects.bulk_create([
+            SurveyQuota(
+                survey=survey,
+                source_key=str(item.get("_id") or item.get("id") or hashlib.sha256(json.dumps(item, sort_keys=True, default=str).encode()).hexdigest()),
+                quota_id=_integer(item.get("id"), 0) or None,
+                title=str(item.get("title") or ""),
+                name=str(item.get("quotaName") or ""),
+                sample_size=max(0, _integer(item.get("quotaN"))),
+                remaining=max(0, _integer(item.get("RemainingN"))),
+                completes=max(0, _integer(item.get("cmp"))),
+                clicks=max(0, _integer(item.get("clk"))),
+                status=str(item.get("quotaStatus") or ""),
+                targeting=item.get("targeting") if isinstance(item.get("targeting"), dict) else {},
+                raw_data=item,
+            )
+            for item in quotas
+        ])
+        survey.quota_synced_at = timezone.now()
+        survey.save(update_fields=["quota_synced_at", "updated_at"])
+
+
+def replace_survey_targeting(client: InnovateMRClient, survey: Survey) -> None:
+    try:
+        targeting = client.get_survey_targeting(survey.source_id)
+    except InnovateMRNotFound:
+        targeting = []
+    with transaction.atomic():
+        survey.targeting_questions.all().delete()
+        TargetingQuestion.objects.bulk_create([
+            TargetingQuestion(
+                survey=survey,
+                question_id=_stable_question_id(item),
+                key=str(item.get("QuestionKey") or ""),
+                text=str(item.get("QuestionText") or ""),
+                question_type=str(item.get("QuestionType") or ""),
+                category=str(item.get("QuestionCategory") or ""),
+                options=item.get("Options") if isinstance(item.get("Options"), list) else [],
+                raw_data=item,
+            )
+            for item in targeting
+        ])
+        survey.targeting_synced_at = timezone.now()
+        survey.save(update_fields=["targeting_synced_at", "updated_at"])
+
+
+def replace_survey_details(client: InnovateMRClient, survey: Survey) -> None:
+    """Refresh both collections independently, preserving any successful side."""
+    errors: list[InnovateMRAPIError] = []
+    for refresh in (replace_survey_quotas, replace_survey_targeting):
+        try:
+            refresh(client, survey)
+        except InnovateMRAPIError as exc:
+            errors.append(exc)
+    survey.refresh_from_db(fields=["quota_synced_at", "targeting_synced_at"])
+    if survey.quota_synced_at and survey.targeting_synced_at:
+        survey.detail_synced_at = min(survey.quota_synced_at, survey.targeting_synced_at)
+        survey.save(update_fields=["detail_synced_at", "updated_at"])
+    if errors:
+        raise errors[0]
+
+
+@dataclass
+class SyncSummary:
+    run_id: int
+    status: str
+    created: int
+    updated: int
+    unchanged: int
+    closed: int
+    detail_failures: int
+
+
+def sync_surveys(client: InnovateMRClient | None = None) -> SyncSummary:
+    client = client or InnovateMRClient()
+    run = SyncRun.objects.create()
+    now = timezone.now()
+
+    try:
+        full_inventory = client.get_allocated_surveys()
+        paged = client.get_allocated_surveys_paged()
+        merged = merge_inventory(full_inventory, paged.surveys)
+        run.fetched_full = len(full_inventory)
+        run.fetched_paged = len(paged.surveys)
+        run.unique_surveys = len(merged)
+
+        with transaction.atomic():
+            for source_id, payload in merged.items():
+                existing = Survey.objects.filter(source_id=source_id).first()
+                values = _survey_values(payload, now)
+                if existing is None:
+                    survey = Survey.objects.create(source_id=source_id, **values)
+                    run.created += 1
+                elif _detail_changed(existing, payload):
+                    for field, value in values.items():
+                        setattr(existing, field, value)
+                    existing.save()
+                    run.updated += 1
+                else:
+                    existing.last_seen_at = now
+                    existing.save(update_fields=["last_seen_at"])
+                    run.unchanged += 1
+
+            closed = Survey.objects.filter(status=Survey.Status.LIVE).exclude(source_id__in=merged.keys())
+            run.closed = closed.update(status=Survey.Status.CLOSED, updated_at=now)
+
+        # Detail endpoints are refreshed separately in bounded batches. This
+        # keeps a large initial inventory import inside its one-minute window.
+        run.status = SyncRun.Status.SUCCESS
+    except Exception as exc:
+        run.status = SyncRun.Status.FAILED
+        run.error = str(exc)[:10000]
+        logger.exception("InnovateMR survey sync failed")
+        raise
+    finally:
+        run.finished_at = timezone.now()
+        run.save()
+
+    return SyncSummary(
+        run_id=run.id,
+        status=run.status,
+        created=run.created,
+        updated=run.updated,
+        unchanged=run.unchanged,
+        closed=run.closed,
+        detail_failures=run.detail_failures,
+    )

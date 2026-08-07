@@ -1,0 +1,102 @@
+{% extends 'surveys/base.html' %}
+{% load static %}
+{% block title %}Projects · Survey Workspace{% endblock %}
+{% block header_title %}Projects{% endblock %}
+{% block content %}
+{{ project_columns|json_script:"projectColumnAccess" }}
+<section class="page-intro">
+  <div><p class="eyebrow">Survey operations</p><h1>All surveys</h1><p>Live inventory synchronized securely from InnovateMR.</p></div>
+  {% if can_sync %}<button class="primary-button sync-button" id="syncButton"><span class="sync-symbol">↻</span> Sync now</button>{% endif %}
+</section>
+
+<section class="filter-panel" aria-label="Survey filters">
+  <div class="field search-field">
+    <label for="searchInput">Search</label>
+    <div class="field-control"><span>⌕</span><input id="searchInput" type="search" placeholder="ID, survey name, category…" autocomplete="off"></div>
+  </div>
+  <div class="field multi-field">
+    <label id="countryLabel">Country</label>
+    <div class="multi-select" data-multi-filter="country">
+      <button class="multi-trigger" type="button" aria-labelledby="countryLabel" aria-expanded="false"><span>All countries</span><i>⌄</i></button>
+      <div class="multi-menu" hidden>{% for code, name in countries %}<label><input type="checkbox" value="{{ code }}"><span>{{ code }} · {{ name }}</span></label>{% endfor %}</div>
+    </div>
+  </div>
+  <div class="field multi-field">
+    <label id="statusLabel">Status</label>
+    <div class="multi-select" data-multi-filter="status">
+      <button class="multi-trigger" type="button" aria-labelledby="statusLabel" aria-expanded="false"><span>All statuses</span><i>⌄</i></button>
+      <div class="multi-menu" hidden><label><input type="checkbox" value="live"><span>Live</span></label><label><input type="checkbox" value="closed"><span>Closed</span></label></div>
+    </div>
+  </div>
+  <div class="field multi-field">
+    <label id="companyLabel">Company</label>
+    <div class="multi-select" data-multi-filter="company">
+      <button class="multi-trigger" type="button" aria-labelledby="companyLabel" aria-expanded="false"><span>All companies</span><i>⌄</i></button>
+      <div class="multi-menu" hidden>{% for company in companies %}<label><input type="checkbox" value="{{ company }}"><span>{{ company }}</span></label>{% empty %}<label><input type="checkbox" value="InnovateMR"><span>InnovateMR</span></label>{% endfor %}</div>
+    </div>
+  </div>
+  <div class="field">
+    <label for="dateField">Date column</label>
+    <select id="dateField"><option value="modified">Last modified</option><option value="created">Created</option></select>
+  </div>
+  <div class="field">
+    <label for="fromDate">From date</label>
+    <input id="fromDate" type="date">
+  </div>
+  <div class="field">
+    <label for="toDate">To date</label>
+    <input id="toDate" type="date">
+  </div>
+  <button class="clear-button" id="clearFilters" type="button">Clear filters</button>
+</section>
+
+<section class="survey-panel">
+  <div class="panel-head">
+    <div><h2>Survey inventory</h2><p id="resultSummary">Loading surveys…</p></div>
+    <div class="panel-tools">
+      <label class="compact-select">Rows<select id="pageSize"><option>10</option><option selected>20</option><option>50</option><option>100</option></select></label>
+    </div>
+  </div>
+
+  <div class="table-wrap">
+    <table class="survey-table">
+      <thead><tr>
+        {% if 'project_id' in project_columns %}<th>Project ID</th>{% endif %}
+        {% if 'survey' in project_columns %}<th>Survey</th>{% endif %}
+        {% if 'market' in project_columns %}<th>Market</th>{% endif %}
+        {% if 'completes' in project_columns %}<th>Completes</th>{% endif %}
+        {% if 'cpi' in project_columns %}<th>CPI</th>{% endif %}
+        {% if 'loi_ir' in project_columns %}<th>LOI / IR</th>{% endif %}
+        {% if 'entry_link' in project_columns %}<th>Entry link</th>{% endif %}
+        {% if 'modified' in project_columns %}<th>Modified</th>{% endif %}
+        {% if 'actions' in project_columns %}<th><span class="sr-only">Actions</span></th>{% endif %}
+      </tr></thead>
+      <tbody id="surveyRows"><tr><td colspan="{{ project_column_count }}"><div class="table-loader"><i></i><span>Fetching survey inventory…</span></div></td></tr></tbody>
+    </table>
+  </div>
+
+  <div class="mobile-cards" id="mobileCards"></div>
+
+  <div class="panel-foot">
+    <span id="pageStatus">Page 1</span>
+    <nav class="pagination" aria-label="Survey pages">
+      <button id="firstPage" aria-label="First page">«</button><button id="prevPage" aria-label="Previous page">‹</button>
+      <label><span class="sr-only">Current page</span><input id="pageInput" type="number" min="1" value="1"></label>
+      <span id="totalPages">of 1</span>
+      <button id="nextPage" aria-label="Next page">›</button><button id="lastPage" aria-label="Last page">»</button>
+    </nav>
+  </div>
+</section>
+
+<div class="drawer-backdrop" id="drawerBackdrop" hidden></div>
+<aside class="detail-drawer" id="detailDrawer" aria-modal="true" role="dialog" aria-labelledby="drawerTitle" hidden>
+  <div class="drawer-head"><h2 id="drawerTitle">Survey details</h2><button class="icon-button" id="closeDrawer" aria-label="Close details">×</button></div>
+  <div class="drawer-survey" id="drawerSurvey"></div>
+  <div class="drawer-tabs" role="tablist" aria-label="Survey detail sections">
+    <button id="targetingTab" class="drawer-tab active" type="button" role="tab" aria-selected="true" data-tab="targeting">Pre-screening questions</button>
+    <button id="quotaTab" class="drawer-tab" type="button" role="tab" aria-selected="false" data-tab="quotas">Quota</button>
+  </div>
+  <div class="drawer-content" id="drawerContent"></div>
+</aside>
+{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=6" defer></script>{% endblock %}

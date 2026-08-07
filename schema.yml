@@ -1,0 +1,2287 @@
+openapi: 3.0.3
+info:
+  title: Survey Workspace API
+  version: 1.0.0
+  description: Internal API for InnovateMR survey ingestion, browsing, quotas and
+    pre-screening targeting. Upstream credentials remain server-side.
+paths:
+  /api/v1/access/functions/:
+    get:
+      operationId: api_v1_access_functions_list
+      summary: List configurable application functions
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - Access control
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAccessFunctionList'
+          description: ''
+    post:
+      operationId: api_v1_access_functions_create
+      summary: Create an application function
+      tags:
+      - Access control
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccessFunctionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AccessFunctionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AccessFunctionRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessFunction'
+          description: ''
+  /api/v1/access/functions/{id}/:
+    get:
+      operationId: api_v1_access_functions_retrieve
+      summary: Get an application function
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this access function.
+        required: true
+      tags:
+      - Access control
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessFunction'
+          description: ''
+    put:
+      operationId: api_v1_access_functions_update
+      summary: Replace an application function
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this access function.
+        required: true
+      tags:
+      - Access control
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AccessFunctionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/AccessFunctionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/AccessFunctionRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessFunction'
+          description: ''
+    patch:
+      operationId: api_v1_access_functions_partial_update
+      summary: Update an application function
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this access function.
+        required: true
+      tags:
+      - Access control
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedAccessFunctionRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedAccessFunctionRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedAccessFunctionRequest'
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AccessFunction'
+          description: ''
+    delete:
+      operationId: api_v1_access_functions_destroy
+      summary: Delete an application function
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this access function.
+        required: true
+      tags:
+      - Access control
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/access/roles/:
+    get:
+      operationId: api_v1_access_roles_list
+      summary: List roles and assigned functions
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - Access control
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedRoleList'
+          description: ''
+    post:
+      operationId: api_v1_access_roles_create
+      summary: Create a role with function permissions
+      tags:
+      - Access control
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RoleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RoleRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+          description: ''
+  /api/v1/access/roles/{slug}/:
+    get:
+      operationId: api_v1_access_roles_retrieve
+      summary: Get a role
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+        required: true
+      tags:
+      - Access control
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+          description: ''
+    put:
+      operationId: api_v1_access_roles_update
+      summary: Replace a role and its function permissions
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+        required: true
+      tags:
+      - Access control
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RoleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/RoleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/RoleRequest'
+        required: true
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+          description: ''
+    patch:
+      operationId: api_v1_access_roles_partial_update
+      summary: Update a role or its function permissions
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+        required: true
+      tags:
+      - Access control
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedRoleRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedRoleRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedRoleRequest'
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Role'
+          description: ''
+    delete:
+      operationId: api_v1_access_roles_destroy
+      summary: Delete a role
+      parameters:
+      - in: path
+        name: slug
+        schema:
+          type: string
+        required: true
+      tags:
+      - Access control
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/access/users/:
+    get:
+      operationId: api_v1_access_users_list
+      summary: List users, roles, overrides and effective permissions
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - Access control
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedUserAccessList'
+          description: ''
+    post:
+      operationId: api_v1_access_users_create
+      summary: Create an employee account
+      tags:
+      - Access control
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserAccessRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserAccessRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserAccessRequest'
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAccess'
+          description: ''
+  /api/v1/access/users/{id}/:
+    get:
+      operationId: api_v1_access_users_retrieve
+      summary: Get one user's effective access
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this user.
+        required: true
+      tags:
+      - Access control
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAccess'
+          description: ''
+    put:
+      operationId: api_v1_access_users_update
+      summary: Replace a user and access overrides
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this user.
+        required: true
+      tags:
+      - Access control
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UserAccessRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/UserAccessRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/UserAccessRequest'
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAccess'
+          description: ''
+    patch:
+      operationId: api_v1_access_users_partial_update
+      summary: Update role or per-user allow/deny overrides
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this user.
+        required: true
+      tags:
+      - Access control
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedUserAccessRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedUserAccessRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedUserAccessRequest'
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserAccess'
+          description: ''
+    delete:
+      operationId: api_v1_access_users_destroy
+      summary: Delete an employee account
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this user.
+        required: true
+      tags:
+      - Access control
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/survey-attempts/:
+    get:
+      operationId: api_v1_survey_attempts_list
+      description: Staff-only audit data for initiated pre-screeners, redirects, callbacks,
+        IPs and measured LOI.
+      summary: List respondent survey attempts
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - '1'
+          - '2'
+          - '3'
+          - '4'
+          - initiated
+          - redirected
+        description: |-
+          * `initiated` - Initiated
+          * `redirected` - Redirected to survey
+          * `1` - Completed
+          * `2` - Terminated
+          * `3` - Over quota
+          * `4` - Quality terminated
+      - in: query
+        name: supplier_code
+        schema:
+          type: string
+      - in: query
+        name: survey__source_id
+        schema:
+          type: integer
+      - in: query
+        name: user_id
+        schema:
+          type: string
+      tags:
+      - Survey attempts
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSurveyAttemptList'
+          description: ''
+  /api/v1/survey-attempts/{rid}/:
+    get:
+      operationId: api_v1_survey_attempts_retrieve
+      description: Staff-only detail including captured answers and outbound supplier
+        URL.
+      summary: Get one respondent attempt by RID
+      parameters:
+      - in: path
+        name: rid
+        schema:
+          type: string
+        required: true
+      tags:
+      - Survey attempts
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SurveyAttempt'
+          description: ''
+  /api/v1/surveys/:
+    get:
+      operationId: api_v1_surveys_list
+      description: Returns locally stored surveys using page-number pagination. Search
+        matches project ID, InnovateMR survey ID, survey name, country and category.
+        Date filters accept ISO-8601 timestamps.
+      summary: List synchronized surveys
+      parameters:
+      - in: query
+        name: company
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated supplier company names
+        explode: false
+        style: form
+      - in: query
+        name: country
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated country codes, e.g. US,IN
+        explode: false
+        style: form
+      - in: query
+        name: created_from
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: created_to
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: language
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated language codes, e.g. EN,HI
+        explode: false
+        style: form
+      - in: query
+        name: max_cpi
+        schema:
+          type: number
+      - in: query
+        name: min_cpi
+        schema:
+          type: number
+      - in: query
+        name: modified_from
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: modified_to
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: ordering
+        schema:
+          type: string
+        description: One of source_modified_at, source_created_at, cpi, sample_size,
+          completes, created_at; prefix '-' for descending.
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: 1-based result page.
+      - in: query
+        name: page_size
+        schema:
+          type: integer
+        description: Rows per page (1–100, default 20).
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Free-text search across survey identifiers and descriptive fields.
+      - in: query
+        name: status
+        schema:
+          type: array
+          items:
+            type: string
+        description: 'Comma-separated statuses: live,closed'
+        explode: false
+        style: form
+      tags:
+      - Surveys
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSurveyListList'
+          description: ''
+  /api/v1/surveys/{local_id}/:
+    get:
+      operationId: api_v1_surveys_retrieve
+      description: Looks up a survey by the platform's immutable 14-digit local_id
+        and embeds current quotas and targeting questions.
+      summary: Get one survey
+      parameters:
+      - in: path
+        name: local_id
+        schema:
+          type: string
+        required: true
+      tags:
+      - Surveys
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SurveyDetail'
+          description: ''
+  /api/v1/surveys/{local_id}/quotas/:
+    get:
+      operationId: api_v1_surveys_quotas_list
+      description: Returns the most recently synchronized getQuotaForSurvey result
+        for this survey.
+      summary: List a survey's quotas
+      parameters:
+      - in: query
+        name: company
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated supplier company names
+        explode: false
+        style: form
+      - in: query
+        name: country
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated country codes, e.g. US,IN
+        explode: false
+        style: form
+      - in: query
+        name: created_from
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: created_to
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: language
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated language codes, e.g. EN,HI
+        explode: false
+        style: form
+      - in: path
+        name: local_id
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: max_cpi
+        schema:
+          type: number
+      - in: query
+        name: min_cpi
+        schema:
+          type: number
+      - in: query
+        name: modified_from
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: modified_to
+        schema:
+          type: string
+          format: date-time
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: array
+          items:
+            type: string
+        description: 'Comma-separated statuses: live,closed'
+        explode: false
+        style: form
+      tags:
+      - Survey details
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSurveyQuotaList'
+          description: ''
+  /api/v1/surveys/{local_id}/targeting/:
+    get:
+      operationId: api_v1_surveys_targeting_list
+      description: Returns the most recently synchronized getSurveyTargeting result.
+        Options preserve InnovateMR's source structure.
+      summary: List pre-screening questions and accepted answers
+      parameters:
+      - in: query
+        name: company
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated supplier company names
+        explode: false
+        style: form
+      - in: query
+        name: country
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated country codes, e.g. US,IN
+        explode: false
+        style: form
+      - in: query
+        name: created_from
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: created_to
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: language
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated language codes, e.g. EN,HI
+        explode: false
+        style: form
+      - in: path
+        name: local_id
+        schema:
+          type: string
+        required: true
+      - in: query
+        name: max_cpi
+        schema:
+          type: number
+      - in: query
+        name: min_cpi
+        schema:
+          type: number
+      - in: query
+        name: modified_from
+        schema:
+          type: string
+          format: date-time
+      - in: query
+        name: modified_to
+        schema:
+          type: string
+          format: date-time
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: array
+          items:
+            type: string
+        description: 'Comma-separated statuses: live,closed'
+        explode: false
+        style: form
+      tags:
+      - Survey details
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedTargetingQuestionList'
+          description: ''
+  /api/v1/sync/:
+    post:
+      operationId: api_v1_sync_create
+      description: By default queues the same Celery task that beat runs every minute.
+        Use wait=true for operational testing to run in the HTTP process and receive
+        counters immediately. The sync fetches both full and cursor-paged inventory,
+        deduplicates by surveyId using modifiedDate, and refreshes quota/targeting
+        only for new or changed surveys.
+      summary: Start an InnovateMR inventory synchronization
+      parameters:
+      - in: query
+        name: wait
+        schema:
+          type: boolean
+        description: Run synchronously and return the completed run summary.
+      tags:
+      - Synchronization
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncTriggerResponse'
+              examples:
+                SynchronousResult:
+                  value:
+                    run_id: 42
+                    status: success
+                    created: 3
+                    updated: 8
+                    unchanged: 110
+                    closed: 2
+                    detail_failures: 0
+                  summary: Synchronous result
+          description: ''
+        '202':
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: {}
+          description: ''
+  /api/v1/sync-runs/:
+    get:
+      operationId: api_v1_sync_runs_list
+      summary: List synchronization audit runs
+      parameters:
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - failed
+          - partial
+          - running
+          - success
+        description: |-
+          * `running` - Running
+          * `success` - Success
+          * `partial` - Partial
+          * `failed` - Failed
+      tags:
+      - Synchronization
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedSyncRunList'
+          description: ''
+  /api/v1/sync-runs/{id}/:
+    get:
+      operationId: api_v1_sync_runs_retrieve
+      summary: Get one synchronization audit run
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this sync run.
+        required: true
+      tags:
+      - Synchronization
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/SyncRun'
+          description: ''
+components:
+  schemas:
+    AccessFunction:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        code:
+          type: string
+          maxLength: 120
+        name:
+          type: string
+          maxLength: 120
+        module:
+          type: string
+          maxLength: 80
+        description:
+          type: string
+        is_active:
+          type: boolean
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - code
+      - created_at
+      - id
+      - module
+      - name
+      - updated_at
+    AccessFunctionRequest:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 120
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        module:
+          type: string
+          minLength: 1
+          maxLength: 80
+        description:
+          type: string
+        is_active:
+          type: boolean
+      required:
+      - code
+      - module
+      - name
+    AccountTypeEnum:
+      enum:
+      - employee
+      - internal_vendor
+      - external_vendor
+      type: string
+      description: |-
+        * `employee` - Employee
+        * `internal_vendor` - Internal vendor
+        * `external_vendor` - External vendor
+    PaginatedAccessFunctionList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AccessFunction'
+    PaginatedRoleList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Role'
+    PaginatedSurveyAttemptList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SurveyAttempt'
+    PaginatedSurveyListList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SurveyList'
+    PaginatedSurveyQuotaList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SurveyQuota'
+    PaginatedSyncRunList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SyncRun'
+    PaginatedTargetingQuestionList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/TargetingQuestion'
+    PaginatedUserAccessList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserAccess'
+    PatchedAccessFunctionRequest:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 120
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        module:
+          type: string
+          minLength: 1
+          maxLength: 80
+        description:
+          type: string
+        is_active:
+          type: boolean
+    PatchedRoleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        description:
+          type: string
+        rank:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        is_active:
+          type: boolean
+        permission_codes:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+          writeOnly: true
+    PatchedUserAccessRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        is_active:
+          type: boolean
+          title: Active
+          description: Designates whether this user should be treated as active. Unselect
+            this instead of deleting accounts.
+        role:
+          type: string
+          writeOnly: true
+          nullable: true
+          minLength: 1
+          pattern: ^[-a-zA-Z0-9_]+$
+        allow_codes:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+          writeOnly: true
+        deny_codes:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+          writeOnly: true
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        account_type:
+          allOf:
+          - $ref: '#/components/schemas/AccountTypeEnum'
+          writeOnly: true
+        company_name:
+          type: string
+          writeOnly: true
+          maxLength: 160
+    Role:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        name:
+          type: string
+          maxLength: 80
+        slug:
+          type: string
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        description:
+          type: string
+        rank:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        is_system:
+          type: boolean
+          readOnly: true
+        is_active:
+          type: boolean
+        employee_count:
+          type: integer
+          readOnly: true
+          default: 0
+        effective_permission_codes:
+          type: array
+          items:
+            type: string
+          readOnly: true
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - created_at
+      - created_by
+      - effective_permission_codes
+      - employee_count
+      - id
+      - is_system
+      - name
+      - slug
+      - updated_at
+    RoleRequest:
+      type: object
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 80
+        slug:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        description:
+          type: string
+        rank:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        is_active:
+          type: boolean
+        permission_codes:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+          writeOnly: true
+      required:
+      - name
+      - slug
+    SurveyAttempt:
+      type: object
+      properties:
+        rid:
+          type: string
+          maxLength: 10
+        survey_local_id:
+          type: string
+          readOnly: true
+        survey_source_id:
+          type: integer
+          readOnly: true
+        company_name:
+          type: string
+          readOnly: true
+        user_id:
+          type: string
+          maxLength: 160
+        supplier_code:
+          type: string
+          maxLength: 40
+        status:
+          $ref: '#/components/schemas/SurveyAttemptStatusEnum'
+        initiated_at:
+          type: string
+          format: date-time
+        submitted_at:
+          type: string
+          format: date-time
+          nullable: true
+        redirected_at:
+          type: string
+          format: date-time
+          nullable: true
+        callback_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_callback_at:
+          type: string
+          format: date-time
+          nullable: true
+        loi_seconds:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          nullable: true
+        initiation_ip:
+          type: string
+          nullable: true
+        callback_ip:
+          type: string
+          nullable: true
+        answers: {}
+        outbound_url:
+          type: string
+          format: uri
+          maxLength: 3000
+        callback_count:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        is_verified:
+          type: boolean
+          description: True only after a trusted S2S notification/hash verification.
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - company_name
+      - created_at
+      - rid
+      - survey_local_id
+      - survey_source_id
+      - updated_at
+      - user_id
+    SurveyAttemptStatusEnum:
+      enum:
+      - initiated
+      - redirected
+      - '1'
+      - '2'
+      - '3'
+      - '4'
+      type: string
+      description: |-
+        * `initiated` - Initiated
+        * `redirected` - Redirected to survey
+        * `1` - Completed
+        * `2` - Terminated
+        * `3` - Over quota
+        * `4` - Quality terminated
+    SurveyDetail:
+      type: object
+      properties:
+        local_id:
+          type: string
+          readOnly: true
+        source_id:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          description: InnovateMR surveyId
+        company_name:
+          type: string
+          maxLength: 160
+        name:
+          type: string
+          maxLength: 500
+        status:
+          $ref: '#/components/schemas/SurveyStatusEnum'
+        sample_size:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        completes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        remaining:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        starts:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        cpi:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        loi:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          nullable: true
+        incidence_rate:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,4}(?:\.\d{0,2})?$
+          nullable: true
+        country:
+          type: string
+          maxLength: 120
+        country_code:
+          type: string
+          maxLength: 8
+        country_label:
+          type: string
+          readOnly: true
+        language:
+          type: string
+          maxLength: 80
+        language_code:
+          type: string
+          maxLength: 8
+        group_type:
+          type: string
+          maxLength: 80
+        device_type:
+          type: string
+          maxLength: 80
+        entry_link:
+          type: string
+          format: uri
+          maxLength: 2000
+        start_link:
+          type: string
+          nullable: true
+          description: Return the shareable platform pre-screener URL, never the supplier
+            entry URL.
+          readOnly: true
+        has_quota:
+          type: boolean
+        source_created_at:
+          type: string
+          format: date-time
+          nullable: true
+        source_modified_at:
+          type: string
+          format: date-time
+          nullable: true
+        source_created_display:
+          type: string
+          nullable: true
+          readOnly: true
+        source_modified_display:
+          type: string
+          nullable: true
+          readOnly: true
+        detail_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        quota_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        targeting_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        progress_percent:
+          type: number
+          format: double
+          readOnly: true
+        test_entry_link:
+          type: string
+          format: uri
+          maxLength: 2000
+        job_category:
+          type: string
+          maxLength: 180
+        is_pii_required:
+          type: boolean
+        is_recontact:
+          type: boolean
+        quotas:
+          type: array
+          items:
+            $ref: '#/components/schemas/SurveyQuota'
+          readOnly: true
+        targeting_questions:
+          type: array
+          items:
+            $ref: '#/components/schemas/TargetingQuestion'
+          readOnly: true
+      required:
+      - country_label
+      - created_at
+      - local_id
+      - progress_percent
+      - quotas
+      - source_created_display
+      - source_id
+      - source_modified_display
+      - start_link
+      - targeting_questions
+      - updated_at
+    SurveyList:
+      type: object
+      properties:
+        local_id:
+          type: string
+          readOnly: true
+        source_id:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          description: InnovateMR surveyId
+        company_name:
+          type: string
+          maxLength: 160
+        name:
+          type: string
+          maxLength: 500
+        status:
+          $ref: '#/components/schemas/SurveyStatusEnum'
+        sample_size:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        completes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        remaining:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        starts:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        cpi:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        loi:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+          nullable: true
+        incidence_rate:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,4}(?:\.\d{0,2})?$
+          nullable: true
+        country:
+          type: string
+          maxLength: 120
+        country_code:
+          type: string
+          maxLength: 8
+        country_label:
+          type: string
+          readOnly: true
+        language:
+          type: string
+          maxLength: 80
+        language_code:
+          type: string
+          maxLength: 8
+        group_type:
+          type: string
+          maxLength: 80
+        device_type:
+          type: string
+          maxLength: 80
+        entry_link:
+          type: string
+          format: uri
+          maxLength: 2000
+        start_link:
+          type: string
+          nullable: true
+          description: Return the shareable platform pre-screener URL, never the supplier
+            entry URL.
+          readOnly: true
+        has_quota:
+          type: boolean
+        source_created_at:
+          type: string
+          format: date-time
+          nullable: true
+        source_modified_at:
+          type: string
+          format: date-time
+          nullable: true
+        source_created_display:
+          type: string
+          nullable: true
+          readOnly: true
+        source_modified_display:
+          type: string
+          nullable: true
+          readOnly: true
+        detail_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        quota_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        targeting_synced_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        progress_percent:
+          type: number
+          format: double
+          readOnly: true
+      required:
+      - country_label
+      - created_at
+      - local_id
+      - progress_percent
+      - source_created_display
+      - source_id
+      - source_modified_display
+      - start_link
+      - updated_at
+    SurveyQuota:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        quota_id:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+          nullable: true
+        title:
+          type: string
+        name:
+          type: string
+          maxLength: 500
+        sample_size:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        remaining:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        completes:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        clicks:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        status:
+          type: string
+          maxLength: 80
+        targeting: {}
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - id
+      - updated_at
+    SurveyStatusEnum:
+      enum:
+      - live
+      - closed
+      type: string
+      description: |-
+        * `live` - Live
+        * `closed` - Closed
+    SyncRun:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        started_at:
+          type: string
+          format: date-time
+          readOnly: true
+        finished_at:
+          type: string
+          format: date-time
+          nullable: true
+        duration_seconds:
+          type: number
+          format: double
+          nullable: true
+          readOnly: true
+        status:
+          $ref: '#/components/schemas/SyncRunStatusEnum'
+        fetched_full:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        fetched_paged:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        unique_surveys:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        created:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        updated:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        unchanged:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        closed:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        detail_failures:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        error:
+          type: string
+      required:
+      - duration_seconds
+      - id
+      - started_at
+    SyncRunStatusEnum:
+      enum:
+      - running
+      - success
+      - partial
+      - failed
+      type: string
+      description: |-
+        * `running` - Running
+        * `success` - Success
+        * `partial` - Partial
+        * `failed` - Failed
+    SyncTriggerResponse:
+      type: object
+      properties:
+        run_id:
+          type: integer
+        status:
+          $ref: '#/components/schemas/SyncRunStatusEnum'
+        created:
+          type: integer
+        updated:
+          type: integer
+        unchanged:
+          type: integer
+        closed:
+          type: integer
+        detail_failures:
+          type: integer
+      required:
+      - closed
+      - created
+      - detail_failures
+      - run_id
+      - status
+      - unchanged
+      - updated
+    TargetingQuestion:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        question_id:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: -9223372036854775808
+          format: int64
+        key:
+          type: string
+          maxLength: 180
+        text:
+          type: string
+        question_type:
+          type: string
+          maxLength: 120
+        category:
+          type: string
+          maxLength: 120
+        options: {}
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - id
+      - question_id
+      - updated_at
+    UserAccess:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        full_name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        is_active:
+          type: boolean
+          title: Active
+          description: Designates whether this user should be treated as active. Unselect
+            this instead of deleting accounts.
+        last_login:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        role_details:
+          type: object
+          additionalProperties: {}
+          nullable: true
+          readOnly: true
+        allowed_overrides:
+          type: array
+          items:
+            type: string
+          readOnly: true
+        denied_overrides:
+          type: array
+          items:
+            type: string
+          readOnly: true
+        effective_permissions:
+          type: array
+          items:
+            type: string
+          readOnly: true
+        account_type_details:
+          type: object
+          additionalProperties: {}
+          readOnly: true
+        company:
+          type: string
+          readOnly: true
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+      required:
+      - account_type_details
+      - allowed_overrides
+      - company
+      - created_by
+      - denied_overrides
+      - effective_permissions
+      - full_name
+      - id
+      - last_login
+      - role_details
+    UserAccessRequest:
+      type: object
+      properties:
+        username:
+          type: string
+          minLength: 1
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+          pattern: ^[\w.@+-]+$
+          maxLength: 150
+        first_name:
+          type: string
+          maxLength: 150
+        last_name:
+          type: string
+          maxLength: 150
+        email:
+          type: string
+          format: email
+          title: Email address
+          maxLength: 254
+        is_active:
+          type: boolean
+          title: Active
+          description: Designates whether this user should be treated as active. Unselect
+            this instead of deleting accounts.
+        role:
+          type: string
+          writeOnly: true
+          nullable: true
+          minLength: 1
+          pattern: ^[-a-zA-Z0-9_]+$
+        allow_codes:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+          writeOnly: true
+        deny_codes:
+          type: array
+          items:
+            type: string
+            minLength: 1
+            maxLength: 120
+          writeOnly: true
+        password:
+          type: string
+          writeOnly: true
+          minLength: 8
+        account_type:
+          allOf:
+          - $ref: '#/components/schemas/AccountTypeEnum'
+          writeOnly: true
+        company_name:
+          type: string
+          writeOnly: true
+          maxLength: 160
+  securitySchemes:
+    basicAuth:
+      type: http
+      scheme: basic
+    cookieAuth:
+      type: apiKey
+      in: cookie
+      name: sessionid
+tags:
+- name: Surveys
+  description: Browse locally synchronized survey inventory.
+- name: Survey details
+  description: Quota and pre-screening targeting captured from InnovateMR.
+- name: Survey attempts
+  description: Staff-only respondent attempt, callback, IP and LOI audit records.
+- name: Synchronization
+  description: Trigger and audit upstream inventory synchronization.
+- name: Access control
+  description: Dynamic roles, function assignments and per-user access overrides.
