@@ -90,3 +90,22 @@ sudo systemctl status quest-tool-web quest-tool-worker quest-tool-beat redis-ser
 sudo journalctl -u quest-tool-beat -u quest-tool-worker -f
 sudo -u questtool /opt/quest-tool/.venv/bin/python /opt/quest-tool/manage.py check --deploy
 ```
+
+## Restricted Hostinger SSH user (no root)
+
+When Hostinger already proxies the assigned application port and the SSH user cannot install system packages or systemd units, run the bundled rootless installer from `$HOME/htdocs/quest-tool`. It uses the pure-Python PyMySQL driver and a user-owned Supervisor process, so Python/MySQL development headers are not required. Cron starts Supervisor after a VPS reboot; Supervisor keeps Gunicorn, Celery Worker and the single Celery Beat process alive.
+
+```bash
+cd "$HOME/htdocs/quest-tool"
+git pull --ff-only origin main
+chmod +x deploy/rootless-install.sh
+./deploy/rootless-install.sh
+```
+
+The `.env` in the repository root must be mode `600`, use MySQL, have `DJANGO_DEBUG=false`, and contain a non-empty database password. Useful rootless checks:
+
+```bash
+.venv/bin/supervisorctl -c deploy/supervisord.conf status
+tail -f "$HOME/logs/quest-tool-web-error.log"
+curl -I http://127.0.0.1:8091/login/
+```

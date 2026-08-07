@@ -1,0 +1,44 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+APP_DIR="${APP_DIR:-$HOME/htdocs/quest-tool}"
+ENV_FILE="$APP_DIR/.env"
+SUPERVISOR_CONFIG="$APP_DIR/deploy/supervisord.conf"
+SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl"
+SUPERVISORD="$APP_DIR/.venv/bin/supervisord"
+
+cd "$APP_DIR"
+test -f "$ENV_FILE" || { echo "Missing $ENV_FILE" >&2; exit 1; }
+grep -Eq '^DB_ENGINE=mysql$' "$ENV_FILE" || { echo "DB_ENGINE must be mysql" >&2; exit 1; }
+grep -Eq '^DB_PASSWORD=.+$' "$ENV_FILE" || { echo "DB_PASSWORD is empty" >&2; exit 1; }
+grep -Eq '^DJANGO_DEBUG=false$' "$ENV_FILE" || { echo "DJANGO_DEBUG must be false" >&2; exit 1; }
+
+mkdir -p "$HOME/logs" "$HOME/tmp"
+chmod 700 "$HOME/tmp"
+chmod 600 "$ENV_FILE"
+
+python3 -m venv .venv
+.venv/bin/pip install --upgrade pip
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python manage.py migrate --noinput
+.venv/bin/python manage.py collectstatic --noinput
+.venv/bin/python manage.py check --deploy
+
+if "$SUPERVISORCTL" -c "$SUPERVISOR_CONFIG" pid >/dev/null 2>&1; then
+  "$SUPERVISORCTL" -c "$SUPERVISOR_CONFIG" reread
+  "$SUPERVISORCTL" -c "$SUPERVISOR_CONFIG" update
+  "$SUPERVISORCTL" -c "$SUPERVISOR_CONFIG" restart all
+else
+  "$SUPERVISORD" -c "$SUPERVISOR_CONFIG"
+fi
+
+cron_line="@reboot $SUPERVISORD -c $SUPERVISOR_CONFIG"
+existing_cron="$(crontab -l 2>/dev/null || true)"
+if ! grep -Fqx "$cron_line" <<<"$existing_cron"; then
+  { printf '%s\n' "$existing_cron"; printf '%s\n' "$cron_line"; } | sed '/^[[:space:]]*$/d' | crontab -
+fi
+
+sleep 6
+"$SUPERVISORCTL" -c "$SUPERVISOR_CONFIG" status
+curl --fail --silent --show-error --head http://127.0.0.1:8091/login/ >/dev/null
+echo "Quest Tool is healthy on 127.0.0.1:8091"
