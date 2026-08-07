@@ -108,6 +108,45 @@ def get_request_client_data(request) -> dict:
     }
 
 
+def backfill_attempt_entry_audit(attempt: SurveyAttempt, request) -> SurveyAttempt:
+    """Populate missing entry audit fields from a later request for the same RID.
+
+    The first start-link request normally provides these values. This fallback
+    also repairs an attempt created by an older web process during a rolling
+    deployment, without replacing entry data that has already been recorded.
+    """
+    client_data = get_request_client_data(request)
+    request_ip = get_request_ip(request)
+    updates = {}
+
+    if not attempt.initiation_ip and request_ip:
+        updates["initiation_ip"] = request_ip
+
+    field_sources = {
+        "entry_user_agent": "user_agent",
+        "entry_browser": "browser",
+        "entry_device": "device",
+        "entry_os": "os",
+        "entry_referrer": "referrer",
+        "entry_accept_language": "accept_language",
+    }
+    has_client_signal = any(client_data.get(key) for key in (
+        "user_agent", "accept_language", "referrer", "sec_ch_ua", "sec_ch_ua_platform"
+    ))
+    if has_client_signal:
+        for model_field, data_key in field_sources.items():
+            if not getattr(attempt, model_field) and client_data.get(data_key):
+                updates[model_field] = client_data[data_key]
+        if not attempt.entry_client_data:
+            updates["entry_client_data"] = client_data
+
+    if updates:
+        SurveyAttempt.objects.filter(pk=attempt.pk).update(**updates)
+        for field, value in updates.items():
+            setattr(attempt, field, value)
+    return attempt
+
+
 def create_attempt(survey: Survey, platform_user, ip_address: str | None, client_data: dict | None = None) -> SurveyAttempt:
     client_data = client_data or {}
     for _ in range(10):

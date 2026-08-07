@@ -326,6 +326,45 @@ class SurveyFlowTests(TestCase):
         rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
         self.assertIsNone(SurveyAttempt.objects.get(rid=rid).initiation_ip)
 
+    @override_settings(TRUST_X_FORWARDED_FOR=True)
+    def test_rid_page_backfills_missing_entry_client_audit(self):
+        start = self.client.get(reverse("survey-start"), {
+            "surveyId": self.survey.source_id,
+            "supplierCode": "1150",
+            "userId": self.platform_user.pk,
+            "code": self.survey.local_id,
+        })
+        rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
+        SurveyAttempt.objects.filter(rid=rid).update(
+            initiation_ip=None,
+            entry_user_agent="",
+            entry_browser="",
+            entry_device="",
+            entry_os="",
+            entry_referrer="",
+            entry_accept_language="",
+            entry_client_data={},
+        )
+
+        response = self.client.get(
+            reverse("survey-start"),
+            {"rid": rid},
+            REMOTE_ADDR="127.0.0.1",
+            HTTP_X_FORWARDED_FOR="8.8.8.8, 127.0.0.1",
+            HTTP_USER_AGENT="Mozilla/5.0 (Windows NT 10.0) Chrome/126.0.0.0",
+            HTTP_ACCEPT_LANGUAGE="en-IN,en;q=0.9",
+        )
+
+        self.assertEqual(response.status_code, 200)
+        attempt = SurveyAttempt.objects.get(rid=rid)
+        self.assertEqual(attempt.initiation_ip, "8.8.8.8")
+        self.assertEqual(attempt.entry_browser, "Chrome 126.0.0.0")
+        self.assertEqual(attempt.entry_device, "Desktop")
+        self.assertEqual(attempt.entry_os, "Windows 10.0")
+        self.assertEqual(attempt.entry_accept_language, "en-IN,en;q=0.9")
+        self.assertTrue(attempt.entry_user_agent.startswith("Mozilla/5.0"))
+        self.assertEqual(attempt.entry_client_data["browser"], "Chrome 126.0.0.0")
+
     def test_invalid_start_values_never_create_attempt_or_show_questions(self):
         valid = {
             "surveyId": str(self.survey.source_id),

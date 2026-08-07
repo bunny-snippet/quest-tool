@@ -13,17 +13,29 @@ grep -Eq '^DB_ENGINE=mysql$' "$ENV_FILE" || { echo "DB_ENGINE must be mysql" >&2
 grep -Eq '^DB_PASSWORD=.+$' "$ENV_FILE" || { echo "DB_PASSWORD is empty" >&2; exit 1; }
 grep -Eq '^DJANGO_DEBUG=false$' "$ENV_FILE" || { echo "DJANGO_DEBUG must be false" >&2; exit 1; }
 
+# The installer may be invoked while this application's venv is active. Remove
+# it from PATH before the fallback deletes/recreates .venv, otherwise python3
+# would still resolve to the interpreter that has just been removed.
+if [[ -n "${VIRTUAL_ENV:-}" ]] && \
+  [[ "$(realpath -m "$VIRTUAL_ENV")" = "$(realpath -m "$APP_DIR/.venv")" ]]; then
+  PATH="${PATH#"$VIRTUAL_ENV/bin:"}"
+  export PATH
+  unset VIRTUAL_ENV
+  hash -r
+fi
+PYTHON_BIN="$(command -v python3)"
+
 mkdir -p "$HOME/logs" "$HOME/tmp"
 chmod 700 "$HOME/tmp"
 chmod 600 "$ENV_FILE"
 
-if ! python3 -m venv .venv; then
+if ! "$PYTHON_BIN" -m venv .venv; then
   venv_path="$(realpath -m "$APP_DIR/.venv")"
   test "$venv_path" = "$(realpath -m "$APP_DIR")/.venv" || { echo "Unsafe venv path" >&2; exit 1; }
   rm -rf -- "$venv_path"
   virtualenv_zipapp="$HOME/tmp/virtualenv.pyz"
   curl --fail --silent --show-error --location https://bootstrap.pypa.io/virtualenv.pyz --output "$virtualenv_zipapp"
-  python3 "$virtualenv_zipapp" .venv
+  "$PYTHON_BIN" "$virtualenv_zipapp" .venv
   rm -f -- "$virtualenv_zipapp"
 fi
 .venv/bin/pip install --upgrade pip

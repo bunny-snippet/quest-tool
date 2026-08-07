@@ -40,6 +40,7 @@ from .serializers import (
 )
 from .services import replace_survey_quotas, replace_survey_targeting, sync_surveys
 from .survey_flow import (
+    backfill_attempt_entry_audit,
     build_outbound_url,
     create_attempt,
     get_request_client_data,
@@ -285,6 +286,7 @@ def survey_start(request):
     attempt = SurveyAttempt.objects.select_related("survey", "platform_user").filter(rid=rid).first()
     if attempt is None or attempt.platform_user is None or not attempt.platform_user.is_active:
         return _invalid_survey_link(request, status_code=404)
+    attempt = backfill_attempt_entry_audit(attempt, request)
 
     if request.method == "POST":
         answers, errors = _collect_prescreener_answers(request, attempt.survey)
