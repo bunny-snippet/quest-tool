@@ -102,7 +102,7 @@ chmod +x deploy/rootless-install.sh
 ./deploy/rootless-install.sh
 ```
 
-The `.env` in the repository root must be mode `600`, use MySQL, have `DJANGO_DEBUG=false`, and contain a non-empty database password. Useful rootless checks:
+The `.env` in the repository root must be mode `600`, use MySQL, have `DJANGO_DEBUG=false`, and contain a non-empty database password. The installer also publishes collected files to `$HOME/htdocs/api.exchange-ip.com/static`, which is the Hostinger Nginx static root for this site. Override `PUBLIC_STATIC_DIR` when deploying under another domain. Useful rootless checks:
 
 ```bash
 .venv/bin/supervisorctl -c deploy/supervisord.conf status

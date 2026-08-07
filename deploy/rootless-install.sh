@@ -32,6 +32,13 @@ fi
 .venv/bin/python manage.py collectstatic --noinput
 .venv/bin/python manage.py check --deploy
 
+public_static_dir="${PUBLIC_STATIC_DIR:-$HOME/htdocs/api.exchange-ip.com/static}"
+if test -d "$(dirname "$public_static_dir")"; then
+  mkdir -p "$public_static_dir"
+  cp -a staticfiles/. "$public_static_dir/"
+  chmod -R u=rwX,g=rX,o= "$public_static_dir"
+fi
+
 if "$SUPERVISORCTL" -c "$SUPERVISOR_CONFIG" pid >/dev/null 2>&1; then
   "$SUPERVISORCTL" -c "$SUPERVISOR_CONFIG" reread
   "$SUPERVISORCTL" -c "$SUPERVISOR_CONFIG" update
