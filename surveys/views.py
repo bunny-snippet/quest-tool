@@ -2,6 +2,7 @@ import csv
 import json
 from urllib.parse import quote
 
+from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.http import HttpResponseRedirect, StreamingHttpResponse
@@ -48,7 +49,6 @@ from .survey_flow import (
     get_request_client_data,
     get_request_ip,
     status_rid_from_request,
-    supplier_code_from_entry_link,
 )
 from .tasks import sync_innovatemr_surveys_task
 from .user_hits import aggregate_user_hits, user_hit_filter_options
@@ -248,7 +248,7 @@ def survey_start(request):
             or not user_id.isdigit()
             or not internal_code.isdigit()
             or len(internal_code) != 14
-            or not supplier_code
+            or supplier_code != settings.PUBLIC_SUPPLIER_CODE
         ):
             return _invalid_survey_link(request)
 
@@ -263,11 +263,7 @@ def survey_start(request):
         survey = Survey.objects.filter(
             source_id=int(survey_id), local_id=internal_code, status=Survey.Status.LIVE
         ).first()
-        if (
-            survey is None
-            or not survey.entry_link
-            or supplier_code_from_entry_link(survey.entry_link) != supplier_code
-        ):
+        if survey is None or not survey.entry_link:
             return _invalid_survey_link(request)
 
         stale = survey.targeting_synced_at is None or (
@@ -620,6 +616,8 @@ class UserHitsAPIView(APIView):
             OpenApiParameter("sub_branch", OpenApiTypes.STR, description="Comma-separated sub-branch/department labels."),
             OpenApiParameter("from_date", OpenApiTypes.DATE, description="Inclusive IST entry date."),
             OpenApiParameter("to_date", OpenApiTypes.DATE, description="Inclusive IST entry date."),
+            OpenApiParameter("from_time", OpenApiTypes.TIME, description="Optional inclusive IST start time; requires from_date."),
+            OpenApiParameter("to_time", OpenApiTypes.TIME, description="Optional inclusive IST end time; requires to_date."),
             OpenApiParameter("page", OpenApiTypes.INT, description="1-based aggregate result page."),
             OpenApiParameter("page_size", OpenApiTypes.INT, description="Rows per page, 1–100."),
         ],

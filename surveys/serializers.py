@@ -1,12 +1,12 @@
 from urllib.parse import urlencode
 
+from django.conf import settings
 from django.urls import reverse
 from rest_framework import serializers
 
 from accounts.access import has_function_access
 
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
-from .survey_flow import supplier_code_from_entry_link
 
 
 class SurveyQuotaSerializer(serializers.ModelSerializer):
@@ -60,7 +60,7 @@ class SurveyListSerializer(serializers.ModelSerializer):
             return None
         query = urlencode({
             "surveyId": obj.source_id,
-            "supplierCode": supplier_code_from_entry_link(obj.entry_link),
+            "supplierCode": settings.PUBLIC_SUPPLIER_CODE,
             "userId": request.user.pk,
             "code": obj.local_id,
         })

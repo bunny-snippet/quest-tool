@@ -26,11 +26,13 @@ Branch uses `EmployeeProfile.company_name`. When a subordinate profile has no co
 | `branch` | Comma-separated exact branch labels |
 | `sub_branch` | Comma-separated exact sub-branch labels |
 | `from_date` | Inclusive IST date in `YYYY-MM-DD` |
+| `from_time` | Optional inclusive IST time; requires `from_date` |
 | `to_date` | Inclusive IST date in `YYYY-MM-DD` |
+| `to_time` | Optional inclusive IST time; requires `to_date` |
 | `page` | 1-based result page |
 | `page_size` | 1–100 aggregated rows |
 
-The response contains paginated user-day rows plus a `summary` calculated across the complete filtered result, not only the current page.
+Blank start/end times retain the full-day boundary for backward compatibility. The response contains paginated user-day rows plus a `summary` calculated across the complete filtered result, not only the current page.
 
 ## Access control
 

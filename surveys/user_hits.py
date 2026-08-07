@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime, time, timedelta
+from datetime import datetime, time
 
 from django.contrib.auth import get_user_model
 from django.utils import timezone
-from django.utils.dateparse import parse_date
+from django.utils.dateparse import parse_date, parse_time
 
 from accounts.access import subordinate_user_ids
 from accounts.models import EmployeeProfile
@@ -121,23 +121,42 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
 
     from_date = parse_date(params.get("from_date", "")) if params.get("from_date") else None
     to_date = parse_date(params.get("to_date", "")) if params.get("to_date") else None
+    from_clock = parse_time(params.get("from_time", "")) if params.get("from_time") else None
+    to_clock = parse_time(params.get("to_time", "")) if params.get("to_time") else None
     if params.get("from_date") and from_date is None:
         raise ValueError("from_date must use YYYY-MM-DD format.")
     if params.get("to_date") and to_date is None:
         raise ValueError("to_date must use YYYY-MM-DD format.")
+    if params.get("from_time") and from_clock is None:
+        raise ValueError("from_time must use HH:MM or HH:MM:SS format.")
+    if params.get("to_time") and to_clock is None:
+        raise ValueError("to_time must use HH:MM or HH:MM:SS format.")
+    if from_clock and not from_date:
+        raise ValueError("from_time requires from_date.")
+    if to_clock and not to_date:
+        raise ValueError("to_time requires to_date.")
     if from_date and to_date and from_date > to_date:
         raise ValueError("from_date cannot be after to_date.")
+
+    current_timezone = timezone.get_current_timezone()
+    lower = (
+        timezone.make_aware(datetime.combine(from_date, from_clock or time.min), current_timezone)
+        if from_date else None
+    )
+    upper = (
+        timezone.make_aware(datetime.combine(to_date, to_clock or time.max), current_timezone)
+        if to_date else None
+    )
+    if lower and upper and lower > upper:
+        raise ValueError("from date/time cannot be after to date/time.")
 
     attempts = SurveyAttempt.objects.filter(platform_user_id__in=visible_ids).only(
         "id", "platform_user_id", "status", "entry_device", "initiated_at"
     )
-    current_timezone = timezone.get_current_timezone()
-    if from_date:
-        lower = timezone.make_aware(datetime.combine(from_date, time.min), current_timezone)
+    if lower:
         attempts = attempts.filter(initiated_at__gte=lower)
-    if to_date:
-        upper = timezone.make_aware(datetime.combine(to_date + timedelta(days=1), time.min), current_timezone)
-        attempts = attempts.filter(initiated_at__lt=upper)
+    if upper:
+        attempts = attempts.filter(initiated_at__lte=upper)
 
     search = params.get("search", "").strip()
 

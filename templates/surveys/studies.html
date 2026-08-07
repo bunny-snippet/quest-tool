@@ -37,13 +37,19 @@
     <label for="studyDateField">Date column</label>
     <select id="studyDateField"><option value="initiated">Entry date</option><option value="callback">Exit date</option></select>
   </div>
-  <div class="field">
-    <label for="studyFromDate">From date</label>
-    <input id="studyFromDate" type="date">
+  <div class="field datetime-field">
+    <label for="studyFromDate">From date &amp; time</label>
+    <div class="datetime-control">
+      <input id="studyFromDate" type="date">
+      <input id="studyFromTime" type="time" step="60" aria-label="From time in IST">
+    </div>
   </div>
-  <div class="field">
-    <label for="studyToDate">To date</label>
-    <input id="studyToDate" type="date">
+  <div class="field datetime-field">
+    <label for="studyToDate">To date &amp; time</label>
+    <div class="datetime-control">
+      <input id="studyToDate" type="date">
+      <input id="studyToTime" type="time" step="60" aria-label="To time in IST">
+    </div>
   </div>
   <button class="clear-button" id="clearStudyFilters" type="button">Clear filters</button>
 </section>
@@ -73,4 +79,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=3" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=4" defer></script>{% endblock %}

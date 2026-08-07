@@ -1238,6 +1238,12 @@ paths:
           format: date
         description: Inclusive IST entry date.
       - in: query
+        name: from_time
+        schema:
+          type: string
+          format: time
+        description: Optional inclusive IST start time; requires from_date.
+      - in: query
         name: page
         schema:
           type: integer
@@ -1263,6 +1269,12 @@ paths:
           type: string
           format: date
         description: Inclusive IST entry date.
+      - in: query
+        name: to_time
+        schema:
+          type: string
+          format: time
+        description: Optional inclusive IST end time; requires to_date.
       - in: query
         name: user
         schema:

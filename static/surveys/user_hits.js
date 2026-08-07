@@ -1,7 +1,8 @@
 (() => {
   const byId = (id) => document.getElementById(id);
   const elements = {
-    search: byId('hitSearch'), from: byId('hitFromDate'), to: byId('hitToDate'), clear: byId('clearHitFilters'),
+    search: byId('hitSearch'), from: byId('hitFromDate'), fromTime: byId('hitFromTime'),
+    to: byId('hitToDate'), toTime: byId('hitToTime'), clear: byId('clearHitFilters'),
     pageSize: byId('hitPageSize'), rows: byId('hitRows'), cards: byId('hitCards'), summary: byId('hitSummary'),
     pageStatus: byId('hitPageStatus'), pageInput: byId('hitPageInput'), totalPages: byId('hitTotalPages'),
     first: byId('hitFirstPage'), prev: byId('hitPrevPage'), next: byId('hitNextPage'), last: byId('hitLastPage'),
@@ -68,8 +69,14 @@
       const values = selectedValues(container);
       if (values.length) params.set(container.dataset.hitFilter, values.join(','));
     });
-    if (elements.from.value) params.set('from_date', elements.from.value);
-    if (elements.to.value) params.set('to_date', elements.to.value);
+    if (elements.from.value) {
+      params.set('from_date', elements.from.value);
+      if (elements.fromTime.value) params.set('from_time', elements.fromTime.value);
+    }
+    if (elements.to.value) {
+      params.set('to_date', elements.to.value);
+      if (elements.toTime.value) params.set('to_time', elements.toTime.value);
+    }
     return params;
   }
 
@@ -167,10 +174,11 @@
   }
 
   elements.search.addEventListener('input', scheduleLoad);
-  [elements.from, elements.to].forEach((input) => input.addEventListener('change', scheduleLoad));
+  [elements.from, elements.fromTime, elements.to, elements.toTime].forEach((input) => input.addEventListener('change', scheduleLoad));
   elements.pageSize.addEventListener('change', () => { state.pageSize = Number(elements.pageSize.value); state.page = 1; loadHits(); });
   elements.clear.addEventListener('click', () => {
-    elements.search.value = ''; elements.from.value = ''; elements.to.value = '';
+    elements.search.value = ''; elements.from.value = ''; elements.fromTime.value = '';
+    elements.to.value = ''; elements.toTime.value = '';
     document.querySelectorAll('.user-hits-filters .multi-select').forEach((container) => {
       container.querySelectorAll('input').forEach((input) => { input.checked = false; });
       updateMultiLabel(container);

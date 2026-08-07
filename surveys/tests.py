@@ -170,7 +170,7 @@ class SurveyAPITests(TestCase):
         self.assertIn("source_modified_display", response.data["results"][0])
         self.assertEqual(
             response.data["results"][0]["start_link"],
-            f"http://testserver/survey/start?surveyId=9876&supplierCode=1150&userId={self.user.pk}&code={self.survey.local_id}",
+            f"http://testserver/survey/start?surveyId=9876&supplierCode=1000&userId={self.user.pk}&code={self.survey.local_id}",
         )
 
     def test_multi_value_filters_use_or_within_each_filter(self):
@@ -213,6 +213,8 @@ class SurveyAPITests(TestCase):
         projects = self.client.get(reverse("projects"))
         self.assertContains(projects, "Survey inventory")
         self.assertContains(projects, "Pre-screening questions")
+        self.assertContains(projects, 'id="fromTime"')
+        self.assertContains(projects, 'id="toTime"')
         self.assertNotContains(projects, "Quest")
         self.assertContains(self.client.get(reverse("dashboard")), "dashboard is ready")
 
@@ -248,7 +250,7 @@ class SurveyFlowTests(TestCase):
     def test_full_prescreener_redirect_and_status_lifecycle(self):
         start = self.client.get(reverse("survey-start"), {
             "surveyId": self.survey.source_id,
-            "supplierCode": "1150",
+            "supplierCode": "1000",
             "userId": "294",
             "code": self.survey.local_id,
         }, REMOTE_ADDR="10.10.10.10", HTTP_USER_AGENT="Mozilla/5.0 (Windows NT 10.0) Chrome/126.0.0.0")
@@ -272,6 +274,7 @@ class SurveyFlowTests(TestCase):
         self.assertEqual(params["PID"], [rid])
         self.assertEqual(params["trackId"], [rid])
         self.assertEqual(params["GENDER"], ["2"])
+        self.assertEqual(params["supCode"], ["1150"])
 
         callback = self.client.get(
             reverse("survey-status"), {"status": "1", "rid": rid}, REMOTE_ADDR="20.20.20.20",
@@ -301,7 +304,7 @@ class SurveyFlowTests(TestCase):
     def test_trusted_proxy_records_public_entry_and_exit_ips(self):
         start = self.client.get(reverse("survey-start"), {
             "surveyId": self.survey.source_id,
-            "supplierCode": "1150",
+            "supplierCode": "1000",
             "userId": self.platform_user.pk,
             "code": self.survey.local_id,
         }, REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="8.8.8.8, 127.0.0.1")
@@ -319,7 +322,7 @@ class SurveyFlowTests(TestCase):
     def test_direct_localhost_is_not_saved_as_respondent_network_ip(self):
         start = self.client.get(reverse("survey-start"), {
             "surveyId": self.survey.source_id,
-            "supplierCode": "1150",
+            "supplierCode": "1000",
             "userId": self.platform_user.pk,
             "code": self.survey.local_id,
         }, REMOTE_ADDR="127.0.0.1")
@@ -330,7 +333,7 @@ class SurveyFlowTests(TestCase):
     def test_rid_page_backfills_missing_entry_client_audit(self):
         start = self.client.get(reverse("survey-start"), {
             "surveyId": self.survey.source_id,
-            "supplierCode": "1150",
+            "supplierCode": "1000",
             "userId": self.platform_user.pk,
             "code": self.survey.local_id,
         })
@@ -368,7 +371,7 @@ class SurveyFlowTests(TestCase):
     def test_invalid_start_values_never_create_attempt_or_show_questions(self):
         valid = {
             "surveyId": str(self.survey.source_id),
-            "supplierCode": "1150",
+            "supplierCode": "1000",
             "userId": str(self.platform_user.pk),
             "code": self.survey.local_id,
         }
@@ -391,7 +394,7 @@ class SurveyFlowTests(TestCase):
     def test_canonical_rid_rejects_extra_params_and_inactive_user(self):
         start = self.client.get(reverse("survey-start"), {
             "surveyId": self.survey.source_id,
-            "supplierCode": "1150",
+            "supplierCode": "1000",
             "userId": self.platform_user.pk,
             "code": self.survey.local_id,
         })
@@ -448,6 +451,8 @@ class StudiesTrackingTests(TestCase):
         self.client.force_login(self.owner)
         page = self.client.get(reverse("studies"))
         self.assertContains(page, "Respondent activity")
+        self.assertContains(page, 'id="studyFromTime"')
+        self.assertContains(page, 'id="studyToTime"')
         self.assertContains(page, "Export full CSV")
         self.assertContains(page, "Kanik Sharma")
 
@@ -594,6 +599,8 @@ class UserHitsTests(TestCase):
         self.assertContains(page, "User activity")
         self.assertContains(page, "Gurgaon")
         self.assertContains(page, "Operations")
+        self.assertContains(page, 'id="hitFromTime"')
+        self.assertContains(page, 'id="hitToTime"')
 
         response = self.api.get(reverse("user-hits-api"), {
             "user": self.kanik.pk,
@@ -612,6 +619,20 @@ class UserHitsTests(TestCase):
             "total": 1, "desktop": 1, "mobile": 0, "tablet": 0, "unclassified": 0,
         })
         self.assertEqual(response.data["summary"]["conversion_rate"], 50.0)
+
+    def test_time_filters_narrow_ist_date_boundaries(self):
+        response = self.api.get(reverse("user-hits-api"), {
+            "from_date": self.today.isoformat(),
+            "from_time": "10:01",
+            "to_date": self.today.isoformat(),
+            "to_time": "23:59",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 0)
+
+        invalid = self.api.get(reverse("user-hits-api"), {"from_time": "10:00"})
+        self.assertEqual(invalid.status_code, 400)
+        self.assertEqual(invalid.data["detail"], "from_time requires from_date.")
 
     def test_branch_filter_and_all_date_rows(self):
         response = self.api.get(reverse("user-hits-api"), {"branch": "Gurgaon"})

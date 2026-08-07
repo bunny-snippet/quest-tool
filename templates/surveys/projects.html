@@ -39,13 +39,19 @@
     <label for="dateField">Date column</label>
     <select id="dateField"><option value="modified">Last modified</option><option value="created">Created</option></select>
   </div>
-  <div class="field">
-    <label for="fromDate">From date</label>
-    <input id="fromDate" type="date">
+  <div class="field datetime-field">
+    <label for="fromDate">From date &amp; time</label>
+    <div class="datetime-control">
+      <input id="fromDate" type="date">
+      <input id="fromTime" type="time" step="60" aria-label="From time in IST">
+    </div>
   </div>
-  <div class="field">
-    <label for="toDate">To date</label>
-    <input id="toDate" type="date">
+  <div class="field datetime-field">
+    <label for="toDate">To date &amp; time</label>
+    <div class="datetime-control">
+      <input id="toDate" type="date">
+      <input id="toTime" type="time" step="60" aria-label="To time in IST">
+    </div>
   </div>
   <button class="clear-button" id="clearFilters" type="button">Clear filters</button>
 </section>
@@ -99,4 +105,4 @@
   <div class="drawer-content" id="drawerContent"></div>
 </aside>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=7" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=8" defer></script>{% endblock %}

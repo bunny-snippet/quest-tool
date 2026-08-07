@@ -2,13 +2,13 @@
 
 ## Entry contract
 
-`GET /survey/start?surveyId={source_id}&supplierCode={supplier_code}&userId={user_id}&code={local_id}`
+`GET /survey/start?surveyId={source_id}&supplierCode=1000&userId={user_id}&code={local_id}`
 
 All four values are required and the copied link is generated with the authenticated employee's real database user ID. Before rendering any questions, the server rejects duplicated/extra parameters and verifies that:
 
 - the user exists, is active, and still has Projects and Copy Link access;
 - `surveyId` and the 14-digit `code` resolve to the same live local survey;
-- `supplierCode` matches the supplier code in that survey's stored allocated entry link; and
+- `supplierCode` matches the platform-facing `PUBLIC_SUPPLIER_CODE` setting (`1000` by default); and
 - the survey has a non-empty allocated entry link.
 
 An invalid or inconsistent user, code, survey, supplier, or additional query parameter returns the generic Invalid survey link page and creates no attempt.
@@ -28,7 +28,7 @@ Answers are persisted but are not used as an authoritative local rejection. Inno
 
 ## Supplier redirect
 
-The exact stored `entryLink` is parsed. Its PID is replaced with RID, `trackId=RID` is added, and captured `QuestionKey=OptionId` pairs are appended. `survNum` and `supCode` are preserved from the allocated link; they are never reconstructed from client parameters.
+The public copied link always uses the platform-facing supplier code, so an upstream/vendor supplier code is not exposed there. The exact stored `entryLink` is parsed only after validation. Its PID is replaced with RID, `trackId=RID` is added, and captured `QuestionKey=OptionId` pairs are appended. `survNum` and the real upstream `supCode` are preserved from the allocated link; they are never reconstructed from client parameters. This keeps InnovateMR routing intact while allowing the same public code to be used for future providers.
 
 InnovateMR owns the browser redirect after the respondent leaves this application. Configure the account-level or survey-level return URLs in InnovateMR to point to the public deployment, using `%%trackId%%` as the RID, for example:
 
@@ -59,4 +59,4 @@ The landing page accepts RID aliases `PID`, `pid`, `QSID`, `qsid`, and `trackId`
 
 Browser redirects can be forged. Every callback starts as `is_verified=false`. Add InnovateMR server-to-server notification or redirect-hash validation before using a completion for rewards, invoices or financial reporting. The staff-only `/studies/` page, `/api/v1/survey-attempts/` endpoint and Django Admin expose the audit trail.
 
-The Studies page applies user, status, text and entry/exit-date filters server-side. `/api/v1/survey-attempts/export/` applies the identical filter contract but exports the complete related audit dataset rather than only the compact UI columns. Viewing requires `attempts.view`; downloading requires the independently assignable `attempts.export` function permission.
+The Studies page applies user, status, text and entry/exit date-time filters server-side. `/api/v1/survey-attempts/export/` applies the identical filter contract but exports the complete related audit dataset rather than only the compact UI columns. Viewing requires `attempts.view`; downloading requires the independently assignable `attempts.export` function permission.

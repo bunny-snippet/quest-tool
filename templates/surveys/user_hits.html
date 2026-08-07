@@ -44,8 +44,14 @@
       <div class="multi-menu" hidden>{% for tracked_user in users %}<label><input type="checkbox" value="{{ tracked_user.user_id }}"><span>{{ tracked_user.user_name }}</span></label>{% empty %}<span class="filter-empty">No tracked users yet</span>{% endfor %}</div>
     </div>
   </div>
-  <div class="field"><label for="hitFromDate">Start date</label><input id="hitFromDate" type="date"></div>
-  <div class="field"><label for="hitToDate">End date</label><input id="hitToDate" type="date"></div>
+  <div class="field datetime-field">
+    <label for="hitFromDate">Start date &amp; time</label>
+    <div class="datetime-control"><input id="hitFromDate" type="date"><input id="hitFromTime" type="time" step="60" aria-label="Start time in IST"></div>
+  </div>
+  <div class="field datetime-field">
+    <label for="hitToDate">End date &amp; time</label>
+    <div class="datetime-control"><input id="hitToDate" type="date"><input id="hitToTime" type="time" step="60" aria-label="End time in IST"></div>
+  </div>
   <button class="clear-button" id="clearHitFilters" type="button">Clear filters</button>
 </section>
 
@@ -72,4 +78,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/user_hits.js' %}?v=1" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/user_hits.js' %}?v=2" defer></script>{% endblock %}

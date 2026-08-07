@@ -3,7 +3,8 @@
   const elements = {
     search: byId('studySearch'), userFilters: document.querySelector('[data-multi-filter="user"]'),
     statusFilters: document.querySelector('[data-multi-filter="status"]'), dateField: byId('studyDateField'),
-    from: byId('studyFromDate'), to: byId('studyToDate'), clear: byId('clearStudyFilters'),
+    from: byId('studyFromDate'), fromTime: byId('studyFromTime'),
+    to: byId('studyToDate'), toTime: byId('studyToTime'), clear: byId('clearStudyFilters'),
     export: byId('exportStudies'), pageSize: byId('studyPageSize'), rows: byId('studyRows'),
     cards: byId('studyCards'), summary: byId('studySummary'), pageStatus: byId('studyPageStatus'),
     pageInput: byId('studyPageInput'), totalPages: byId('studyTotalPages'), first: byId('studyFirstPage'),
@@ -55,9 +56,11 @@
     menu.addEventListener('change', () => { updateMultiLabel(container); scheduleLoad(); });
   });
 
-  function dateBoundary(value, endOfDay = false) {
-    if (!value) return '';
-    return `${value}T${endOfDay ? '23:59:59.999' : '00:00:00'}+05:30`;
+  function dateBoundary(date, selectedTime, endOfMinute = false) {
+    if (!date) return '';
+    const clock = selectedTime || (endOfMinute ? '23:59' : '00:00');
+    const seconds = endOfMinute ? '59.999' : '00';
+    return `${date}T${clock}:${seconds}+05:30`;
   }
 
   function filterParams(includePage = true) {
@@ -68,8 +71,8 @@
     if (search) params.set('search', search);
     if (users.length) params.set('user', users.join(','));
     if (statuses.length) params.set('status', statuses.join(','));
-    if (elements.from.value) params.set(`${elements.dateField.value}_from`, dateBoundary(elements.from.value));
-    if (elements.to.value) params.set(`${elements.dateField.value}_to`, dateBoundary(elements.to.value, true));
+    if (elements.from.value) params.set(`${elements.dateField.value}_from`, dateBoundary(elements.from.value, elements.fromTime.value));
+    if (elements.to.value) params.set(`${elements.dateField.value}_to`, dateBoundary(elements.to.value, elements.toTime.value, true));
     params.set('ordering', '-initiated_at');
     if (includePage) {
       params.set('page', state.page);
@@ -174,11 +177,12 @@
   }
 
   elements.search.addEventListener('input', scheduleLoad);
-  [elements.from, elements.to].forEach((input) => input.addEventListener('input', scheduleLoad));
+  [elements.from, elements.fromTime, elements.to, elements.toTime].forEach((input) => input.addEventListener('input', scheduleLoad));
   elements.dateField.addEventListener('change', scheduleLoad);
   elements.pageSize.addEventListener('change', () => { state.pageSize = Number(elements.pageSize.value); state.page = 1; loadAttempts(); });
   elements.clear.addEventListener('click', () => {
-    elements.search.value = ''; elements.dateField.value = 'initiated'; elements.from.value = ''; elements.to.value = '';
+    elements.search.value = ''; elements.dateField.value = 'initiated';
+    elements.from.value = ''; elements.fromTime.value = ''; elements.to.value = ''; elements.toTime.value = '';
     document.querySelectorAll('.studies-filters .multi-select').forEach((container) => {
       container.querySelectorAll('input').forEach((input) => { input.checked = false; });
       updateMultiLabel(container);

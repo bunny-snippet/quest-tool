@@ -22,7 +22,8 @@
     rows: $('surveyRows'), cards: $('mobileCards'), summary: $('resultSummary'), pageStatus: $('pageStatus'),
     totalPages: $('totalPages'), pageInput: $('pageInput'), first: $('firstPage'), prev: $('prevPage'),
     next: $('nextPage'), last: $('lastPage'), search: $('searchInput'), dateField: $('dateField'),
-    from: $('fromDate'), to: $('toDate'), pageSize: $('pageSize'), clear: $('clearFilters'), sync: $('syncButton'),
+    from: $('fromDate'), fromTime: $('fromTime'), to: $('toDate'), toTime: $('toTime'),
+    pageSize: $('pageSize'), clear: $('clearFilters'), sync: $('syncButton'),
     drawer: $('detailDrawer'), backdrop: $('drawerBackdrop'), closeDrawer: $('closeDrawer'),
     drawerSurvey: $('drawerSurvey'), drawerContent: $('drawerContent'), tabs: [...document.querySelectorAll('.drawer-tab')],
     multiSelects: [...document.querySelectorAll('[data-multi-filter]')],
@@ -101,9 +102,15 @@
       if (values.length) params.set(filter.dataset.multiFilter, values.join(','));
     });
     const prefix = els.dateField.value;
-    if (els.from.value) params.set(`${prefix}_from`, `${els.from.value}T00:00:00+05:30`);
-    if (els.to.value) params.set(`${prefix}_to`, `${els.to.value}T23:59:59+05:30`);
+    if (els.from.value) params.set(`${prefix}_from`, dateBoundary(els.from.value, els.fromTime.value));
+    if (els.to.value) params.set(`${prefix}_to`, dateBoundary(els.to.value, els.toTime.value, true));
     return params.toString();
+  }
+
+  function dateBoundary(date, selectedTime, endOfMinute = false) {
+    const clock = selectedTime || (endOfMinute ? '23:59' : '00:00');
+    const seconds = endOfMinute ? '59.999' : '00';
+    return `${date}T${clock}:${seconds}+05:30`;
   }
 
   async function loadSurveys() {
@@ -178,11 +185,12 @@
     state.timer = setTimeout(() => { state.page = 1; loadSurveys(); }, 280);
   }
 
-  [els.search, els.from, els.to].forEach((element) => element.addEventListener('input', scheduleLoad));
+  [els.search, els.from, els.fromTime, els.to, els.toTime].forEach((element) => element.addEventListener('input', scheduleLoad));
   els.dateField.addEventListener('change', () => { state.page = 1; loadSurveys(); });
   els.pageSize.addEventListener('change', () => { state.pageSize = Number(els.pageSize.value); state.page = 1; loadSurveys(); });
   els.clear.addEventListener('click', () => {
-    els.search.value = ''; els.dateField.value = 'modified'; els.from.value = ''; els.to.value = '';
+    els.search.value = ''; els.dateField.value = 'modified';
+    els.from.value = ''; els.fromTime.value = ''; els.to.value = ''; els.toTime.value = '';
     els.multiSelects.forEach((filter) => { filter.querySelectorAll('input').forEach((input) => { input.checked = false; }); updateMultiLabel(filter); });
     closeMultiSelects(); state.page = 1; loadSurveys();
   });
