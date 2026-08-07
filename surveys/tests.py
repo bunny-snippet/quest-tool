@@ -1,4 +1,4 @@
-from datetime import timedelta
+from datetime import datetime, time, timedelta
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from accounts.models import AccessFunction, UserFunctionOverride
+from accounts.models import AccessFunction, EmployeeProfile, UserFunctionOverride
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
@@ -542,3 +542,107 @@ class StudiesTrackingTests(TestCase):
             reconcile_attempt_status(client, attempt)
             attempt.refresh_from_db()
             self.assertEqual(attempt.status, expected)
+
+
+class UserHitsTests(TestCase):
+    def setUp(self):
+        self.owner = get_user_model().objects.create_superuser(
+            username="hits-owner", email="hits-owner@example.test", password="test-password"
+        )
+        self.kanik = get_user_model().objects.create_user(
+            username="kanik-hits", first_name="Kanik", last_name="Gupta", email="kanik-hits@example.test"
+        )
+        self.other = get_user_model().objects.create_user(
+            username="other-hits", first_name="Other", last_name="User", email="other-hits@example.test"
+        )
+        EmployeeProfile.objects.filter(user=self.kanik).update(
+            company_name="Gurgaon", department="Operations", created_by=self.owner
+        )
+        EmployeeProfile.objects.filter(user=self.other).update(
+            company_name="Mumbai", department="Research", created_by=self.owner
+        )
+        self.survey = Survey.objects.create(source_id=909090, name="User hit metrics")
+        today = timezone.localdate()
+        yesterday = today - timedelta(days=1)
+        self.today = today
+        today_at_ten = timezone.make_aware(datetime.combine(today, time(10, 0)))
+        yesterday_at_ten = timezone.make_aware(datetime.combine(yesterday, time(10, 0)))
+
+        SurveyAttempt.objects.create(
+            rid="Dh1Aa2Bb3C", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.COMPLETED, entry_device="Desktop", initiated_at=today_at_ten,
+        )
+        SurveyAttempt.objects.create(
+            rid="Mh2Cc3Dd4E", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.TERMINATED, entry_device="Mobile", initiated_at=today_at_ten,
+        )
+        SurveyAttempt.objects.create(
+            rid="Th3Ee4Ff5G", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.COMPLETED, entry_device="Tablet", initiated_at=yesterday_at_ten,
+        )
+        SurveyAttempt.objects.create(
+            rid="Dh4Gg5Hh6I", survey=self.survey, platform_user=self.other, user_id=str(self.other.pk),
+            status=SurveyAttempt.Status.COMPLETED, entry_device="Desktop", initiated_at=today_at_ten,
+        )
+        self.api = APIClient()
+        self.api.force_authenticate(self.owner)
+
+    def test_page_and_api_aggregate_user_day_device_counts(self):
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("user-hits"))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "User activity")
+        self.assertContains(page, "Gurgaon")
+        self.assertContains(page, "Operations")
+
+        response = self.api.get(reverse("user-hits-api"), {
+            "user": self.kanik.pk,
+            "from_date": self.today.isoformat(),
+            "to_date": self.today.isoformat(),
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        result = response.data["results"][0]
+        self.assertEqual(result["branch"], "Gurgaon")
+        self.assertEqual(result["sub_branch"], "Operations")
+        self.assertEqual(result["hits"], {
+            "total": 2, "desktop": 1, "mobile": 1, "tablet": 0, "unclassified": 0,
+        })
+        self.assertEqual(result["completes"], {
+            "total": 1, "desktop": 1, "mobile": 0, "tablet": 0, "unclassified": 0,
+        })
+        self.assertEqual(response.data["summary"]["conversion_rate"], 50.0)
+
+    def test_branch_filter_and_all_date_rows(self):
+        response = self.api.get(reverse("user-hits-api"), {"branch": "Gurgaon"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 2)
+        self.assertTrue(all(row["user_id"] == self.kanik.pk for row in response.data["results"]))
+        self.assertEqual(response.data["summary"]["hits"]["tablet"], 1)
+
+    def test_permission_and_visibility_are_scoped_to_user_hierarchy(self):
+        viewer = get_user_model().objects.create_user(
+            username="hits-viewer", first_name="Scoped", email="hits-viewer@example.test"
+        )
+        UserFunctionOverride.objects.create(
+            user=viewer,
+            function=AccessFunction.objects.get(code="user_hits.view"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        SurveyAttempt.objects.create(
+            rid="Vh5Ii6Jj7K", survey=self.survey, platform_user=viewer, user_id=str(viewer.pk),
+            status=SurveyAttempt.Status.INITIATED, entry_device="Mobile",
+        )
+        scoped_api = APIClient()
+        scoped_api.force_authenticate(viewer)
+        response = scoped_api.get(reverse("user-hits-api"))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["user_id"], viewer.pk)
+
+        no_access = get_user_model().objects.create_user(username="hits-no-access")
+        denied_api = APIClient()
+        denied_api.force_authenticate(no_access)
+        self.assertEqual(denied_api.get(reverse("user-hits-api")).status_code, 403)
+        self.client.force_login(no_access)
+        self.assertEqual(self.client.get(reverse("user-hits")).status_code, 403)

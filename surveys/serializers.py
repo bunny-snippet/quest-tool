@@ -102,6 +102,42 @@ class SyncTriggerResponseSerializer(serializers.Serializer):
     detail_failures = serializers.IntegerField()
 
 
+class UserHitDeviceCountsSerializer(serializers.Serializer):
+    total = serializers.IntegerField(min_value=0)
+    desktop = serializers.IntegerField(min_value=0)
+    mobile = serializers.IntegerField(min_value=0)
+    tablet = serializers.IntegerField(min_value=0)
+    unclassified = serializers.IntegerField(min_value=0)
+
+
+class UserHitRowSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    user_name = serializers.CharField()
+    username = serializers.CharField()
+    user_email = serializers.EmailField(allow_blank=True)
+    branch = serializers.CharField()
+    sub_branch = serializers.CharField()
+    date = serializers.DateField()
+    hits = UserHitDeviceCountsSerializer()
+    completes = UserHitDeviceCountsSerializer()
+
+
+class UserHitSummarySerializer(serializers.Serializer):
+    hits = UserHitDeviceCountsSerializer()
+    completes = UserHitDeviceCountsSerializer()
+    active_users = serializers.IntegerField(min_value=0)
+    days = serializers.IntegerField(min_value=0)
+    conversion_rate = serializers.FloatField(min_value=0)
+
+
+class UserHitsResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField(min_value=0)
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = UserHitRowSerializer(many=True)
+    summary = UserHitSummarySerializer()
+
+
 class SurveyAttemptSerializer(serializers.ModelSerializer):
     survey_local_id = serializers.CharField(source="survey.local_id", read_only=True)
     survey_source_id = serializers.IntegerField(source="survey.source_id", read_only=True)

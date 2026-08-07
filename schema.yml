@@ -1218,6 +1218,68 @@ paths:
               schema:
                 $ref: '#/components/schemas/SyncRun'
           description: ''
+  /api/v1/user-hits/:
+    get:
+      operationId: api_v1_user_hits_retrieve
+      description: Returns one row per visible user and IST calendar date. Hits count
+        initiated survey attempts; completes count status 1 within those attempts.
+        Device splits use entry-device audit data.
+      summary: Aggregate user survey hits and completes by IST date and device
+      parameters:
+      - in: query
+        name: branch
+        schema:
+          type: string
+        description: Comma-separated branch/company labels.
+      - in: query
+        name: from_date
+        schema:
+          type: string
+          format: date
+        description: Inclusive IST entry date.
+      - in: query
+        name: page
+        schema:
+          type: integer
+        description: 1-based aggregate result page.
+      - in: query
+        name: page_size
+        schema:
+          type: integer
+        description: Rows per page, 1–100.
+      - in: query
+        name: search
+        schema:
+          type: string
+        description: Search user, email, branch or sub-branch.
+      - in: query
+        name: sub_branch
+        schema:
+          type: string
+        description: Comma-separated sub-branch/department labels.
+      - in: query
+        name: to_date
+        schema:
+          type: string
+          format: date
+        description: Inclusive IST entry date.
+      - in: query
+        name: user
+        schema:
+          type: string
+        description: Comma-separated platform user IDs.
+      tags:
+      - User hits
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserHitsResponse'
+          description: ''
 components:
   schemas:
     AccessFunction:
@@ -1576,6 +1638,10 @@ components:
           type: string
           writeOnly: true
           maxLength: 160
+        department:
+          type: string
+          writeOnly: true
+          maxLength: 120
     Role:
       type: object
       properties:
@@ -2398,6 +2464,9 @@ components:
         company:
           type: string
           readOnly: true
+        sub_branch:
+          type: string
+          readOnly: true
         created_by:
           type: string
           readOnly: true
@@ -2413,6 +2482,7 @@ components:
       - id
       - last_login
       - role_details
+      - sub_branch
     UserAccessRequest:
       type: object
       properties:
@@ -2471,6 +2541,116 @@ components:
           type: string
           writeOnly: true
           maxLength: 160
+        department:
+          type: string
+          writeOnly: true
+          maxLength: 120
+    UserHitDeviceCounts:
+      type: object
+      properties:
+        total:
+          type: integer
+          minimum: 0
+        desktop:
+          type: integer
+          minimum: 0
+        mobile:
+          type: integer
+          minimum: 0
+        tablet:
+          type: integer
+          minimum: 0
+        unclassified:
+          type: integer
+          minimum: 0
+      required:
+      - desktop
+      - mobile
+      - tablet
+      - total
+      - unclassified
+    UserHitRow:
+      type: object
+      properties:
+        user_id:
+          type: integer
+        user_name:
+          type: string
+        username:
+          type: string
+        user_email:
+          type: string
+          format: email
+        branch:
+          type: string
+        sub_branch:
+          type: string
+        date:
+          type: string
+          format: date
+        hits:
+          $ref: '#/components/schemas/UserHitDeviceCounts'
+        completes:
+          $ref: '#/components/schemas/UserHitDeviceCounts'
+      required:
+      - branch
+      - completes
+      - date
+      - hits
+      - sub_branch
+      - user_email
+      - user_id
+      - user_name
+      - username
+    UserHitSummary:
+      type: object
+      properties:
+        hits:
+          $ref: '#/components/schemas/UserHitDeviceCounts'
+        completes:
+          $ref: '#/components/schemas/UserHitDeviceCounts'
+        active_users:
+          type: integer
+          minimum: 0
+        days:
+          type: integer
+          minimum: 0
+        conversion_rate:
+          type: number
+          format: double
+          minimum: 0
+      required:
+      - active_users
+      - completes
+      - conversion_rate
+      - days
+      - hits
+    UserHitsResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+          minimum: 0
+        next:
+          type: string
+          format: uri
+          nullable: true
+        previous:
+          type: string
+          format: uri
+          nullable: true
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/UserHitRow'
+        summary:
+          $ref: '#/components/schemas/UserHitSummary'
+      required:
+      - count
+      - next
+      - previous
+      - results
+      - summary
   securitySchemes:
     basicAuth:
       type: http
@@ -2486,6 +2666,8 @@ tags:
   description: Quota and pre-screening targeting captured from InnovateMR.
 - name: Survey attempts
   description: Staff-only respondent attempt, callback, IP and LOI audit records.
+- name: User hits
+  description: Date-wise user hits and completes aggregated by respondent device.
 - name: Synchronization
   description: Trigger and audit upstream inventory synchronization.
 - name: Access control

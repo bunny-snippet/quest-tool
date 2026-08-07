@@ -1,0 +1,75 @@
+{% extends 'surveys/base.html' %}
+{% load static %}
+{% block title %}User Hits · Survey Workspace{% endblock %}
+{% block header_title %}User Hits{% endblock %}
+{% block content %}
+<section class="page-intro user-hits-intro">
+  <div>
+    <p class="eyebrow">Team performance</p>
+    <h1>User Hits</h1>
+    <p>Date-wise survey traffic and completes, split by respondent device.</p>
+  </div>
+</section>
+
+<section class="hit-overview" aria-label="Filtered user hit totals">
+  <article><span class="overview-icon hits" aria-hidden="true">↗</span><div><small>Total hits</small><strong id="totalHitCount">—</strong><em id="hitDayCount">Across selected dates</em></div></article>
+  <article><span class="overview-icon completes" aria-hidden="true">✓</span><div><small>Completes</small><strong id="totalCompleteCount">—</strong><em>Successful survey outcomes</em></div></article>
+  <article><span class="overview-icon conversion" aria-hidden="true">%</span><div><small>Conversion</small><strong id="conversionRate">—</strong><em>Completes divided by hits</em></div></article>
+  <article><span class="overview-icon users" aria-hidden="true">◎</span><div><small>Active users</small><strong id="activeUserCount">—</strong><em>Users matching filters</em></div></article>
+</section>
+
+<section class="filter-panel user-hits-filters" aria-label="User hit filters">
+  <div class="field search-field">
+    <label for="hitSearch">Search user</label>
+    <div class="field-control"><span aria-hidden="true">⌕</span><input id="hitSearch" type="search" placeholder="Name, email or branch…" autocomplete="off"></div>
+  </div>
+  <div class="field multi-field">
+    <label id="hitBranchLabel">Branch</label>
+    <div class="multi-select" data-hit-filter="branch">
+      <button class="multi-trigger" type="button" aria-labelledby="hitBranchLabel" aria-expanded="false"><span>All branches</span><i>⌄</i></button>
+      <div class="multi-menu" hidden>{% for branch in branches %}<label><input type="checkbox" value="{{ branch }}"><span>{{ branch }}</span></label>{% empty %}<span class="filter-empty">No branches yet</span>{% endfor %}</div>
+    </div>
+  </div>
+  <div class="field multi-field">
+    <label id="hitSubBranchLabel">Sub-branch</label>
+    <div class="multi-select" data-hit-filter="sub_branch">
+      <button class="multi-trigger" type="button" aria-labelledby="hitSubBranchLabel" aria-expanded="false"><span>All sub-branches</span><i>⌄</i></button>
+      <div class="multi-menu" hidden>{% for sub_branch in sub_branches %}<label><input type="checkbox" value="{{ sub_branch }}"><span>{{ sub_branch }}</span></label>{% empty %}<span class="filter-empty">No sub-branches yet</span>{% endfor %}</div>
+    </div>
+  </div>
+  <div class="field multi-field">
+    <label id="hitUserLabel">Users</label>
+    <div class="multi-select" data-hit-filter="user">
+      <button class="multi-trigger" type="button" aria-labelledby="hitUserLabel" aria-expanded="false"><span>All users</span><i>⌄</i></button>
+      <div class="multi-menu" hidden>{% for tracked_user in users %}<label><input type="checkbox" value="{{ tracked_user.user_id }}"><span>{{ tracked_user.user_name }}</span></label>{% empty %}<span class="filter-empty">No tracked users yet</span>{% endfor %}</div>
+    </div>
+  </div>
+  <div class="field"><label for="hitFromDate">Start date</label><input id="hitFromDate" type="date"></div>
+  <div class="field"><label for="hitToDate">End date</label><input id="hitToDate" type="date"></div>
+  <button class="clear-button" id="clearHitFilters" type="button">Clear filters</button>
+</section>
+
+<section class="survey-panel user-hits-panel">
+  <div class="panel-head">
+    <div><h2>User activity</h2><p id="hitSummary">Loading user activity…</p></div>
+    <div class="panel-tools"><label class="compact-select">Rows<select id="hitPageSize"><option>10</option><option selected>20</option><option>50</option><option>100</option></select></label></div>
+  </div>
+  <div class="table-wrap user-hits-table-wrap">
+    <table class="survey-table user-hits-table">
+      <thead><tr><th>Branch</th><th>Sub-branch</th><th>User</th><th>Date</th><th>Hits</th><th>Completes</th></tr></thead>
+      <tbody id="hitRows"><tr><td colspan="6"><div class="table-loader"><i></i><span>Building device-wise totals…</span></div></td></tr></tbody>
+    </table>
+  </div>
+  <div class="mobile-cards user-hit-cards" id="hitCards"></div>
+  <div class="panel-foot">
+    <span id="hitPageStatus">Page 1</span>
+    <nav class="pagination" aria-label="User hit pages">
+      <button id="hitFirstPage" type="button" aria-label="First page">«</button><button id="hitPrevPage" type="button" aria-label="Previous page">‹</button>
+      <label><span class="sr-only">Current page</span><input id="hitPageInput" type="number" min="1" value="1"></label>
+      <span id="hitTotalPages">of 1</span>
+      <button id="hitNextPage" type="button" aria-label="Next page">›</button><button id="hitLastPage" type="button" aria-label="Last page">»</button>
+    </nav>
+  </div>
+</section>
+{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/user_hits.js' %}?v=1" defer></script>{% endblock %}

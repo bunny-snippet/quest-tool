@@ -3,12 +3,14 @@ from rest_framework.routers import DefaultRouter
 
 from .views import (
     SurveyAttemptViewSet,
+    UserHitsAPIView,
     SyncRunViewSet,
     SyncTriggerView,
     SurveyViewSet,
     dashboard_page,
     projects_page,
     studies_page,
+    user_hits_page,
     survey_start,
     survey_status,
     workspace_home,
@@ -26,6 +28,8 @@ urlpatterns = [
     path("dashboard/", dashboard_page, name="dashboard"),
     path("projects/", projects_page, name="projects"),
     path("studies/", studies_page, name="studies"),
+    path("user-hits/", user_hits_page, name="user-hits"),
+    path("api/v1/user-hits/", UserHitsAPIView.as_view(), name="user-hits-api"),
     path("api/v1/sync/", SyncTriggerView.as_view(), name="sync-trigger"),
     path("api/v1/", include(router.urls)),
 ]

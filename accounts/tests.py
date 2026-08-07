@@ -109,12 +109,15 @@ class DelegatedVendorTests(TestCase):
         user_response = self.api.post(reverse("access-user-list"), {
             "first_name": "Nested", "last_name": "Employee", "email": "nested@example.test",
             "password": "password-123", "role": "vendor-operator", "account_type": "internal_vendor",
-            "company_name": "Nested Vendor", "allow_codes": [], "deny_codes": [],
+            "company_name": "Nested Vendor", "department": "Operations", "allow_codes": [], "deny_codes": [],
         }, format="json")
         self.assertEqual(user_response.status_code, 201)
         nested = get_user_model().objects.get(email="nested@example.test")
         self.assertEqual(nested.employee_profile.created_by, self.vendor)
         self.assertEqual(nested.employee_profile.account_type, EmployeeProfile.AccountType.INTERNAL_VENDOR)
+        self.assertEqual(nested.employee_profile.company_name, "Nested Vendor")
+        self.assertEqual(nested.employee_profile.department, "Operations")
+        self.assertEqual(user_response.data["sub_branch"], "Operations")
 
     def test_vendor_cannot_delegate_permission_it_does_not_have(self):
         response = self.api.post(reverse("access-role-list"), {

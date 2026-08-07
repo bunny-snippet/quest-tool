@@ -45,6 +45,8 @@ One record per respondent journey. RID is a random 10-character identifier and i
 
 The responsive Studies UI deliberately renders a compact operational subset. Its filtered CSV stream joins attempt, survey, platform-user, employee-profile and role context and includes the full audit payload. Streaming iteration keeps large exports memory-bounded, while CSV formula escaping prevents spreadsheet formula injection.
 
+The User Hits report derives its metrics from these immutable attempt rows. Each result represents one platform user and one IST calendar date. All attempts initiated on that date count as hits; status `1` attempts count as completes. Desktop, mobile and tablet use the captured entry-device classification, while missing legacy device audit data remains explicitly unclassified. Branch resolves from the user's company/vendor ownership chain and sub-branch from the employee department, with stable fallbacks for older profiles.
+
 ### `LocalIdSequence`
 
 One locked counter per `YYYYMM` prefix. New survey creation increments the counter in a database transaction and formats it as eight digits. InnovateMR updates never change this project ID.

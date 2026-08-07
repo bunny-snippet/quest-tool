@@ -124,6 +124,7 @@ SPECTACULAR_SETTINGS = {
         {"name": "Surveys", "description": "Browse locally synchronized survey inventory."},
         {"name": "Survey details", "description": "Quota and pre-screening targeting captured from InnovateMR."},
         {"name": "Survey attempts", "description": "Staff-only respondent attempt, callback, IP and LOI audit records."},
+        {"name": "User hits", "description": "Date-wise user hits and completes aggregated by respondent device."},
         {"name": "Synchronization", "description": "Trigger and audit upstream inventory synchronization."},
         {"name": "Access control", "description": "Dynamic roles, function assignments and per-user access overrides."},
     ],

@@ -37,7 +37,9 @@ from .serializers import (
     SyncRunSerializer,
     SyncTriggerResponseSerializer,
     TargetingQuestionSerializer,
+    UserHitsResponseSerializer,
 )
+from .pagination import SurveyPagination
 from .services import replace_survey_quotas, replace_survey_targeting, sync_surveys
 from .survey_flow import (
     backfill_attempt_entry_audit,
@@ -49,6 +51,7 @@ from .survey_flow import (
     supplier_code_from_entry_link,
 )
 from .tasks import sync_innovatemr_surveys_task
+from .user_hits import aggregate_user_hits, user_hit_filter_options
 
 
 class UpstreamUnavailable(APIException):
@@ -109,6 +112,14 @@ def studies_page(request):
     })
 
 
+@function_permission_required("user_hits.view")
+def user_hits_page(request):
+    return render(request, "surveys/user_hits.html", {
+        "active_page": "user-hits",
+        **user_hit_filter_options(request.user),
+    })
+
+
 def workspace_home(request):
     if not request.user.is_authenticated:
         from django.contrib.auth.views import redirect_to_login
@@ -119,6 +130,8 @@ def workspace_home(request):
         return HttpResponseRedirect(reverse("dashboard"))
     if has_function_access(request.user, "attempts.view"):
         return HttpResponseRedirect(reverse("studies"))
+    if has_function_access(request.user, "user_hits.view"):
+        return HttpResponseRedirect(reverse("user-hits"))
     if any(has_function_access(request.user, code) for code in ("access.manage", "users.view", "users.create", "roles.view", "roles.create")):
         return HttpResponseRedirect(reverse("access-control"))
     from django.core.exceptions import PermissionDenied
@@ -586,6 +599,41 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         )
         response["Content-Disposition"] = f'attachment; filename="studies-{local_now:%Y%m%d-%H%M%S}-IST.csv"'
         response["X-Content-Type-Options"] = "nosniff"
+        return response
+
+
+class UserHitsAPIView(APIView):
+    permission_classes = [HasFunctionPermission]
+    required_function_permission = "user_hits.view"
+
+    @extend_schema(
+        tags=["User hits"],
+        summary="Aggregate user survey hits and completes by IST date and device",
+        description=(
+            "Returns one row per visible user and IST calendar date. Hits count initiated survey attempts; "
+            "completes count status 1 within those attempts. Device splits use entry-device audit data."
+        ),
+        parameters=[
+            OpenApiParameter("search", OpenApiTypes.STR, description="Search user, email, branch or sub-branch."),
+            OpenApiParameter("user", OpenApiTypes.STR, description="Comma-separated platform user IDs."),
+            OpenApiParameter("branch", OpenApiTypes.STR, description="Comma-separated branch/company labels."),
+            OpenApiParameter("sub_branch", OpenApiTypes.STR, description="Comma-separated sub-branch/department labels."),
+            OpenApiParameter("from_date", OpenApiTypes.DATE, description="Inclusive IST entry date."),
+            OpenApiParameter("to_date", OpenApiTypes.DATE, description="Inclusive IST entry date."),
+            OpenApiParameter("page", OpenApiTypes.INT, description="1-based aggregate result page."),
+            OpenApiParameter("page_size", OpenApiTypes.INT, description="Rows per page, 1–100."),
+        ],
+        responses={200: UserHitsResponseSerializer},
+    )
+    def get(self, request):
+        try:
+            rows, summary = aggregate_user_hits(request.user, request.query_params)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        paginator = SurveyPagination()
+        page = paginator.paginate_queryset(rows, request, view=self)
+        response = paginator.get_paginated_response(page)
+        response.data["summary"] = summary
         return response
 
 

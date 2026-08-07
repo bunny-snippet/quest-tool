@@ -61,7 +61,8 @@
         <label class="wide"><span>Password</span><input name="password" type="password" minlength="8" autocomplete="new-password"><small data-password-note>Required for a new user, minimum 8 characters.</small></label>
         <label><span>Account type</span><select name="account_type"><option value="employee">Employee</option><option value="internal_vendor">Internal vendor</option><option value="external_vendor">External vendor</option></select></label>
         <label><span>Default role</span><select name="role" required>{% for role in roles %}<option value="{{ role.slug }}">{{ role.name }}</option>{% endfor %}</select></label>
-        <label class="wide company-field"><span>Company / vendor name</span><input name="company_name" placeholder="Optional for employees"></label>
+        <label><span>Branch / company</span><input name="company_name" placeholder="e.g. Gurgaon"></label>
+        <label><span>Sub-branch / department</span><input name="department" placeholder="e.g. Operations"></label>
         <label class="toggle-row wide"><input name="is_active" type="checkbox" checked><span>Account is active</span></label>
       </div>
       <section class="permission-editor"><div><h3>Individual permission overrides</h3><p>Use role defaults normally. Select Allow for extra access or Deny to remove a role permission.</p></div>

@@ -83,6 +83,8 @@ class UserAccessSerializer(serializers.ModelSerializer):
     account_type_details = serializers.SerializerMethodField()
     company_name = serializers.CharField(write_only=True, required=False, allow_blank=True, max_length=160)
     company = serializers.CharField(source="employee_profile.company_name", read_only=True)
+    department = serializers.CharField(write_only=True, required=False, allow_blank=True, max_length=120)
+    sub_branch = serializers.CharField(source="employee_profile.department", read_only=True)
     created_by = serializers.CharField(source="employee_profile.created_by.username", read_only=True, allow_null=True)
 
     class Meta:
@@ -90,7 +92,8 @@ class UserAccessSerializer(serializers.ModelSerializer):
         fields = [
             "id", "username", "first_name", "last_name", "full_name", "email", "is_active", "last_login",
             "role", "role_details", "allow_codes", "deny_codes", "allowed_overrides", "denied_overrides",
-            "effective_permissions", "password", "account_type", "account_type_details", "company_name", "company", "created_by",
+            "effective_permissions", "password", "account_type", "account_type_details", "company_name", "company",
+            "department", "sub_branch", "created_by",
         ]
         extra_kwargs = {"username": {"required": False}}
         read_only_fields = ["last_login"]
@@ -149,7 +152,10 @@ class UserAccessSerializer(serializers.ModelSerializer):
     def validate_deny_codes(self, codes):
         return self._validate_codes(codes)
 
-    def _update_access(self, user, role_slug, allow_codes, deny_codes, account_type=serializers.empty, company_name=serializers.empty):
+    def _update_access(
+        self, user, role_slug, allow_codes, deny_codes, account_type=serializers.empty,
+        company_name=serializers.empty, department=serializers.empty,
+    ):
         profile, _ = EmployeeProfile.objects.get_or_create(user=user)
         if role_slug is not serializers.empty:
             profile.role = Role.objects.filter(slug=role_slug).first() if role_slug else None
@@ -157,7 +163,10 @@ class UserAccessSerializer(serializers.ModelSerializer):
             profile.account_type = account_type
         if company_name is not serializers.empty:
             profile.company_name = company_name
+        if department is not serializers.empty:
+            profile.department = department
         profile.save()
+        user.employee_profile = profile
         if allow_codes is serializers.empty and deny_codes is serializers.empty:
             return
         allow_codes = [] if allow_codes is serializers.empty else allow_codes
@@ -177,6 +186,7 @@ class UserAccessSerializer(serializers.ModelSerializer):
         password = validated_data.pop("password", None)
         account_type = validated_data.pop("account_type", EmployeeProfile.AccountType.EMPLOYEE)
         company_name = validated_data.pop("company_name", "")
+        department = validated_data.pop("department", "")
         if not password:
             raise serializers.ValidationError({"password": "Password is required when creating a user."})
         if not validated_data.get("email"):
@@ -191,7 +201,7 @@ class UserAccessSerializer(serializers.ModelSerializer):
         profile, _ = EmployeeProfile.objects.get_or_create(user=user)
         profile.created_by = request.user if request else None
         profile.save(update_fields=["created_by", "updated_at"])
-        self._update_access(user, role_slug, allow_codes, deny_codes, account_type, company_name)
+        self._update_access(user, role_slug, allow_codes, deny_codes, account_type, company_name, department)
         return user
 
     @transaction.atomic
@@ -202,6 +212,7 @@ class UserAccessSerializer(serializers.ModelSerializer):
         password = validated_data.pop("password", None)
         account_type = validated_data.pop("account_type", serializers.empty)
         company_name = validated_data.pop("company_name", serializers.empty)
+        department = validated_data.pop("department", serializers.empty)
         previous_email = instance.email
         for field, value in validated_data.items():
             setattr(instance, field, value)
@@ -210,5 +221,5 @@ class UserAccessSerializer(serializers.ModelSerializer):
         if password:
             instance.set_password(password)
         instance.save()
-        self._update_access(instance, role_slug, allow_codes, deny_codes, account_type, company_name)
+        self._update_access(instance, role_slug, allow_codes, deny_codes, account_type, company_name, department)
         return instance

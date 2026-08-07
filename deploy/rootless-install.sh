@@ -29,14 +29,16 @@ mkdir -p "$HOME/logs" "$HOME/tmp"
 chmod 700 "$HOME/tmp"
 chmod 600 "$ENV_FILE"
 
-if ! "$PYTHON_BIN" -m venv .venv; then
-  venv_path="$(realpath -m "$APP_DIR/.venv")"
-  test "$venv_path" = "$(realpath -m "$APP_DIR")/.venv" || { echo "Unsafe venv path" >&2; exit 1; }
-  rm -rf -- "$venv_path"
-  virtualenv_zipapp="$HOME/tmp/virtualenv.pyz"
-  curl --fail --silent --show-error --location https://bootstrap.pypa.io/virtualenv.pyz --output "$virtualenv_zipapp"
-  "$PYTHON_BIN" "$virtualenv_zipapp" .venv
-  rm -f -- "$virtualenv_zipapp"
+if ! test -x .venv/bin/python || ! .venv/bin/python -m pip --version >/dev/null 2>&1; then
+  if ! "$PYTHON_BIN" -m venv .venv; then
+    venv_path="$(realpath -m "$APP_DIR/.venv")"
+    test "$venv_path" = "$(realpath -m "$APP_DIR")/.venv" || { echo "Unsafe venv path" >&2; exit 1; }
+    rm -rf -- "$venv_path"
+    virtualenv_zipapp="$HOME/tmp/virtualenv.pyz"
+    curl --fail --silent --show-error --location https://bootstrap.pypa.io/virtualenv.pyz --output "$virtualenv_zipapp"
+    "$PYTHON_BIN" "$virtualenv_zipapp" .venv
+    rm -f -- "$virtualenv_zipapp"
+  fi
 fi
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt

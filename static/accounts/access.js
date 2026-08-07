@@ -66,6 +66,7 @@
       userForm.elements.email.value = data.email || '';
       userForm.elements.account_type.value = data.account_type_details?.value || 'employee';
       userForm.elements.company_name.value = data.company || '';
+      userForm.elements.department.value = data.sub_branch || '';
       userForm.elements.role.value = data.role_details?.slug || '';
       userForm.elements.is_active.checked = data.is_active;
       (data.allowed_overrides || []).forEach((code) => { const item = $(`[data-function="${CSS.escape(code)}"] select`, userModal); if (item) item.value = 'allow'; });
@@ -80,7 +81,7 @@
     event.preventDefault(); const errorBox = $('[data-user-error]'); errorBox.hidden = true;
     const allow = [], deny = [];
     $$('[data-function]', userModal).forEach((row) => { const value = $('select', row).value; if (value === 'allow') allow.push(row.dataset.function); if (value === 'deny') deny.push(row.dataset.function); });
-    const payload = { first_name: userForm.elements.first_name.value.trim(), last_name: userForm.elements.last_name.value.trim(), email: userForm.elements.email.value.trim(), role: userForm.elements.role.value, account_type: userForm.elements.account_type.value, company_name: userForm.elements.company_name.value.trim(), is_active: userForm.elements.is_active.checked, allow_codes: allow, deny_codes: deny };
+    const payload = { first_name: userForm.elements.first_name.value.trim(), last_name: userForm.elements.last_name.value.trim(), email: userForm.elements.email.value.trim(), role: userForm.elements.role.value, account_type: userForm.elements.account_type.value, company_name: userForm.elements.company_name.value.trim(), department: userForm.elements.department.value.trim(), is_active: userForm.elements.is_active.checked, allow_codes: allow, deny_codes: deny };
     if (userForm.elements.password.value) payload.password = userForm.elements.password.value;
     try {
       await api(userId ? `/api/v1/access/users/${userId}/` : '/api/v1/access/users/', { method: userId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
@@ -117,4 +118,3 @@
   backdrop?.addEventListener('click', closeModals);
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeModals(); });
 })();
-
