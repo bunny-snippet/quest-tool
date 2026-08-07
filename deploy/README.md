@@ -93,7 +93,7 @@ sudo -u questtool /opt/quest-tool/.venv/bin/python /opt/quest-tool/manage.py che
 
 ## Restricted Hostinger SSH user (no root)
 
-When Hostinger already proxies the assigned application port and the SSH user cannot install system packages or systemd units, run the bundled rootless installer from `$HOME/htdocs/quest-tool`. It uses the pure-Python PyMySQL driver and a user-owned Supervisor process, so Python/MySQL development headers are not required. Cron starts Supervisor after a VPS reboot; Supervisor keeps Gunicorn, Celery Worker and the single Celery Beat process alive.
+When Hostinger already proxies the assigned application port and the SSH user cannot install system packages or systemd units, run the bundled rootless installer from `$HOME/htdocs/quest-tool`. It uses the pure-Python PyMySQL driver and a user-owned Supervisor process, so Python/MySQL development headers are not required. If Ubuntu's `python3-venv` package is unavailable, the installer bootstraps the environment with PyPA's official `virtualenv.pyz`. Cron starts Supervisor after a VPS reboot; Supervisor keeps Gunicorn, Celery Worker and the single Celery Beat process alive.
 
 ```bash
 cd "$HOME/htdocs/quest-tool"

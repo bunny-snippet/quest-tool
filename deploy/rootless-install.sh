@@ -17,7 +17,15 @@ mkdir -p "$HOME/logs" "$HOME/tmp"
 chmod 700 "$HOME/tmp"
 chmod 600 "$ENV_FILE"
 
-python3 -m venv .venv
+if ! python3 -m venv .venv; then
+  venv_path="$(realpath -m "$APP_DIR/.venv")"
+  test "$venv_path" = "$(realpath -m "$APP_DIR")/.venv" || { echo "Unsafe venv path" >&2; exit 1; }
+  rm -rf -- "$venv_path"
+  virtualenv_zipapp="$HOME/tmp/virtualenv.pyz"
+  curl --fail --silent --show-error --location https://bootstrap.pypa.io/virtualenv.pyz --output "$virtualenv_zipapp"
+  python3 "$virtualenv_zipapp" .venv
+  rm -f -- "$virtualenv_zipapp"
+fi
 .venv/bin/pip install --upgrade pip
 .venv/bin/pip install -r requirements.txt
 .venv/bin/python manage.py migrate --noinput
