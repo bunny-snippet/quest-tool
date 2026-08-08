@@ -26,7 +26,9 @@ Navigation is rendered from effective access: denied Dashboard, Projects, Access
 
 Projects presentation has independent `projects.column.*` functions for Project ID, Survey, Market, Completes, CPI, LOI/IR, Entry link, Modified and Actions. Default roles receive every column; a role assignment or per-user deny can remove any column from both desktop tables and mobile cards. Entry link and Actions additionally require their underlying copy-link and survey-detail functions.
 
-`projects.export` independently controls the Projects CSV button and export API. `projects.filter.cpi` independently controls CPI sorting/range UI and rejects direct CPI filter API parameters when denied. These functions, like every table-column function, can be assigned on a role and then allowed or denied for one user.
+The code-owned catalog is organized page-wise in Access Control. Projects, Studies and User Hits each expose separate groups for page/sidebar access, every filter, actions, page controls and every table column. Each function can be assigned to a role and then individually allowed or denied for one user. Denied filters are removed from the page and their direct API query parameters return HTTP 403; denied actions are also enforced by their backend endpoints.
+
+All date-range interfaces use one native combined `datetime-local` control for From and one for To. New pages must follow the same component catalog convention and combined date-time filter pattern instead of adding unregistered UI capabilities.
 
 The code-owned catalog in `accounts/function_catalog.py` is synchronized after `manage.py migrate`. New capabilities added there automatically become `AccessFunction` records and appear in both role defaults and individual user override editors. Default grants are applied only when a function is first created, so later administrator customizations are not reset by deployments.
 

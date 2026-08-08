@@ -84,6 +84,29 @@ class FunctionAccessTests(TestCase):
         self.assertEqual(api.get(reverse("survey-export")).status_code, 403)
         self.assertEqual(api.get(reverse("survey-list"), {"min_cpi": "1.00"}).status_code, 200)
 
+    def test_each_project_filter_control_and_column_can_be_denied_individually(self):
+        for code in (
+            "projects.filter.country", "projects.filters.clear",
+            "projects.control.pagination", "projects.column.market",
+        ):
+            UserFunctionOverride.objects.create(
+                user=self.user,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.DENY,
+            )
+
+        page = self.client.get(reverse("projects"))
+        self.assertNotContains(page, 'id="countryLabel"')
+        self.assertNotContains(page, 'id="clearFilters"')
+        self.assertNotContains(page, 'aria-label="Survey pages"')
+        self.assertNotContains(page, "<th>Market</th>", html=True)
+        self.assertContains(page, 'id="searchInput"')
+
+        api = APIClient()
+        api.force_authenticate(self.user)
+        self.assertEqual(api.get(reverse("survey-list"), {"country": "US"}).status_code, 403)
+        self.assertEqual(api.get(reverse("survey-list"), {"search": "banking"}).status_code, 200)
+
     def test_code_catalog_restores_new_permissions_for_access_editor(self):
         AccessFunction.objects.filter(code="projects.export").delete()
         sync_access_function_catalog()
@@ -118,6 +141,8 @@ class FunctionAccessTests(TestCase):
         self.assertContains(page, "projects.export")
         self.assertContains(page, "projects.filter.cpi")
         self.assertContains(page, "projects.column.completes")
+        self.assertContains(page, "studies.filter.date")
+        self.assertContains(page, "user_hits.column.completes")
 
 
 class DelegatedVendorTests(TestCase):

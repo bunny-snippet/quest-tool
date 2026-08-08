@@ -3,6 +3,7 @@
 {% block title %}Studies · Survey Workspace{% endblock %}
 {% block header_title %}Studies{% endblock %}
 {% block content %}
+{{ study_columns|json_script:"studyColumnAccess" }}
 <section class="page-intro studies-intro">
   <div>
     <p class="eyebrow">Respondent tracking</p>
@@ -13,11 +14,11 @@
 </section>
 
 <section class="filter-panel studies-filters" aria-label="Study filters">
-  <div class="field search-field">
+  {% if study_filters.search %}<div class="field search-field">
     <label for="studySearch">Search</label>
     <div class="field-control"><span aria-hidden="true">⌕</span><input id="studySearch" type="search" placeholder="RID, survey, user, IP, browser…" autocomplete="off"></div>
-  </div>
-  <div class="field multi-field">
+  </div>{% endif %}
+  {% if study_filters.user %}<div class="field multi-field">
     <label id="studyUserLabel">User</label>
     <div class="multi-select" data-multi-filter="user">
       <button class="multi-trigger" type="button" aria-labelledby="studyUserLabel" aria-expanded="false"><span>All users</span><i>⌄</i></button>
@@ -25,58 +26,61 @@
         {% for tracked_user in tracked_users %}<label><input type="checkbox" value="{{ tracked_user.pk }}"><span>{{ tracked_user.get_full_name|default:tracked_user.username }}</span></label>{% empty %}<span class="filter-empty">No tracked users yet</span>{% endfor %}
       </div>
     </div>
-  </div>
-  <div class="field multi-field">
+  </div>{% endif %}
+  {% if study_filters.status %}<div class="field multi-field">
     <label id="attemptStatusLabel">Status</label>
     <div class="multi-select" data-multi-filter="status">
       <button class="multi-trigger" type="button" aria-labelledby="attemptStatusLabel" aria-expanded="false"><span>All statuses</span><i>⌄</i></button>
       <div class="multi-menu" hidden>{% for value, label in attempt_statuses %}<label><input type="checkbox" value="{{ value }}"><span>{{ label }}</span></label>{% endfor %}</div>
     </div>
-  </div>
-  <div class="field">
+  </div>{% endif %}
+  {% if study_filters.date %}<div class="field">
     <label for="studyDateField">Date column</label>
     <select id="studyDateField"><option value="initiated">Entry date</option><option value="callback">Exit date</option></select>
   </div>
   <div class="field datetime-field">
-    <label for="studyFromDate">From date &amp; time</label>
-    <div class="datetime-control">
-      <input id="studyFromDate" type="date">
-      <input id="studyFromTime" type="time" step="60" aria-label="From time in IST">
-    </div>
+    <label for="studyFromDateTime">From date &amp; time</label>
+    <div class="datetime-control"><input id="studyFromDateTime" type="datetime-local" step="60" aria-label="From date and time in IST"></div>
   </div>
   <div class="field datetime-field">
-    <label for="studyToDate">To date &amp; time</label>
-    <div class="datetime-control">
-      <input id="studyToDate" type="date">
-      <input id="studyToTime" type="time" step="60" aria-label="To time in IST">
-    </div>
-  </div>
-  <button class="clear-button" id="clearStudyFilters" type="button">Clear filters</button>
+    <label for="studyToDateTime">To date &amp; time</label>
+    <div class="datetime-control"><input id="studyToDateTime" type="datetime-local" step="60" aria-label="To date and time in IST"></div>
+  </div>{% endif %}
+  {% if study_filters.clear %}<button class="clear-button" id="clearStudyFilters" type="button">Clear filters</button>{% endif %}
 </section>
 
 <section class="survey-panel studies-panel">
   <div class="panel-head">
     <div><h2>Respondent activity</h2><p id="studySummary">Loading tracked attempts…</p></div>
-    <div class="panel-tools"><label class="compact-select">Rows<select id="studyPageSize"><option>10</option><option selected>20</option><option>50</option><option>100</option></select></label></div>
+    <div class="panel-tools">{% if can_change_study_page_size %}<label class="compact-select">Rows<select id="studyPageSize"><option>10</option><option selected>20</option><option>50</option><option>100</option></select></label>{% endif %}</div>
   </div>
   <div class="table-wrap studies-table-wrap">
     <table class="survey-table studies-table">
       <thead><tr>
-        <th>Project ID</th><th>Survey ID</th><th>Respondent ID</th><th>Name</th><th>Device</th><th>IP address</th><th>LOI</th><th>Status</th><th>Start</th><th>End</th>
+        {% if 'project_id' in study_columns %}<th>Project ID</th>{% endif %}
+        {% if 'survey_id' in study_columns %}<th>Survey ID</th>{% endif %}
+        {% if 'respondent_id' in study_columns %}<th>Respondent ID</th>{% endif %}
+        {% if 'user' in study_columns %}<th>Name</th>{% endif %}
+        {% if 'device' in study_columns %}<th>Device</th>{% endif %}
+        {% if 'ip' in study_columns %}<th>IP address</th>{% endif %}
+        {% if 'loi' in study_columns %}<th>LOI</th>{% endif %}
+        {% if 'status' in study_columns %}<th>Status</th>{% endif %}
+        {% if 'start' in study_columns %}<th>Start</th>{% endif %}
+        {% if 'end' in study_columns %}<th>End</th>{% endif %}
       </tr></thead>
-      <tbody id="studyRows"><tr><td colspan="10"><div class="table-loader"><i></i><span>Fetching respondent activity…</span></div></td></tr></tbody>
+      <tbody id="studyRows"><tr><td colspan="{{ study_column_count }}"><div class="table-loader"><i></i><span>Fetching respondent activity…</span></div></td></tr></tbody>
     </table>
   </div>
   <div class="mobile-cards studies-cards" id="studyCards"></div>
   <div class="panel-foot">
     <span id="studyPageStatus">Page 1</span>
-    <nav class="pagination" aria-label="Study pages">
+    {% if can_paginate_studies %}<nav class="pagination" aria-label="Study pages">
       <button id="studyFirstPage" type="button" aria-label="First page">«</button><button id="studyPrevPage" type="button" aria-label="Previous page">‹</button>
       <label><span class="sr-only">Current page</span><input id="studyPageInput" type="number" min="1" value="1"></label>
       <span id="studyTotalPages">of 1</span>
       <button id="studyNextPage" type="button" aria-label="Next page">›</button><button id="studyLastPage" type="button" aria-label="Last page">»</button>
-    </nav>
+    </nav>{% endif %}
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=5" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=6" defer></script>{% endblock %}

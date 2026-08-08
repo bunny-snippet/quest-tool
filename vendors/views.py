@@ -9,7 +9,7 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.access import HasFunctionPermission, any_function_permission_required, has_function_access
+from accounts.access import HasFunctionPermission, any_function_permission_required, effective_permission_codes, has_function_access
 from accounts.models import EmployeeProfile
 
 from .access import vendor_scope_user_id
@@ -39,14 +39,45 @@ from .serializers import (
 @any_function_permission_required("vendors.view", "vendors.manage", "allocations.view", "allocations.manage")
 def vendor_management_page(request):
     owner_controlled = vendor_scope_user_id(request.user) is None
-    can_view_vendors = any(has_function_access(request.user, code) for code in ("vendors.view", "vendors.manage"))
-    can_view_allocations = any(has_function_access(request.user, code) for code in ("allocations.view", "allocations.manage"))
+    codes = effective_permission_codes(request.user)
+    vendor_columns = [
+        name for name in ("name", "type", "cpi", "clients", "status", "actions")
+        if f"vendors.column.vendor.{name}" in codes
+    ]
+    client_columns = [
+        name for name in ("vendor", "client", "quantity", "cpi", "window", "actions")
+        if f"vendors.column.client.{name}" in codes
+    ]
+    project_columns = [
+        name for name in ("vendor", "survey", "client", "quantity", "cpi", "actions")
+        if f"vendors.column.project.{name}" in codes
+    ]
+    api_columns = [
+        name for name in ("vendor", "key", "created", "last_used", "expires", "actions")
+        if f"vendors.column.api.{name}" in codes
+    ]
+    first_vendor_tab = next((name for name, code in (
+        ("vendors", "vendors.tab.policies"), ("clients", "vendors.tab.clients"),
+        ("surveys", "vendors.tab.projects"), ("api-keys", "vendors.tab.api_keys"),
+    ) if code in codes), "")
     return render(request, "vendors/management.html", {
         "active_page": "vendors",
-        "can_view_vendors": can_view_vendors,
-        "can_view_allocations": can_view_allocations,
-        "can_manage_vendors": owner_controlled and has_function_access(request.user, "vendors.manage"),
-        "can_manage_allocations": owner_controlled and has_function_access(request.user, "allocations.manage"),
+        "can_view_vendor_summary": "vendors.summary" in codes,
+        "can_view_vendors": "vendors.tab.policies" in codes,
+        "can_view_client_allocations": "vendors.tab.clients" in codes,
+        "can_view_project_allocations": "vendors.tab.projects" in codes,
+        "can_view_api_keys": "vendors.tab.api_keys" in codes,
+        "can_create_vendor": owner_controlled and "vendors.action.create" in codes,
+        "can_edit_vendor_policy": owner_controlled and "vendors.action.edit_policy" in codes,
+        "can_allocate_client": owner_controlled and "vendors.action.allocate_client" in codes,
+        "can_allocate_project": owner_controlled and "vendors.action.allocate_project" in codes,
+        "can_create_api_key": owner_controlled and "vendors.action.create_api_key" in codes,
+        "can_revoke_api_key": owner_controlled and "vendors.action.revoke_api_key" in codes,
+        "vendor_columns": vendor_columns, "vendor_column_count": max(1, len(vendor_columns)),
+        "client_columns": client_columns, "client_column_count": max(1, len(client_columns)),
+        "vendor_project_columns": project_columns, "vendor_project_column_count": max(1, len(project_columns)),
+        "api_columns": api_columns, "api_column_count": max(1, len(api_columns)),
+        "first_vendor_tab": first_vendor_tab,
     })
 
 
@@ -55,7 +86,9 @@ class VendorManagementOptionsView(APIView):
 
     permission_classes = [HasFunctionPermission]
     required_function_permission = (
-        "vendors.view", "vendors.manage", "allocations.view", "allocations.manage",
+        "vendors.tab.policies", "vendors.tab.clients", "vendors.tab.projects", "vendors.tab.api_keys",
+        "vendors.action.edit_policy", "vendors.action.allocate_client", "vendors.action.allocate_project",
+        "vendors.action.create_api_key", "vendors.action.revoke_api_key",
     )
 
     @extend_schema(
@@ -138,7 +171,7 @@ class PermissionByActionMixin(VendorScopedQuerysetMixin):
 class VendorDirectoryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = VendorDirectorySerializer
     permission_classes = [HasFunctionPermission]
-    required_function_permission = ("vendors.view", "vendors.manage")
+    required_function_permission = "vendors.tab.policies"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["employee_profile__account_type", "is_active"]
     search_fields = ["username", "first_name", "last_name", "email"]
@@ -218,8 +251,8 @@ class VendorCommercialProfileViewSet(PermissionByActionMixin, viewsets.ModelView
     ).all()
     serializer_class = VendorCommercialProfileSerializer
     permission_classes = [HasFunctionPermission]
-    view_permission = "vendors.view"
-    manage_permission = "vendors.manage"
+    view_permission = "vendors.tab.policies"
+    manage_permission = "vendors.action.edit_policy"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ["vendor", "vendor__employee_profile__account_type", "is_active"]
     search_fields = ["vendor__username", "vendor__first_name", "vendor__last_name", "vendor__email"]
@@ -244,12 +277,18 @@ class VendorAPIKeyViewSet(viewsets.ModelViewSet):
     ).all()
     serializer_class = VendorAPIKeySerializer
     permission_classes = [HasFunctionPermission]
-    required_function_permission = "vendors.manage"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["vendor", "is_active"]
     search_fields = ["name", "prefix", "vendor__username", "vendor__first_name", "vendor__last_name"]
     ordering_fields = ["created_at", "last_used_at", "expires_at", "name"]
     ordering = ["-created_at"]
+
+    def get_required_function_permission(self):
+        if self.action in {"list", "retrieve"}:
+            return "vendors.tab.api_keys"
+        if self.action == "destroy":
+            return "vendors.action.revoke_api_key"
+        return "vendors.action.create_api_key"
 
     def get_queryset(self):
         queryset = super().get_queryset()
@@ -295,8 +334,8 @@ class VendorClientAllocationViewSet(PermissionByActionMixin, viewsets.ModelViewS
     ).all()
     serializer_class = VendorClientAllocationSerializer
     permission_classes = [HasFunctionPermission]
-    view_permission = "allocations.view"
-    manage_permission = "allocations.manage"
+    view_permission = "vendors.tab.clients"
+    manage_permission = "vendors.action.allocate_client"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["vendor", "client", "vendor__employee_profile__account_type", "is_active"]
     search_fields = ["vendor__username", "vendor__first_name", "vendor__last_name", "client__name", "client__code"]
@@ -320,8 +359,8 @@ class VendorSurveyAllocationViewSet(PermissionByActionMixin, viewsets.ModelViewS
     ).all()
     serializer_class = VendorSurveyAllocationSerializer
     permission_classes = [HasFunctionPermission]
-    view_permission = "allocations.view"
-    manage_permission = "allocations.manage"
+    view_permission = "vendors.tab.projects"
+    manage_permission = "vendors.action.allocate_project"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["client_allocation", "client_allocation__vendor", "client_allocation__client", "survey", "is_active"]
     search_fields = [

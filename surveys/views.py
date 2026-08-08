@@ -77,6 +77,38 @@ PROJECT_COLUMN_PERMISSIONS = {
     "actions": "projects.column.actions",
 }
 
+PROJECT_FILTER_PERMISSIONS = {
+    "search": "projects.filter.search", "country": "projects.filter.country",
+    "status": "projects.filter.status", "client": "projects.filter.client",
+    "cpi": "projects.filter.cpi", "date": "projects.filter.date",
+    "clear": "projects.filters.clear",
+}
+
+STUDY_COLUMN_PERMISSIONS = {
+    "project_id": "studies.column.project_id", "survey_id": "studies.column.survey_id",
+    "respondent_id": "studies.column.respondent_id", "user": "studies.column.user",
+    "device": "studies.column.device", "ip": "studies.column.ip", "loi": "studies.column.loi",
+    "status": "studies.column.status", "start": "studies.column.start", "end": "studies.column.end",
+}
+
+STUDY_FILTER_PERMISSIONS = {
+    "search": "studies.filter.search", "user": "studies.filter.user",
+    "status": "studies.filter.status", "date": "studies.filter.date",
+    "clear": "studies.filters.clear",
+}
+
+USER_HIT_COLUMN_PERMISSIONS = {
+    "branch": "user_hits.column.branch", "sub_branch": "user_hits.column.sub_branch",
+    "user": "user_hits.column.user", "date": "user_hits.column.date",
+    "hits": "user_hits.column.hits", "completes": "user_hits.column.completes",
+}
+
+USER_HIT_FILTER_PERMISSIONS = {
+    "search": "user_hits.filter.search", "branch": "user_hits.filter.branch",
+    "sub_branch": "user_hits.filter.sub_branch", "user": "user_hits.filter.user",
+    "date": "user_hits.filter.date", "clear": "user_hits.filters.clear",
+}
+
 
 def _project_columns_for_user(user):
     codes = effective_permission_codes(user)
@@ -88,6 +120,21 @@ def _project_columns_for_user(user):
     return columns
 
 
+def _component_access(codes, permissions):
+    return {name: code in codes for name, code in permissions.items()}
+
+
+def _permitted_columns(codes, permissions):
+    return [name for name, code in permissions.items() if code in codes]
+
+
+def _enforce_query_permissions(request, permission_parameters):
+    for code, parameters in permission_parameters.items():
+        if any(request.query_params.get(parameter) not in {None, ""} for parameter in parameters):
+            if not has_function_access(request.user, code):
+                raise PermissionDenied(f"Your account cannot use the {code} filter.")
+
+
 @function_permission_required("dashboard.view")
 def dashboard_page(request):
     return render(request, "surveys/dashboard.html", {"active_page": "dashboard"})
@@ -95,6 +142,7 @@ def dashboard_page(request):
 
 @function_permission_required("projects.view")
 def projects_page(request):
+    codes = effective_permission_codes(request.user)
     visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
     countries = visible_surveys.exclude(country_code="").values_list("country_code", "country").distinct().order_by("country_code")
     is_vendor_panel = bool(vendor_scope_user_id(request.user))
@@ -103,7 +151,8 @@ def projects_page(request):
     else:
         companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
     project_columns = _project_columns_for_user(request.user)
-    can_sort_cpi = has_function_access(request.user, "projects.filter.cpi")
+    project_filters = _component_access(codes, PROJECT_FILTER_PERMISSIONS)
+    can_sort_cpi = project_filters["cpi"]
     cpi_min, cpi_max = 0, 100
     if can_sort_cpi:
         cpi_bounds = visible_surveys.aggregate(minimum=Min("cpi"), maximum=Max("cpi"))
@@ -117,14 +166,18 @@ def projects_page(request):
         "company_filter_param": "client_name" if is_vendor_panel else "company",
         "company_filter_default": "All clients",
         "project_columns": project_columns, "project_column_count": max(1, len(project_columns)),
-        "can_sync": has_function_access(request.user, "sync.run"),
-        "can_export_projects": has_function_access(request.user, "projects.export"),
+        "project_filters": project_filters,
+        "can_sync": "sync.run" in codes,
+        "can_export_projects": "projects.export" in codes,
+        "can_change_project_page_size": "projects.control.page_size" in codes,
+        "can_paginate_projects": "projects.control.pagination" in codes,
         "can_sort_cpi": can_sort_cpi, "cpi_min_bound": cpi_min, "cpi_max_bound": cpi_max,
     })
 
 
 @function_permission_required("attempts.view")
 def studies_page(request):
+    codes = effective_permission_codes(request.user)
     user_ids = subordinate_user_ids(request.user)
     user_ids.add(request.user.pk)
     if request.user.is_superuser:
@@ -142,14 +195,26 @@ def studies_page(request):
             (SurveyAttempt.Status.OVER_QUOTA, "Over quota"),
             (SurveyAttempt.Status.QUALITY_TERMINATED, "Quality terminated"),
         ],
-        "can_export": has_function_access(request.user, "attempts.export"),
+        "study_filters": _component_access(codes, STUDY_FILTER_PERMISSIONS),
+        "study_columns": _permitted_columns(codes, STUDY_COLUMN_PERMISSIONS),
+        "study_column_count": max(1, len(_permitted_columns(codes, STUDY_COLUMN_PERMISSIONS))),
+        "can_export": "attempts.export" in codes,
+        "can_change_study_page_size": "studies.control.page_size" in codes,
+        "can_paginate_studies": "studies.control.pagination" in codes,
     })
 
 
 @function_permission_required("user_hits.view")
 def user_hits_page(request):
+    codes = effective_permission_codes(request.user)
     return render(request, "surveys/user_hits.html", {
         "active_page": "user-hits",
+        "hit_filters": _component_access(codes, USER_HIT_FILTER_PERMISSIONS),
+        "hit_columns": _permitted_columns(codes, USER_HIT_COLUMN_PERMISSIONS),
+        "hit_column_count": max(1, len(_permitted_columns(codes, USER_HIT_COLUMN_PERMISSIONS))),
+        "can_view_hit_summary": "user_hits.summary" in codes,
+        "can_change_hit_page_size": "user_hits.control.page_size" in codes,
+        "can_paginate_hits": "user_hits.control.pagination" in codes,
         **user_hit_filter_options(request.user),
     })
 
@@ -488,6 +553,13 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         return "survey_details.view" if self.action in {"retrieve", "quotas", "targeting"} else "projects.view"
 
     def filter_queryset(self, queryset):
+        _enforce_query_permissions(self.request, {
+            "projects.filter.search": ("search",),
+            "projects.filter.country": ("country",),
+            "projects.filter.status": ("status",),
+            "projects.filter.client": ("company",),
+            "projects.filter.date": ("created_from", "created_to", "modified_from", "modified_to"),
+        })
         cpi_ordering = self.request.query_params.get("ordering", "").lstrip("-") == "cpi"
         cpi_filtering = any(self.request.query_params.get(name) not in {None, ""} for name in ("min_cpi", "max_cpi"))
         if (cpi_ordering or cpi_filtering) and not has_function_access(self.request.user, "projects.filter.cpi"):
@@ -664,6 +736,15 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         visible_user_ids.add(self.request.user.pk)
         return queryset.filter(platform_user_id__in=visible_user_ids)
 
+    def filter_queryset(self, queryset):
+        _enforce_query_permissions(self.request, {
+            "studies.filter.search": ("search",),
+            "studies.filter.user": ("user",),
+            "studies.filter.status": ("status",),
+            "studies.filter.date": ("initiated_from", "initiated_to", "callback_from", "callback_to"),
+        })
+        return super().filter_queryset(queryset)
+
     @extend_schema(
         tags=["Survey attempts"],
         summary="Export all filtered survey attempt data",
@@ -727,6 +808,13 @@ class UserHitsAPIView(APIView):
         responses={200: UserHitsResponseSerializer},
     )
     def get(self, request):
+        _enforce_query_permissions(request, {
+            "user_hits.filter.search": ("search",),
+            "user_hits.filter.user": ("user",),
+            "user_hits.filter.branch": ("branch",),
+            "user_hits.filter.sub_branch": ("sub_branch",),
+            "user_hits.filter.date": ("from_date", "from_time", "to_date", "to_time"),
+        })
         try:
             rows, summary = aggregate_user_hits(request.user, request.query_params)
         except ValueError as exc:

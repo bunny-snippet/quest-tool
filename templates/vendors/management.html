@@ -4,47 +4,60 @@
 {% block header_title %}Vendor Management{% endblock %}
 {% block extra_head %}<link rel="stylesheet" href="{% static 'vendors/management.css' %}?v=2">{% endblock %}
 {% block content %}
+{{ vendor_columns|json_script:"vendorColumnAccess" }}
+{{ client_columns|json_script:"clientAllocationColumnAccess" }}
+{{ vendor_project_columns|json_script:"projectAllocationColumnAccess" }}
+{{ api_columns|json_script:"apiKeyColumnAccess" }}
 <section class="page-intro vendor-intro">
   <div><p class="eyebrow">Commercial access & capacity</p><h1>Vendor operations</h1><p>Control client visibility, CPI policy and quantity without changing the source inventory.</p></div>
-  {% if can_manage_vendors %}<a class="primary-button" href="{% url 'access-control' %}?open=user">Create vendor <span>+</span></a>{% endif %}
+  {% if can_create_vendor %}<a class="primary-button" href="{% url 'access-control' %}?open=user">Create vendor <span>+</span></a>{% endif %}
 </section>
 
-<section class="vendor-overview" aria-label="Vendor overview">
+{% if can_view_vendor_summary %}<section class="vendor-overview" aria-label="Vendor overview">
   <article><span class="vendor-metric-icon vendors">V</span><div><small>Vendors</small><strong id="vendorCount">—</strong><em>Internal and external</em></div></article>
   <article><span class="vendor-metric-icon clients">C</span><div><small>Client grants</small><strong id="allocationCount">—</strong><em>Active assignments</em></div></article>
   <article><span class="vendor-metric-icon capacity">Q</span><div><small>Available quantity</small><strong id="remainingQuantity">—</strong><em>Across visible clients</em></div></article>
   <article><span class="vendor-metric-icon rules">P</span><div><small>Allocated projects</small><strong id="surveyRuleCount">—</strong><em>Visible project caps</em></div></article>
-</section>
+</section>{% endif %}
 
-<section class="vendor-workspace" id="vendorWorkspace" data-view-vendors="{{ can_view_vendors|yesno:'true,false' }}" data-view-allocations="{{ can_view_allocations|yesno:'true,false' }}" data-manage-vendors="{{ can_manage_vendors|yesno:'true,false' }}" data-manage-allocations="{{ can_manage_allocations|yesno:'true,false' }}">
+<section class="vendor-workspace" id="vendorWorkspace"
+  data-view-vendors="{{ can_view_vendors|yesno:'true,false' }}"
+  data-view-client-allocations="{{ can_view_client_allocations|yesno:'true,false' }}"
+  data-view-project-allocations="{{ can_view_project_allocations|yesno:'true,false' }}"
+  data-view-api-keys="{{ can_view_api_keys|yesno:'true,false' }}"
+  data-edit-policy="{{ can_edit_vendor_policy|yesno:'true,false' }}"
+  data-allocate-client="{{ can_allocate_client|yesno:'true,false' }}"
+  data-allocate-project="{{ can_allocate_project|yesno:'true,false' }}"
+  data-create-api-key="{{ can_create_api_key|yesno:'true,false' }}"
+  data-revoke-api-key="{{ can_revoke_api_key|yesno:'true,false' }}">
   <div class="vendor-tabs" role="tablist" aria-label="Vendor management sections">
-    {% if can_view_vendors %}<button type="button" class="active" data-vendor-tab="vendors" role="tab">Vendors</button>{% endif %}
-    {% if can_view_allocations %}<button type="button" {% if not can_view_vendors %}class="active"{% endif %} data-vendor-tab="clients" role="tab">Client allocations</button>
-    <button type="button" data-vendor-tab="surveys" role="tab">Project allocations</button>{% endif %}
-    {% if can_manage_vendors %}<button type="button" data-vendor-tab="api-keys" role="tab">API keys</button>{% endif %}
+    {% if can_view_vendors %}<button type="button" {% if first_vendor_tab == 'vendors' %}class="active"{% endif %} data-vendor-tab="vendors" role="tab">Vendors</button>{% endif %}
+    {% if can_view_client_allocations %}<button type="button" {% if first_vendor_tab == 'clients' %}class="active"{% endif %} data-vendor-tab="clients" role="tab">Client allocations</button>{% endif %}
+    {% if can_view_project_allocations %}<button type="button" {% if first_vendor_tab == 'surveys' %}class="active"{% endif %} data-vendor-tab="surveys" role="tab">Project allocations</button>{% endif %}
+    {% if can_view_api_keys %}<button type="button" {% if first_vendor_tab == 'api-keys' %}class="active"{% endif %} data-vendor-tab="api-keys" role="tab">API keys</button>{% endif %}
   </div>
 
-  {% if can_view_vendors %}<section class="vendor-tab-panel active" data-vendor-panel="vendors">
+  {% if can_view_vendors %}<section class="vendor-tab-panel {% if first_vendor_tab == 'vendors' %}active{% endif %}" data-vendor-panel="vendors" {% if first_vendor_tab != 'vendors' %}hidden{% endif %}>
     <header class="vendor-panel-head"><div><h2>Commercial policies</h2><p>Internal vendors always retain source CPI. External vendors use the configured cut.</p></div></header>
-    <div class="vendor-table-wrap"><table class="vendor-table"><thead><tr><th>Vendor</th><th>Type</th><th>Default CPI</th><th>Clients</th><th>Status</th><th></th></tr></thead><tbody id="vendorRows"><tr><td colspan="6"><div class="vendor-loading"><i></i>Loading vendors…</div></td></tr></tbody></table></div>
+    <div class="vendor-table-wrap"><table class="vendor-table"><thead><tr>{% if 'name' in vendor_columns %}<th>Vendor</th>{% endif %}{% if 'type' in vendor_columns %}<th>Type</th>{% endif %}{% if 'cpi' in vendor_columns %}<th>Default CPI</th>{% endif %}{% if 'clients' in vendor_columns %}<th>Clients</th>{% endif %}{% if 'status' in vendor_columns %}<th>Status</th>{% endif %}{% if 'actions' in vendor_columns %}<th><span class="sr-only">Actions</span></th>{% endif %}</tr></thead><tbody id="vendorRows"><tr><td colspan="{{ vendor_column_count }}"><div class="vendor-loading"><i></i>Loading vendors…</div></td></tr></tbody></table></div>
     <div class="vendor-cards" id="vendorCards"></div>
   </section>{% endif %}
 
-  {% if can_view_allocations %}<section class="vendor-tab-panel {% if not can_view_vendors %}active{% endif %}" data-vendor-panel="clients" {% if can_view_vendors %}hidden{% endif %}>
-    <header class="vendor-panel-head"><div><h2>Client allocations</h2><p>A client grant controls visibility, total capacity and the optional client-level CPI cut.</p></div>{% if can_manage_allocations %}<button class="primary-button compact" type="button" data-create-allocation="client">Allocate client <span>+</span></button>{% endif %}</header>
-    <div class="vendor-table-wrap"><table class="vendor-table"><thead><tr><th>Vendor</th><th>Client</th><th>Quantity</th><th>CPI cut</th><th>Active window</th><th></th></tr></thead><tbody id="clientAllocationRows"></tbody></table></div>
+  {% if can_view_client_allocations %}<section class="vendor-tab-panel {% if first_vendor_tab == 'clients' %}active{% endif %}" data-vendor-panel="clients" {% if first_vendor_tab != 'clients' %}hidden{% endif %}>
+    <header class="vendor-panel-head"><div><h2>Client allocations</h2><p>A client grant controls visibility, total capacity and the optional client-level CPI cut.</p></div>{% if can_allocate_client %}<button class="primary-button compact" type="button" data-create-allocation="client">Allocate client <span>+</span></button>{% endif %}</header>
+    <div class="vendor-table-wrap"><table class="vendor-table"><thead><tr>{% if 'vendor' in client_columns %}<th>Vendor</th>{% endif %}{% if 'client' in client_columns %}<th>Client</th>{% endif %}{% if 'quantity' in client_columns %}<th>Quantity</th>{% endif %}{% if 'cpi' in client_columns %}<th>CPI cut</th>{% endif %}{% if 'window' in client_columns %}<th>Active window</th>{% endif %}{% if 'actions' in client_columns %}<th><span class="sr-only">Actions</span></th>{% endif %}</tr></thead><tbody id="clientAllocationRows"></tbody></table></div>
     <div class="vendor-cards" id="clientAllocationCards"></div>
-  </section>
+  </section>{% endif %}
 
-  <section class="vendor-tab-panel" data-vendor-panel="surveys" hidden>
-    <header class="vendor-panel-head"><div><h2>Project allocations</h2><p>Only projects allocated here appear in the vendor panel/API; every project has its own complete cap.</p></div>{% if can_manage_allocations %}<button class="primary-button compact" type="button" data-create-allocation="survey">Allocate project <span>+</span></button>{% endif %}</header>
-    <div class="vendor-table-wrap"><table class="vendor-table"><thead><tr><th>Vendor</th><th>Survey</th><th>Client</th><th>Quantity</th><th>CPI cut</th><th></th></tr></thead><tbody id="surveyAllocationRows"></tbody></table></div>
+  {% if can_view_project_allocations %}<section class="vendor-tab-panel {% if first_vendor_tab == 'surveys' %}active{% endif %}" data-vendor-panel="surveys" {% if first_vendor_tab != 'surveys' %}hidden{% endif %}>
+    <header class="vendor-panel-head"><div><h2>Project allocations</h2><p>Only projects allocated here appear in the vendor panel/API; every project has its own complete cap.</p></div>{% if can_allocate_project %}<button class="primary-button compact" type="button" data-create-allocation="survey">Allocate project <span>+</span></button>{% endif %}</header>
+    <div class="vendor-table-wrap"><table class="vendor-table"><thead><tr>{% if 'vendor' in vendor_project_columns %}<th>Vendor</th>{% endif %}{% if 'survey' in vendor_project_columns %}<th>Survey</th>{% endif %}{% if 'client' in vendor_project_columns %}<th>Client</th>{% endif %}{% if 'quantity' in vendor_project_columns %}<th>Quantity</th>{% endif %}{% if 'cpi' in vendor_project_columns %}<th>CPI cut</th>{% endif %}{% if 'actions' in vendor_project_columns %}<th><span class="sr-only">Actions</span></th>{% endif %}</tr></thead><tbody id="surveyAllocationRows"></tbody></table></div>
     <div class="vendor-cards" id="surveyAllocationCards"></div>
   </section>{% endif %}
 
-  {% if can_manage_vendors %}<section class="vendor-tab-panel" data-vendor-panel="api-keys" hidden>
-    <header class="vendor-panel-head"><div><h2>External vendor API keys</h2><p>Keys inherit the vendor's exact permissions, client grants, survey rules and CPI cuts.</p></div><button class="primary-button compact" type="button" data-create-api-key>Generate key <span>+</span></button></header>
-    <div class="vendor-table-wrap"><table class="vendor-table"><thead><tr><th>Vendor</th><th>Key</th><th>Created</th><th>Last used</th><th>Expires</th><th></th></tr></thead><tbody id="apiKeyRows"></tbody></table></div>
+  {% if can_view_api_keys %}<section class="vendor-tab-panel {% if first_vendor_tab == 'api-keys' %}active{% endif %}" data-vendor-panel="api-keys" {% if first_vendor_tab != 'api-keys' %}hidden{% endif %}>
+    <header class="vendor-panel-head"><div><h2>External vendor API keys</h2><p>Keys inherit the vendor's exact permissions, client grants, survey rules and CPI cuts.</p></div>{% if can_create_api_key %}<button class="primary-button compact" type="button" data-create-api-key>Generate key <span>+</span></button>{% endif %}</header>
+    <div class="vendor-table-wrap"><table class="vendor-table"><thead><tr>{% if 'vendor' in api_columns %}<th>Vendor</th>{% endif %}{% if 'key' in api_columns %}<th>Key</th>{% endif %}{% if 'created' in api_columns %}<th>Created</th>{% endif %}{% if 'last_used' in api_columns %}<th>Last used</th>{% endif %}{% if 'expires' in api_columns %}<th>Expires</th>{% endif %}{% if 'actions' in api_columns %}<th><span class="sr-only">Actions</span></th>{% endif %}</tr></thead><tbody id="apiKeyRows"></tbody></table></div>
     <div class="vendor-cards" id="apiKeyCards"></div>
   </section>{% endif %}
 </section>
@@ -128,4 +141,4 @@
   </form>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'vendors/management.js' %}?v=3" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'vendors/management.js' %}?v=4" defer></script>{% endblock %}

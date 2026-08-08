@@ -213,7 +213,7 @@ class VendorFoundationTests(TestCase):
             quantity_limit=3,
             created_by=self.owner,
         )
-        for code in ["clients.view", "vendors.view", "allocations.view", "allocations.manage"]:
+        for code in ["clients.view", "vendors.view", "vendors.tab.clients"]:
             UserFunctionOverride.objects.create(
                 user=self.external,
                 function=AccessFunction.objects.get(code=code),
@@ -279,19 +279,23 @@ class VendorFoundationTests(TestCase):
         self.assertEqual(ids, set())
 
     def test_allocation_manager_can_open_workspace_and_use_safe_options(self):
-        UserFunctionOverride.objects.create(
-            user=self.employee,
-            function=AccessFunction.objects.get(code="allocations.manage"),
-            effect=UserFunctionOverride.Effect.ALLOW,
-        )
+        for code in ("allocations.view", "vendors.tab.clients", "vendors.column.client.client"):
+            UserFunctionOverride.objects.create(
+                user=self.employee,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
         self.client.force_login(self.employee)
         page = self.client.get(reverse("vendor-management"))
         self.assertEqual(page.status_code, 200)
         self.assertNotContains(page, "Commercial policies")
+        self.assertContains(page, "Client allocations")
+        self.assertNotContains(page, "Project allocations")
         options = self.client.get(reverse("vendor-management-options"))
         self.assertEqual(options.status_code, 200)
         self.assertEqual(len(options.json()["vendors"]), 2)
         self.assertIn(self.client_record.pk, {item["id"] for item in options.json()["clients"]})
+        self.assertEqual(self.client.get(reverse("vendor-survey-allocation-list")).status_code, 403)
 
     def test_vendor_management_uses_separate_task_modals(self):
         self.client.force_login(self.owner)
@@ -411,11 +415,12 @@ class VendorFoundationTests(TestCase):
         )
 
     def test_vendor_scoped_admin_cannot_manage_owner_api_keys(self):
-        UserFunctionOverride.objects.create(
-            user=self.internal,
-            function=AccessFunction.objects.get(code="vendors.manage"),
-            effect=UserFunctionOverride.Effect.ALLOW,
-        )
+        for code in ("vendors.tab.api_keys", "vendors.action.create_api_key"):
+            UserFunctionOverride.objects.create(
+                user=self.internal,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
         internal_api = APIClient()
         internal_api.force_authenticate(self.internal)
         listing = internal_api.get(reverse("vendor-api-key-list"))

@@ -13,10 +13,20 @@
   let form = null;
   let modal = null;
   let errorBox = null;
+  const readColumns = (id) => new Set(JSON.parse(document.getElementById(id)?.textContent || '[]'));
+  const vendorColumns = readColumns('vendorColumnAccess');
+  const clientColumns = readColumns('clientAllocationColumnAccess');
+  const projectColumns = readColumns('projectAllocationColumnAccess');
+  const apiColumns = readColumns('apiKeyColumnAccess');
   const canViewVendors = workspace.dataset.viewVendors === 'true';
-  const canViewAllocations = workspace.dataset.viewAllocations === 'true';
-  const canManageVendors = workspace.dataset.manageVendors === 'true';
-  const canManageAllocations = workspace.dataset.manageAllocations === 'true';
+  const canViewClientAllocations = workspace.dataset.viewClientAllocations === 'true';
+  const canViewProjectAllocations = workspace.dataset.viewProjectAllocations === 'true';
+  const canViewApiKeys = workspace.dataset.viewApiKeys === 'true';
+  const canEditPolicy = workspace.dataset.editPolicy === 'true';
+  const canAllocateClient = workspace.dataset.allocateClient === 'true';
+  const canAllocateProject = workspace.dataset.allocateProject === 'true';
+  const canCreateApiKey = workspace.dataset.createApiKey === 'true';
+  const canRevokeApiKey = workspace.dataset.revokeApiKey === 'true';
   const state = {
     vendors: [], profiles: [], clients: [], clientAllocations: [], surveyAllocations: [], apiKeys: [],
     selectedSurvey: null, searchTimer: null,
@@ -156,10 +166,10 @@
   }
 
   function renderOverview() {
-    $('#vendorCount').textContent = number(state.vendors.length);
-    $('#allocationCount').textContent = number(state.clientAllocations.filter((row) => row.is_active).length);
-    $('#remainingQuantity').textContent = number(state.clientAllocations.reduce((total, row) => total + Number(row.remaining_quantity || 0), 0));
-    $('#surveyRuleCount').textContent = number(state.surveyAllocations.length);
+    if ($('#vendorCount')) $('#vendorCount').textContent = number(state.vendors.length);
+    if ($('#allocationCount')) $('#allocationCount').textContent = number(state.clientAllocations.filter((row) => row.is_active).length);
+    if ($('#remainingQuantity')) $('#remainingQuantity').textContent = number(state.clientAllocations.reduce((total, row) => total + Number(row.remaining_quantity || 0), 0));
+    if ($('#surveyRuleCount')) $('#surveyRuleCount').textContent = number(state.surveyAllocations.length);
   }
 
   function renderVendors() {
@@ -168,32 +178,80 @@
     const rows = state.vendors.map((vendor) => {
       const profile = profiles.get(Number(vendor.id));
       const cut = vendor.account_type === 'internal_vendor' ? '0.00' : (profile?.default_cpi_cut_percent ?? vendor.default_cpi_cut_percent ?? '0.00');
-      return `<tr><td>${vendorIdentity(vendor)}</td><td>${typeBadge(vendor.account_type)}</td><td><div class="vendor-money"><strong>${escapeHtml(cut)}%</strong><small>${escapeHtml(profile?.currency || vendor.currency || 'USD')} policy</small></div></td><td>${number(vendor.allocation_count)}</td><td>${stateBadge(vendor.is_active && (profile?.is_active ?? true))}<small class="delivery-label">${escapeHtml(deliveryLabel(profile?.delivery_mode || vendor.delivery_mode))}</small></td><td>${actionButton('policy', vendor.id, canManageVendors)}</td></tr>`;
-    }).join('') || emptyRow(6, 'No internal or external vendors have been created yet.');
+      const cells = [];
+      if (vendorColumns.has('name')) cells.push(`<td>${vendorIdentity(vendor)}</td>`);
+      if (vendorColumns.has('type')) cells.push(`<td>${typeBadge(vendor.account_type)}</td>`);
+      if (vendorColumns.has('cpi')) cells.push(`<td><div class="vendor-money"><strong>${escapeHtml(cut)}%</strong><small>${escapeHtml(profile?.currency || vendor.currency || 'USD')} policy</small></div></td>`);
+      if (vendorColumns.has('clients')) cells.push(`<td>${number(vendor.allocation_count)}</td>`);
+      if (vendorColumns.has('status')) cells.push(`<td>${stateBadge(vendor.is_active && (profile?.is_active ?? true))}<small class="delivery-label">${escapeHtml(deliveryLabel(profile?.delivery_mode || vendor.delivery_mode))}</small></td>`);
+      if (vendorColumns.has('actions')) cells.push(`<td>${actionButton('policy', vendor.id, canEditPolicy)}</td>`);
+      return `<tr>${cells.join('') || '<td><div class="vendor-empty">No vendor columns assigned.</div></td>'}</tr>`;
+    }).join('') || emptyRow(Math.max(1, vendorColumns.size), 'No internal or external vendors have been created yet.');
     $('#vendorRows').innerHTML = rows;
     $('#vendorCards').innerHTML = state.vendors.map((vendor) => {
       const profile = profiles.get(Number(vendor.id));
       const cut = vendor.account_type === 'internal_vendor' ? '0.00' : (profile?.default_cpi_cut_percent ?? '0.00');
-      return `<article class="vendor-card"><div class="vendor-card-head">${vendorIdentity(vendor)}${typeBadge(vendor.account_type)}</div><div class="vendor-card-grid"><span>Default CPI cut<strong>${escapeHtml(cut)}%</strong></span><span>Client grants<strong>${number(vendor.allocation_count)}</strong></span><span>Delivery<strong>${escapeHtml(deliveryLabel(profile?.delivery_mode || vendor.delivery_mode))}</strong></span><span>API keys<strong>${number(vendor.api_key_count)}</strong></span></div>${actionButton('policy', vendor.id, canManageVendors)}</article>`;
+      const head = `${vendorColumns.has('name') ? vendorIdentity(vendor) : ''}${vendorColumns.has('type') ? typeBadge(vendor.account_type) : ''}`;
+      const details = `${vendorColumns.has('cpi') ? `<span>Default CPI cut<strong>${escapeHtml(cut)}%</strong></span>` : ''}${vendorColumns.has('clients') ? `<span>Client grants<strong>${number(vendor.allocation_count)}</strong></span>` : ''}${vendorColumns.has('status') ? `<span>Delivery<strong>${escapeHtml(deliveryLabel(profile?.delivery_mode || vendor.delivery_mode))}</strong></span>` : ''}`;
+      return `<article class="vendor-card">${head ? `<div class="vendor-card-head">${head}</div>` : ''}${details ? `<div class="vendor-card-grid">${details}</div>` : ''}${vendorColumns.has('actions') ? actionButton('policy', vendor.id, canEditPolicy) : ''}</article>`;
     }).join('');
   }
 
   function renderClientAllocations() {
     if (!$('#clientAllocationRows')) return;
-    $('#clientAllocationRows').innerHTML = state.clientAllocations.map((row) => `<tr><td><strong>${escapeHtml(row.vendor_name)}</strong><br>${typeBadge(row.account_type)}</td><td><strong>${escapeHtml(row.client_name)}</strong><br><small>${stateBadge(row.is_active)}</small></td><td>${quantityMarkup(row)}</td><td>${cutMarkup(row, 'vendor default')}</td><td><div class="vendor-window"><span>${dateTime(row.starts_at)}</span><span>to ${dateTime(row.ends_at)}</span></div></td><td>${actionButton('client', row.id, canManageAllocations)}</td></tr>`).join('') || emptyRow(6, 'No client allocations yet.');
-    $('#clientAllocationCards').innerHTML = state.clientAllocations.map((row) => `<article class="vendor-card"><div class="vendor-card-head"><div><strong>${escapeHtml(row.vendor_name)}</strong><br><small>${escapeHtml(row.client_name)}</small></div>${stateBadge(row.is_active)}</div><div class="vendor-card-grid"><span>Available<strong>${number(row.remaining_quantity)}</strong></span><span>Limit<strong>${number(row.quantity_limit)}</strong></span><span>CPI cut<strong>${escapeHtml(row.effective_cpi_cut_percent)}%</strong></span><span>Type<strong>${escapeHtml(accountLabel(row.account_type))}</strong></span></div>${quantityMarkup(row)}${actionButton('client', row.id, canManageAllocations)}</article>`).join('');
+    $('#clientAllocationRows').innerHTML = state.clientAllocations.map((row) => {
+      const cells = [];
+      if (clientColumns.has('vendor')) cells.push(`<td><strong>${escapeHtml(row.vendor_name)}</strong><br>${typeBadge(row.account_type)}</td>`);
+      if (clientColumns.has('client')) cells.push(`<td><strong>${escapeHtml(row.client_name)}</strong><br><small>${stateBadge(row.is_active)}</small></td>`);
+      if (clientColumns.has('quantity')) cells.push(`<td>${quantityMarkup(row)}</td>`);
+      if (clientColumns.has('cpi')) cells.push(`<td>${cutMarkup(row, 'vendor default')}</td>`);
+      if (clientColumns.has('window')) cells.push(`<td><div class="vendor-window"><span>${dateTime(row.starts_at)}</span><span>to ${dateTime(row.ends_at)}</span></div></td>`);
+      if (clientColumns.has('actions')) cells.push(`<td>${actionButton('client', row.id, canAllocateClient)}</td>`);
+      return `<tr>${cells.join('') || '<td><div class="vendor-empty">No client-allocation columns assigned.</div></td>'}</tr>`;
+    }).join('') || emptyRow(Math.max(1, clientColumns.size), 'No client allocations yet.');
+    $('#clientAllocationCards').innerHTML = state.clientAllocations.map((row) => {
+      const head = `${clientColumns.has('vendor') ? `<strong>${escapeHtml(row.vendor_name)}</strong>` : ''}${clientColumns.has('client') ? `<small>${escapeHtml(row.client_name)}</small>` : ''}`;
+      const details = `${clientColumns.has('quantity') ? `<span>Available<strong>${number(row.remaining_quantity)}</strong></span><span>Limit<strong>${number(row.quantity_limit)}</strong></span>` : ''}${clientColumns.has('cpi') ? `<span>CPI cut<strong>${escapeHtml(row.effective_cpi_cut_percent)}%</strong></span>` : ''}${clientColumns.has('vendor') ? `<span>Type<strong>${escapeHtml(accountLabel(row.account_type))}</strong></span>` : ''}${clientColumns.has('window') ? `<span>Window<strong>${dateTime(row.starts_at)} to ${dateTime(row.ends_at)}</strong></span>` : ''}`;
+      return `<article class="vendor-card">${head ? `<div class="vendor-card-head"><div>${head}</div>${clientColumns.has('client') ? stateBadge(row.is_active) : ''}</div>` : ''}${details ? `<div class="vendor-card-grid">${details}</div>` : ''}${clientColumns.has('quantity') ? quantityMarkup(row) : ''}${clientColumns.has('actions') ? actionButton('client', row.id, canAllocateClient) : ''}</article>`;
+    }).join('');
   }
 
   function renderSurveyAllocations() {
     if (!$('#surveyAllocationRows')) return;
-    $('#surveyAllocationRows').innerHTML = state.surveyAllocations.map((row) => `<tr><td><strong>${escapeHtml(row.vendor_name)}</strong></td><td><strong>${escapeHtml(row.survey_local_id)}</strong><br><small>#${escapeHtml(row.survey_source_id)} · ${escapeHtml(row.survey_name || 'Survey')}</small></td><td>${escapeHtml(row.client_name)}</td><td>${quantityMarkup(row)}</td><td>${cutMarkup(row, 'client policy')}</td><td>${actionButton('survey', row.id, canManageAllocations)}</td></tr>`).join('') || emptyRow(6, 'No projects allocated. This vendor cannot see or start any client project yet.');
-    $('#surveyAllocationCards').innerHTML = state.surveyAllocations.map((row) => `<article class="vendor-card"><div class="vendor-card-head"><div><strong>${escapeHtml(row.survey_local_id)}</strong><br><small>${escapeHtml(row.vendor_name)} · ${escapeHtml(row.client_name)}</small></div>${stateBadge(row.is_active)}</div><div class="vendor-card-grid"><span>Survey ID<strong>${escapeHtml(row.survey_source_id)}</strong></span><span>CPI cut<strong>${escapeHtml(row.effective_cpi_cut_percent)}%</strong></span><span>Available<strong>${number(row.remaining_quantity)}</strong></span><span>Limit<strong>${number(row.quantity_limit)}</strong></span></div>${actionButton('survey', row.id, canManageAllocations)}</article>`).join('');
+    $('#surveyAllocationRows').innerHTML = state.surveyAllocations.map((row) => {
+      const cells = [];
+      if (projectColumns.has('vendor')) cells.push(`<td><strong>${escapeHtml(row.vendor_name)}</strong></td>`);
+      if (projectColumns.has('survey')) cells.push(`<td><strong>${escapeHtml(row.survey_local_id)}</strong><br><small>#${escapeHtml(row.survey_source_id)} · ${escapeHtml(row.survey_name || 'Survey')}</small></td>`);
+      if (projectColumns.has('client')) cells.push(`<td>${escapeHtml(row.client_name)}</td>`);
+      if (projectColumns.has('quantity')) cells.push(`<td>${quantityMarkup(row)}</td>`);
+      if (projectColumns.has('cpi')) cells.push(`<td>${cutMarkup(row, 'client policy')}</td>`);
+      if (projectColumns.has('actions')) cells.push(`<td>${actionButton('survey', row.id, canAllocateProject)}</td>`);
+      return `<tr>${cells.join('') || '<td><div class="vendor-empty">No project-allocation columns assigned.</div></td>'}</tr>`;
+    }).join('') || emptyRow(Math.max(1, projectColumns.size), 'No projects allocated. This vendor cannot see or start any client project yet.');
+    $('#surveyAllocationCards').innerHTML = state.surveyAllocations.map((row) => {
+      const head = `${projectColumns.has('survey') ? `<strong>${escapeHtml(row.survey_local_id)}</strong>` : ''}${projectColumns.has('vendor') || projectColumns.has('client') ? `<small>${projectColumns.has('vendor') ? escapeHtml(row.vendor_name) : ''}${projectColumns.has('vendor') && projectColumns.has('client') ? ' · ' : ''}${projectColumns.has('client') ? escapeHtml(row.client_name) : ''}</small>` : ''}`;
+      const details = `${projectColumns.has('survey') ? `<span>Survey ID<strong>${escapeHtml(row.survey_source_id)}</strong></span>` : ''}${projectColumns.has('cpi') ? `<span>CPI cut<strong>${escapeHtml(row.effective_cpi_cut_percent)}%</strong></span>` : ''}${projectColumns.has('quantity') ? `<span>Available<strong>${number(row.remaining_quantity)}</strong></span><span>Limit<strong>${number(row.quantity_limit)}</strong></span>` : ''}`;
+      return `<article class="vendor-card">${head ? `<div class="vendor-card-head"><div>${head}</div>${stateBadge(row.is_active)}</div>` : ''}${details ? `<div class="vendor-card-grid">${details}</div>` : ''}${projectColumns.has('actions') ? actionButton('survey', row.id, canAllocateProject) : ''}</article>`;
+    }).join('');
   }
 
   function renderApiKeys() {
     if (!$('#apiKeyRows')) return;
-    $('#apiKeyRows').innerHTML = state.apiKeys.map((key) => `<tr><td><strong>${escapeHtml(key.vendor_name)}</strong><br>${typeBadge(key.account_type)}</td><td><div class="vendor-money"><strong>${escapeHtml(key.name)}</strong><small>${escapeHtml(key.masked_key)}</small></div></td><td>${dateTime(key.created_at)}</td><td>${key.last_used_at ? dateTime(key.last_used_at) : 'Never'}</td><td>${key.expires_at ? dateTime(key.expires_at) : 'No expiry'}</td><td>${key.is_active ? `<button class="vendor-action danger" type="button" data-revoke-api-key="${key.id}">Revoke</button>` : stateBadge(false)}</td></tr>`).join('') || emptyRow(6, 'No API keys issued yet.');
-    $('#apiKeyCards').innerHTML = state.apiKeys.map((key) => `<article class="vendor-card"><div class="vendor-card-head"><div><strong>${escapeHtml(key.name)}</strong><br><small>${escapeHtml(key.vendor_name)}</small></div>${key.is_active ? stateBadge(true) : stateBadge(false)}</div><div class="vendor-card-grid"><span>Key<strong>${escapeHtml(key.masked_key)}</strong></span><span>Last used<strong>${key.last_used_at ? dateTime(key.last_used_at) : 'Never'}</strong></span><span>Created<strong>${dateTime(key.created_at)}</strong></span><span>Expires<strong>${key.expires_at ? dateTime(key.expires_at) : 'Never'}</strong></span></div>${key.is_active ? `<button class="vendor-action danger" type="button" data-revoke-api-key="${key.id}">Revoke key</button>` : ''}</article>`).join('');
+    $('#apiKeyRows').innerHTML = state.apiKeys.map((key) => {
+      const cells = [];
+      if (apiColumns.has('vendor')) cells.push(`<td><strong>${escapeHtml(key.vendor_name)}</strong><br>${typeBadge(key.account_type)}</td>`);
+      if (apiColumns.has('key')) cells.push(`<td><div class="vendor-money"><strong>${escapeHtml(key.name)}</strong><small>${escapeHtml(key.masked_key)}</small></div></td>`);
+      if (apiColumns.has('created')) cells.push(`<td>${dateTime(key.created_at)}</td>`);
+      if (apiColumns.has('last_used')) cells.push(`<td>${key.last_used_at ? dateTime(key.last_used_at) : 'Never'}</td>`);
+      if (apiColumns.has('expires')) cells.push(`<td>${key.expires_at ? dateTime(key.expires_at) : 'No expiry'}</td>`);
+      if (apiColumns.has('actions')) cells.push(`<td>${key.is_active && canRevokeApiKey ? `<button class="vendor-action danger" type="button" data-revoke-api-key="${key.id}">Revoke</button>` : stateBadge(false)}</td>`);
+      return `<tr>${cells.join('') || '<td><div class="vendor-empty">No API-key columns assigned.</div></td>'}</tr>`;
+    }).join('') || emptyRow(Math.max(1, apiColumns.size), 'No API keys issued yet.');
+    $('#apiKeyCards').innerHTML = state.apiKeys.map((key) => {
+      const head = `${apiColumns.has('key') ? `<strong>${escapeHtml(key.name)}</strong>` : ''}${apiColumns.has('vendor') ? `<small>${escapeHtml(key.vendor_name)}</small>` : ''}`;
+      const details = `${apiColumns.has('key') ? `<span>Key<strong>${escapeHtml(key.masked_key)}</strong></span>` : ''}${apiColumns.has('last_used') ? `<span>Last used<strong>${key.last_used_at ? dateTime(key.last_used_at) : 'Never'}</strong></span>` : ''}${apiColumns.has('created') ? `<span>Created<strong>${dateTime(key.created_at)}</strong></span>` : ''}${apiColumns.has('expires') ? `<span>Expires<strong>${key.expires_at ? dateTime(key.expires_at) : 'Never'}</strong></span>` : ''}`;
+      return `<article class="vendor-card">${head ? `<div class="vendor-card-head"><div>${head}</div>${key.is_active ? stateBadge(true) : stateBadge(false)}</div>` : ''}${details ? `<div class="vendor-card-grid">${details}</div>` : ''}${apiColumns.has('actions') && key.is_active && canRevokeApiKey ? `<button class="vendor-action danger" type="button" data-revoke-api-key="${key.id}">Revoke key</button>` : ''}</article>`;
+    }).join('');
   }
 
   function render() {
@@ -358,13 +416,15 @@
   }
 
   async function reloadData() {
+    const needsOptions = canViewVendors || canViewClientAllocations || canViewProjectAllocations || canViewApiKeys ||
+      canEditPolicy || canAllocateClient || canAllocateProject || canCreateApiKey || canRevokeApiKey;
     const [options, vendors, profiles, clientAllocations, surveyAllocations, apiKeys] = await Promise.all([
-      api('/api/v1/vendors/management-options/'),
+      needsOptions ? api('/api/v1/vendors/management-options/') : Promise.resolve({ vendors: [], clients: [] }),
       canViewVendors ? fetchAll('/api/v1/vendors/directory/') : Promise.resolve(null),
       canViewVendors ? fetchAll('/api/v1/vendors/commercial-profiles/') : Promise.resolve([]),
-      canViewAllocations ? fetchAll('/api/v1/vendors/client-allocations/') : Promise.resolve([]),
-      canViewAllocations ? fetchAll('/api/v1/vendors/survey-allocations/') : Promise.resolve([]),
-      canManageVendors ? fetchAll('/api/v1/vendors/api-keys/') : Promise.resolve([]),
+      canViewClientAllocations ? fetchAll('/api/v1/vendors/client-allocations/') : Promise.resolve([]),
+      canViewProjectAllocations ? fetchAll('/api/v1/vendors/survey-allocations/') : Promise.resolve([]),
+      canViewApiKeys ? fetchAll('/api/v1/vendors/api-keys/') : Promise.resolve([]),
     ]);
     Object.assign(state, {
       vendors: vendors || options.vendors || [], profiles, clients: options.clients || [],
@@ -385,11 +445,11 @@
     const policy = event.target.closest('[data-edit-policy]');
     const client = event.target.closest('[data-edit-client]');
     const survey = event.target.closest('[data-edit-survey]');
-    if (policy) openPolicy(policy.dataset.editPolicy);
-    if (client) openClientAllocation(client.dataset.editClient);
-    if (survey) openSurveyAllocation(survey.dataset.editSurvey);
+    if (policy && canEditPolicy) openPolicy(policy.dataset.editPolicy);
+    if (client && canAllocateClient) openClientAllocation(client.dataset.editClient);
+    if (survey && canAllocateProject) openSurveyAllocation(survey.dataset.editSurvey);
     const revokeKey = event.target.closest('[data-revoke-api-key]');
-    if (revokeKey && confirm('Revoke this API key permanently?')) {
+    if (revokeKey && canRevokeApiKey && confirm('Revoke this API key permanently?')) {
       api(`/api/v1/vendors/api-keys/${revokeKey.dataset.revokeApiKey}/`, { method: 'DELETE' })
         .then(() => { toast('API key revoked.'); return reloadData(); })
         .catch((error) => toast(error.message, true));
