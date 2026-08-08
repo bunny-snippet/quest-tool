@@ -44,9 +44,27 @@
     </div>
   </div>
   {% if can_sort_cpi %}
-  <div class="field">
-    <label for="projectOrdering">CPI sorting</label>
-    <select id="projectOrdering"><option value="-source_modified_at">Recently updated</option><option value="-cpi">CPI: highest to lowest</option><option value="cpi">CPI: lowest to highest</option></select>
+  <div class="field cpi-filter-field" data-cpi-filter>
+    <label id="cpiFilterLabel">CPI sorting</label>
+    <div class="cpi-filter-select">
+      <button class="multi-trigger" id="cpiFilterTrigger" type="button" aria-labelledby="cpiFilterLabel" aria-controls="cpiFilterMenu" aria-expanded="false"><span>Recently updated</span><i>⌄</i></button>
+      <div class="cpi-filter-menu" id="cpiFilterMenu" hidden>
+        <div class="cpi-sort-options" role="radiogroup" aria-label="CPI sorting order">
+          <label><input type="radio" name="projectOrdering" value="-source_modified_at" data-label="Recently updated" checked><span>Recently updated</span></label>
+          <label><input type="radio" name="projectOrdering" value="-cpi" data-label="CPI: highest to lowest"><span>CPI: highest to lowest</span></label>
+          <label><input type="radio" name="projectOrdering" value="cpi" data-label="CPI: lowest to highest"><span>CPI: lowest to highest</span></label>
+        </div>
+        <div class="cpi-menu-range">
+          <div><strong>CPI range</strong><output id="cpiRangeValue"></output></div>
+          <div class="cpi-range-control">
+            <div class="cpi-range-track"><i id="cpiRangeFill"></i></div>
+            <input id="cpiMinRange" type="range" min="{{ cpi_min_bound }}" max="{{ cpi_max_bound }}" value="{{ cpi_min_bound }}" step="0.01" aria-label="Minimum CPI">
+            <input id="cpiMaxRange" type="range" min="{{ cpi_min_bound }}" max="{{ cpi_max_bound }}" value="{{ cpi_max_bound }}" step="0.01" aria-label="Maximum CPI">
+          </div>
+        </div>
+        <button class="cpi-filter-reset" id="resetCpiFilter" type="button">Reset CPI filter</button>
+      </div>
+    </div>
   </div>
   {% endif %}
   <div class="field">
@@ -119,4 +137,4 @@
   <div class="drawer-content" id="drawerContent"></div>
 </aside>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=10" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=11" defer></script>{% endblock %}
