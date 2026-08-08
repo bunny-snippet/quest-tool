@@ -306,12 +306,12 @@ class VendorClientAllocationViewSet(PermissionByActionMixin, viewsets.ModelViewS
 
 
 @extend_schema_view(
-    list=extend_schema(tags=["Vendors & allocations"], summary="List optional vendor survey overrides"),
-    create=extend_schema(tags=["Vendors & allocations"], summary="Create a survey-specific quantity or CPI override"),
-    retrieve=extend_schema(tags=["Vendors & allocations"], summary="Get a survey allocation override"),
-    update=extend_schema(tags=["Vendors & allocations"], summary="Replace a survey allocation override"),
-    partial_update=extend_schema(tags=["Vendors & allocations"], summary="Update a survey allocation override"),
-    destroy=extend_schema(tags=["Vendors & allocations"], summary="Deactivate a survey allocation override"),
+    list=extend_schema(tags=["Vendors & allocations"], summary="List vendor project allocations and complete caps"),
+    create=extend_schema(tags=["Vendors & allocations"], summary="Allocate a visible project with a complete cap"),
+    retrieve=extend_schema(tags=["Vendors & allocations"], summary="Get a project allocation"),
+    update=extend_schema(tags=["Vendors & allocations"], summary="Replace a project allocation"),
+    partial_update=extend_schema(tags=["Vendors & allocations"], summary="Update a project allocation or cap"),
+    destroy=extend_schema(tags=["Vendors & allocations"], summary="Deactivate a project allocation"),
 )
 class VendorSurveyAllocationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     queryset = VendorSurveyAllocation.objects.select_related(

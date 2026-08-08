@@ -115,6 +115,9 @@ class FunctionAccessTests(TestCase):
         page = self.client.get(reverse("access-control"))
         self.assertContains(page, "Add user")
         self.assertContains(page, "userModal")
+        self.assertContains(page, "projects.export")
+        self.assertContains(page, "projects.filter.cpi")
+        self.assertContains(page, "projects.column.completes")
 
 
 class DelegatedVendorTests(TestCase):

@@ -185,7 +185,7 @@ class VendorAPIKey(models.Model):
 
 
 class VendorClientAllocation(models.Model):
-    """Client visibility plus the vendor's total quantity ceiling for that client."""
+    """Client eligibility, shared complete ceiling and client-level CPI policy."""
 
     vendor = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -261,7 +261,7 @@ class VendorClientAllocation(models.Model):
 
 
 class VendorSurveyAllocation(models.Model):
-    """Per-survey quantity ceiling nested under a vendor's client allocation."""
+    """Explicit project visibility and complete cap under a client allocation."""
 
     client_allocation = models.ForeignKey(
         VendorClientAllocation,

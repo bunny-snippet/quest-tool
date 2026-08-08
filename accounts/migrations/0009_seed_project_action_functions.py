@@ -7,7 +7,7 @@ FUNCTIONS = (
         "Export projects CSV",
         "Projects · Actions",
         "Download all projects matching the current filters.",
-        ("employee", "team-lead", "manager", "admin", "super-admin"),
+        ("employee", "team-lead", "manager", "admin", "super-admin", "external-vendor"),
     ),
     (
         "projects.filter.cpi",
@@ -42,5 +42,5 @@ def remove_functions(apps, schema_editor):
 
 
 class Migration(migrations.Migration):
-    dependencies = [("accounts", "0006_seed_user_hits_function")]
+    dependencies = [("accounts", "0008_seed_vendor_account_roles")]
     operations = [migrations.RunPython(add_functions, remove_functions)]

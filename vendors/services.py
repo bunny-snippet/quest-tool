@@ -4,7 +4,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import Exists, F, OuterRef, Prefetch, Q
+from django.db.models import F, Prefetch, Q
 from django.utils import timezone
 
 from accounts.models import EmployeeProfile
@@ -25,7 +25,7 @@ class AllocationUnavailable(ValueError):
 class VendorSurveyContext:
     vendor_id: int
     client_allocation: VendorClientAllocation
-    survey_allocation: VendorSurveyAllocation | None
+    survey_allocation: VendorSurveyAllocation
     cpi_cut_percent: Decimal
     payable_cpi: Decimal | None
 
@@ -64,7 +64,7 @@ def _available_quantity_q(prefix="") -> Q:
 
 
 def scope_surveys_for_user(queryset, user):
-    """Apply client visibility and optional survey-rule availability for a vendor hierarchy."""
+    """Expose only explicitly allocated projects with client and project capacity."""
 
     vendor_id = vendor_scope_user_id(user)
     if not vendor_id:
@@ -82,34 +82,24 @@ def scope_surveys_for_user(queryset, user):
         .filter(_available_quantity_q())
         .select_related("vendor", "vendor__employee_profile", "vendor__vendor_commercial_profile", "client")
     )
-    survey_rules = VendorSurveyAllocation.objects.filter(
-        client_allocation__vendor_id=vendor_id,
-        survey_id=OuterRef("pk"),
-    )
-    available_rules = survey_rules.filter(is_active=True).filter(_active_window_q(now)).filter(_available_quantity_q())
-    available_rule_prefetch = (
-        VendorSurveyAllocation.objects.filter(client_allocation__vendor_id=vendor_id, is_active=True)
+    available_rules = (
+        VendorSurveyAllocation.objects.filter(client_allocation__in=client_allocations, is_active=True)
         .filter(_active_window_q(now))
         .filter(_available_quantity_q())
         .select_related("client_allocation", "client_allocation__vendor", "client_allocation__vendor__employee_profile")
     )
     return (
-        queryset.filter(client__vendor_allocations__in=client_allocations, remaining__gt=0)
-        .annotate(
-            vendor_has_survey_rule=Exists(survey_rules),
-            vendor_survey_rule_available=Exists(available_rules),
-        )
-        .filter(Q(vendor_has_survey_rule=False) | Q(vendor_survey_rule_available=True))
+        queryset.filter(vendor_allocations__in=available_rules, remaining__gt=0)
         .prefetch_related(
             Prefetch("client__vendor_allocations", queryset=client_allocations, to_attr="request_vendor_allocations"),
-            Prefetch("vendor_allocations", queryset=available_rule_prefetch, to_attr="request_vendor_survey_allocations"),
+            Prefetch("vendor_allocations", queryset=available_rules, to_attr="request_vendor_survey_allocations"),
         )
         .distinct()
     )
 
 
 def resolve_vendor_survey_context(user, survey: Survey, *, require_capacity=True, for_update=False):
-    """Resolve the vendor's active client grant and optional per-survey override."""
+    """Resolve the vendor's active client grant and mandatory project allocation."""
 
     vendor_id = vendor_scope_user_id(user)
     if not vendor_id:
@@ -140,20 +130,17 @@ def resolve_vendor_survey_context(user, survey: Survey, *, require_capacity=True
         client_allocation=client_allocation,
         survey=survey,
     ).first()
-    if survey_allocation:
-        if not _is_active_now(survey_allocation, now):
-            raise AllocationUnavailable("This survey is disabled or outside its allocation dates.")
-        if require_capacity and survey_allocation.remaining_quantity < 1:
-            raise AllocationUnavailable("Survey quantity is exhausted.")
+    if not survey_allocation:
+        raise AllocationUnavailable("This project is not allocated to the vendor.")
+    if not _is_active_now(survey_allocation, now):
+        raise AllocationUnavailable("This project is disabled or outside its allocation dates.")
+    if require_capacity and survey_allocation.remaining_quantity < 1:
+        raise AllocationUnavailable("Project complete cap is exhausted.")
     if require_capacity and survey.remaining < 1:
         raise AllocationUnavailable("Upstream survey quantity is exhausted.")
 
     account_type = client_allocation.vendor.employee_profile.account_type
-    cut = (
-        survey_allocation.effective_cpi_cut_percent
-        if survey_allocation
-        else client_allocation.effective_cpi_cut_percent
-    )
+    cut = survey_allocation.effective_cpi_cut_percent
     if account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
         cut = Decimal("0.00")
     return VendorSurveyContext(
@@ -202,7 +189,9 @@ def reserve_attempt_capacity(
     if existing:
         return existing
 
-    if client_allocation is None and survey_allocation is not None:
+    if survey_allocation is None:
+        raise AllocationUnavailable("An explicit project allocation is required.")
+    if client_allocation is None:
         client_allocation = survey_allocation.client_allocation
     if client_allocation is None:
         raise AllocationUnavailable("A client allocation is required.")
@@ -225,27 +214,23 @@ def reserve_attempt_capacity(
         raise AllocationUnavailable("Vendor or client access is inactive.")
     if not commercial_profile or not commercial_profile.is_active:
         raise AllocationUnavailable("Vendor commercial access is inactive.")
-    if locked_survey_allocation and attempt.survey_id != locked_survey_allocation.survey_id:
+    if attempt.survey_id != locked_survey_allocation.survey_id:
         raise AllocationUnavailable("Attempt survey does not match the assigned survey.")
     if attempt.survey.client_id != client_allocation.client_id:
         raise AllocationUnavailable("Survey is not mapped to the allocation's client.")
     if not _is_active_now(client_allocation, now):
         raise AllocationUnavailable("Client allocation is inactive or outside its active dates.")
-    if locked_survey_allocation and not _is_active_now(locked_survey_allocation, now):
-        raise AllocationUnavailable("Survey allocation is inactive or outside its active dates.")
+    if not _is_active_now(locked_survey_allocation, now):
+        raise AllocationUnavailable("Project allocation is inactive or outside its active dates.")
     if client_allocation.remaining_quantity < 1:
         raise AllocationUnavailable("Client quantity is exhausted.")
-    if locked_survey_allocation and locked_survey_allocation.remaining_quantity < 1:
-        raise AllocationUnavailable("Survey quantity is exhausted.")
+    if locked_survey_allocation.remaining_quantity < 1:
+        raise AllocationUnavailable("Project complete cap is exhausted.")
     if attempt.survey.remaining < 1:
         raise AllocationUnavailable("Upstream survey quantity is exhausted.")
 
     vendor_profile = client_allocation.vendor.employee_profile
-    cut = (
-        locked_survey_allocation.effective_cpi_cut_percent
-        if locked_survey_allocation
-        else client_allocation.effective_cpi_cut_percent
-    )
+    cut = locked_survey_allocation.effective_cpi_cut_percent
     if vendor_profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
         cut = Decimal("0.00")
     source_cpi = attempt.survey.cpi
@@ -253,9 +238,8 @@ def reserve_attempt_capacity(
 
     client_allocation.reserved_quantity += 1
     client_allocation.save(update_fields=["reserved_quantity", "updated_at"])
-    if locked_survey_allocation:
-        locked_survey_allocation.reserved_quantity += 1
-        locked_survey_allocation.save(update_fields=["reserved_quantity", "updated_at"])
+    locked_survey_allocation.reserved_quantity += 1
+    locked_survey_allocation.save(update_fields=["reserved_quantity", "updated_at"])
 
     SurveyAttempt.objects.filter(pk=attempt.pk).update(
         vendor=client_allocation.vendor,

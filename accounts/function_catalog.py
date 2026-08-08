@@ -13,7 +13,7 @@ from django.db import transaction
 FUNCTION_CATALOG = (
     ("dashboard.view", "View dashboard", "Dashboard", "Open the internal dashboard.", ("employee", "team-lead", "manager", "admin", "super-admin")),
     ("projects.view", "View projects", "Projects · Page", "Browse the synchronized survey inventory.", ("employee", "team-lead", "manager", "admin", "super-admin")),
-    ("projects.export", "Export projects CSV", "Projects · Actions", "Download all projects matching the current filters.", ("employee", "team-lead", "manager", "admin", "super-admin")),
+    ("projects.export", "Export projects CSV", "Projects · Actions", "Download all projects matching the current filters.", ("employee", "team-lead", "manager", "admin", "super-admin", "external-vendor")),
     ("projects.filter.cpi", "Use CPI filter and sorting", "Projects · Filters", "Filter projects by CPI range and sort by CPI.", ("admin", "super-admin")),
     ("survey_details.view", "View survey details", "Projects · Actions", "Open pre-screening and quota details.", ("employee", "team-lead", "manager", "admin", "super-admin")),
     ("survey_links.copy", "Copy pre-screener links", "Projects · Actions", "Copy internal respondent start links.", ("employee", "team-lead", "manager", "admin", "super-admin")),
@@ -43,6 +43,13 @@ FUNCTION_CATALOG = (
     ("users.manage", "Manage employees", "Access control", "Legacy employee-management access.", ("admin", "super-admin")),
     ("access.manage", "Manage roles and permissions", "Access control", "Configure functions, roles and user overrides.", ("super-admin",)),
     ("api_docs.view", "View API documentation", "Development", "Open internal Swagger documentation.", ("admin", "super-admin")),
+    ("clients.view", "View clients", "Vendors & allocations", "View client and integration metadata.", ("super-admin",)),
+    ("clients.manage", "Manage clients", "Vendors & allocations", "Create and update client metadata.", ("super-admin",)),
+    ("vendors.view", "View vendor policies", "Vendors & allocations", "View vendor commercial policies.", ("super-admin",)),
+    ("vendors.manage", "Manage vendor policies", "Vendors & allocations", "Configure vendor CPI and delivery policies.", ("super-admin",)),
+    ("allocations.view", "View allocations", "Vendors & allocations", "View client and project quantity allocations.", ("super-admin",)),
+    ("allocations.manage", "Manage allocations", "Vendors & allocations", "Create and update client and project caps.", ("super-admin",)),
+    ("respondents.create", "Create vendor respondents", "Vendors & allocations", "Create respondents below an internal vendor.", ("admin", "super-admin")),
 )
 
 

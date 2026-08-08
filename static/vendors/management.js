@@ -2,10 +2,17 @@
   const workspace = document.querySelector('#vendorWorkspace');
   if (!workspace) return;
 
-  const form = document.querySelector('#vendorManagementForm');
-  const modal = document.querySelector('#vendorModal');
   const backdrop = document.querySelector('#vendorModalBackdrop');
-  const errorBox = document.querySelector('#vendorFormError');
+  const modalConfigs = {
+    policy: { form: document.querySelector('#vendorPolicyForm'), modal: document.querySelector('#vendorPolicyModal') },
+    client: { form: document.querySelector('#clientAllocationForm'), modal: document.querySelector('#clientAllocationModal') },
+    survey: { form: document.querySelector('#surveyAllocationForm'), modal: document.querySelector('#surveyAllocationModal') },
+    api_key: { form: document.querySelector('#vendorApiKeyForm'), modal: document.querySelector('#vendorApiKeyModal') },
+  };
+  let activeMode = null;
+  let form = null;
+  let modal = null;
+  let errorBox = null;
   const canViewVendors = workspace.dataset.viewVendors === 'true';
   const canViewAllocations = workspace.dataset.viewAllocations === 'true';
   const canManageVendors = workspace.dataset.manageVendors === 'true';
@@ -17,7 +24,7 @@
 
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];
-  const field = (name) => form.elements[name];
+  const field = (name, mode = activeMode) => modalConfigs[mode]?.form?.elements[name];
 
   function csrfToken() {
     return document.cookie.split('; ').find((item) => item.startsWith('csrftoken='))?.split('=').slice(1).join('=') ||
@@ -179,7 +186,7 @@
 
   function renderSurveyAllocations() {
     if (!$('#surveyAllocationRows')) return;
-    $('#surveyAllocationRows').innerHTML = state.surveyAllocations.map((row) => `<tr><td><strong>${escapeHtml(row.vendor_name)}</strong></td><td><strong>${escapeHtml(row.survey_local_id)}</strong><br><small>#${escapeHtml(row.survey_source_id)} · ${escapeHtml(row.survey_name || 'Survey')}</small></td><td>${escapeHtml(row.client_name)}</td><td>${quantityMarkup(row)}</td><td>${cutMarkup(row, 'client policy')}</td><td>${actionButton('survey', row.id, canManageAllocations)}</td></tr>`).join('') || emptyRow(6, 'No survey-specific overrides. Client policies apply automatically.');
+    $('#surveyAllocationRows').innerHTML = state.surveyAllocations.map((row) => `<tr><td><strong>${escapeHtml(row.vendor_name)}</strong></td><td><strong>${escapeHtml(row.survey_local_id)}</strong><br><small>#${escapeHtml(row.survey_source_id)} · ${escapeHtml(row.survey_name || 'Survey')}</small></td><td>${escapeHtml(row.client_name)}</td><td>${quantityMarkup(row)}</td><td>${cutMarkup(row, 'client policy')}</td><td>${actionButton('survey', row.id, canManageAllocations)}</td></tr>`).join('') || emptyRow(6, 'No projects allocated. This vendor cannot see or start any client project yet.');
     $('#surveyAllocationCards').innerHTML = state.surveyAllocations.map((row) => `<article class="vendor-card"><div class="vendor-card-head"><div><strong>${escapeHtml(row.survey_local_id)}</strong><br><small>${escapeHtml(row.vendor_name)} · ${escapeHtml(row.client_name)}</small></div>${stateBadge(row.is_active)}</div><div class="vendor-card-grid"><span>Survey ID<strong>${escapeHtml(row.survey_source_id)}</strong></span><span>CPI cut<strong>${escapeHtml(row.effective_cpi_cut_percent)}%</strong></span><span>Available<strong>${number(row.remaining_quantity)}</strong></span><span>Limit<strong>${number(row.quantity_limit)}</strong></span></div>${actionButton('survey', row.id, canManageAllocations)}</article>`).join('');
   }
 
@@ -199,73 +206,74 @@
 
   function hydrateSelects() {
     const vendorOptions = state.vendors.map((vendor) => option(vendor.id, `${vendor.full_name} — ${accountLabel(vendor.account_type)}`)).join('');
-    field('policy_vendor').innerHTML = vendorOptions;
-    field('client_vendor').innerHTML = `<option value="">Select vendor</option>${vendorOptions}`;
-    field('client').innerHTML = `<option value="">Select client</option>${state.clients.map((client) => option(client.id, client.name)).join('')}`;
-    field('client_allocation').innerHTML = `<option value="">Select vendor and client</option>${state.clientAllocations.map((row) => option(row.id, `${row.vendor_name} — ${row.client_name}`)).join('')}`;
-    field('api_vendor').innerHTML = `<option value="">Select API-enabled external vendor</option>${state.vendors.filter((vendor) => {
+    field('policy_vendor', 'policy').innerHTML = vendorOptions;
+    field('client_vendor', 'client').innerHTML = `<option value="">Select vendor</option>${vendorOptions}`;
+    field('client', 'client').innerHTML = `<option value="">Select client</option>${state.clients.map((client) => option(client.id, client.name)).join('')}`;
+    field('client_allocation', 'survey').innerHTML = `<option value="">Select vendor and client</option>${state.clientAllocations.map((row) => option(row.id, `${row.vendor_name} — ${row.client_name}`)).join('')}`;
+    field('api_vendor', 'api_key').innerHTML = `<option value="">Select API-enabled external vendor</option>${state.vendors.filter((vendor) => {
       const profile = state.profiles.find((item) => Number(item.vendor) === Number(vendor.id));
       return vendor.account_type === 'external_vendor' && ['api', 'both'].includes(profile?.delivery_mode || vendor.delivery_mode);
     }).map((vendor) => option(vendor.id, vendor.full_name)).join('')}`;
   }
 
   function updatePolicyRule() {
-    const vendor = state.vendors.find((item) => String(item.id) === field('policy_vendor').value);
+    const vendor = state.vendors.find((item) => String(item.id) === field('policy_vendor', 'policy').value);
     const internal = vendor?.account_type === 'internal_vendor';
-    field('default_cpi_cut_percent').disabled = internal;
-    if (internal) field('default_cpi_cut_percent').value = '0.00';
-    field('delivery_mode').disabled = internal;
-    if (internal) field('delivery_mode').value = 'panel';
+    field('default_cpi_cut_percent', 'policy').disabled = internal;
+    if (internal) field('default_cpi_cut_percent', 'policy').value = '0.00';
+    field('delivery_mode', 'policy').disabled = internal;
+    if (internal) field('delivery_mode', 'policy').value = 'panel';
     $('#policyRuleNote').textContent = internal ? 'Internal vendors always receive the full source CPI.' : 'External vendor payable CPI = source CPI minus this percentage.';
   }
 
   function updateClientRule() {
-    const vendor = state.vendors.find((item) => String(item.id) === field('client_vendor').value);
+    const vendor = state.vendors.find((item) => String(item.id) === field('client_vendor', 'client').value);
     const internal = vendor?.account_type === 'internal_vendor';
-    field('client_cpi_cut').disabled = internal;
-    if (internal) field('client_cpi_cut').value = '';
+    field('client_cpi_cut', 'client').disabled = internal;
+    if (internal) field('client_cpi_cut', 'client').value = '';
   }
 
   function updateSurveyRule() {
-    const parent = state.clientAllocations.find((item) => String(item.id) === field('client_allocation').value);
+    const parent = state.clientAllocations.find((item) => String(item.id) === field('client_allocation', 'survey').value);
     const internal = parent?.account_type === 'internal_vendor';
-    field('survey_cpi_cut').disabled = internal;
-    if (internal) field('survey_cpi_cut').value = '';
+    field('survey_cpi_cut', 'survey').disabled = internal;
+    if (internal) field('survey_cpi_cut', 'survey').value = '';
   }
 
   function resetForm(mode) {
+    activeMode = mode;
+    ({ form, modal } = modalConfigs[mode]);
+    errorBox = $('[data-vendor-form-error]', form);
     form.reset();
     $$('input,select', form).forEach((control) => { control.disabled = false; });
     field('record_id').value = '';
-    field('form_mode').value = mode;
-    field('survey').value = '';
-    field('is_active').checked = true;
+    if (field('survey')) field('survey').value = '';
+    if (field('is_active')) field('is_active').checked = true;
     state.selectedSurvey = null;
     errorBox.hidden = true;
-    $('#surveySearchResults').hidden = true;
-    $('#issuedKeyPanel').hidden = true;
-    $('#issuedKeyValue').value = '';
-    $('#vendorActiveToggle').hidden = mode === 'api_key';
-    $('#vendorSubmitButton').hidden = false;
-    $('#vendorSubmitButton').disabled = false;
-    $$('[data-form-section]', form).forEach((section) => {
-      const active = section.dataset.formSection === mode;
-      section.hidden = !active;
-      $$('input,select', section).forEach((control) => { control.disabled = !active; });
-    });
+    const results = $('#surveySearchResults');
+    if (results) results.hidden = true;
+    const issuedPanel = $('#issuedKeyPanel');
+    if (issuedPanel) issuedPanel.hidden = true;
+    const issuedValue = $('#issuedKeyValue');
+    if (issuedValue) issuedValue.value = '';
+    const submit = $('[data-vendor-submit]', form);
+    submit.hidden = false;
+    submit.disabled = false;
   }
 
   function showModal() {
     backdrop.hidden = false; modal.hidden = false;
     requestAnimationFrame(() => { backdrop.classList.add('open'); modal.classList.add('open'); });
     document.body.classList.add('vendor-modal-open');
-    setTimeout(() => form.querySelector('[data-form-section]:not([hidden]) input:not([type=hidden]),[data-form-section]:not([hidden]) select')?.focus(), 140);
+    setTimeout(() => form.querySelector('input:not([type=hidden]):not([disabled]),select:not([disabled])')?.focus(), 140);
   }
 
   function closeModal() {
-    backdrop.classList.remove('open'); modal.classList.remove('open');
+    const closingModal = modal;
+    backdrop.classList.remove('open'); closingModal?.classList.remove('open');
     document.body.classList.remove('vendor-modal-open');
-    setTimeout(() => { backdrop.hidden = true; modal.hidden = true; }, 210);
+    setTimeout(() => { backdrop.hidden = true; if (closingModal) closingModal.hidden = true; }, 210);
   }
 
   function openPolicy(vendorId) {
@@ -279,22 +287,20 @@
     field('currency').value = profile?.currency || 'USD';
     field('delivery_mode').value = profile?.delivery_mode || vendor?.delivery_mode || 'panel';
     field('is_active').checked = profile?.is_active ?? true;
-    $('#vendorModalEyebrow').textContent = accountLabel(vendor?.account_type);
-    $('#vendorModalTitle').textContent = profile ? 'Edit commercial policy' : 'Create commercial policy';
-    $('#vendorSubmitButton').textContent = profile ? 'Save policy' : 'Create policy';
+    $('[data-modal-eyebrow]', modal).textContent = accountLabel(vendor?.account_type);
+    $('[data-modal-title]', modal).textContent = profile ? 'Edit commercial policy' : 'Create commercial policy';
+    $('[data-vendor-submit]', form).textContent = profile ? 'Save policy' : 'Create policy';
     updatePolicyRule(); showModal();
   }
 
   function openApiKey() {
     resetForm('api_key');
-    $('#vendorModalEyebrow').textContent = 'External integration';
-    $('#vendorModalTitle').textContent = 'Generate API key';
-    $('#vendorSubmitButton').textContent = 'Generate secure key';
+    $('[data-vendor-submit]', form).textContent = 'Generate secure key';
     showModal();
   }
 
   function openClientAllocation(recordId = null) {
-    resetForm('client'); field('policy_vendor').disabled = false;
+    resetForm('client');
     const record = state.clientAllocations.find((item) => Number(item.id) === Number(recordId));
     if (record) {
       field('record_id').value = record.id;
@@ -307,9 +313,8 @@
       field('client_ends_at').value = toInputDateTime(record.ends_at);
       field('is_active').checked = record.is_active;
     }
-    $('#vendorModalEyebrow').textContent = 'Client visibility & quantity';
-    $('#vendorModalTitle').textContent = record ? 'Edit client allocation' : 'Allocate a client';
-    $('#vendorSubmitButton').textContent = record ? 'Save allocation' : 'Create allocation';
+    $('[data-modal-title]', modal).textContent = record ? 'Edit client allocation' : 'Allocate a client';
+    $('[data-vendor-submit]', form).textContent = record ? 'Save allocation' : 'Create allocation';
     updateClientRule(); showModal();
   }
 
@@ -330,9 +335,8 @@
       field('survey_ends_at').value = toInputDateTime(record.ends_at);
       field('is_active').checked = record.is_active;
     }
-    $('#vendorModalEyebrow').textContent = 'Optional survey rule';
-    $('#vendorModalTitle').textContent = record ? 'Edit survey override' : 'Add survey override';
-    $('#vendorSubmitButton').textContent = record ? 'Save override' : 'Create override';
+    $('[data-modal-title]', modal).textContent = record ? 'Edit project allocation' : 'Allocate a project';
+    $('[data-vendor-submit]', form).textContent = record ? 'Save project allocation' : 'Create project allocation';
     updateSurveyRule(); showModal();
   }
 
@@ -396,15 +400,15 @@
   $('[data-create-api-key]')?.addEventListener('click', openApiKey);
   $$('[data-close-vendor-modal]').forEach((button) => button.addEventListener('click', closeModal));
   backdrop.addEventListener('click', closeModal);
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !modal.hidden) closeModal(); });
-  field('policy_vendor').addEventListener('change', updatePolicyRule);
-  field('client_vendor').addEventListener('change', updateClientRule);
-  field('client_allocation').addEventListener('change', () => {
-    field('survey').value = ''; field('survey_search').value = ''; state.selectedSurvey = null;
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && modal && !modal.hidden) closeModal(); });
+  field('policy_vendor', 'policy').addEventListener('change', updatePolicyRule);
+  field('client_vendor', 'client').addEventListener('change', updateClientRule);
+  field('client_allocation', 'survey').addEventListener('change', () => {
+    field('survey', 'survey').value = ''; field('survey_search', 'survey').value = ''; state.selectedSurvey = null;
     updateSurveyRule();
   });
-  field('survey_search').addEventListener('input', () => {
-    field('survey').value = ''; state.selectedSurvey = null;
+  field('survey_search', 'survey').addEventListener('input', () => {
+    field('survey', 'survey').value = ''; state.selectedSurvey = null;
     clearTimeout(state.searchTimer); state.searchTimer = setTimeout(searchSurveys, 260);
   });
   $('#surveySearchResults').addEventListener('click', (event) => {
@@ -422,9 +426,13 @@
     toast('API key copied. Store it securely.');
   });
 
-  form.addEventListener('submit', async (event) => {
-    event.preventDefault(); errorBox.hidden = true;
-    const mode = field('form_mode').value;
+  async function submitVendorForm(event) {
+    event.preventDefault();
+    activeMode = event.currentTarget.dataset.vendorForm;
+    ({ form, modal } = modalConfigs[activeMode]);
+    errorBox = $('[data-vendor-form-error]', form);
+    errorBox.hidden = true;
+    const mode = activeMode;
     const id = field('record_id').value;
     let url; let payload;
     if (mode === 'policy') {
@@ -462,21 +470,23 @@
       };
     }
     try {
-      $('#vendorSubmitButton').disabled = true;
+      const submit = $('[data-vendor-submit]', form);
+      submit.disabled = true;
       const result = await api(url, { method: id ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
       if (mode === 'api_key') {
         $('#issuedKeyValue').value = result.api_key;
         $('#issuedKeyPanel').hidden = false;
-        $$('[data-form-section="api_key"] input,[data-form-section="api_key"] select').forEach((control) => { control.disabled = true; });
-        $('#vendorSubmitButton').hidden = true;
+        $$('input,select', form).forEach((control) => { control.disabled = true; });
+        submit.hidden = true;
         toast('API key generated. Copy it now.');
         await reloadData();
       } else {
         closeModal(); toast(id ? 'Changes saved.' : 'Configuration created.'); await reloadData();
       }
     } catch (error) { errorBox.textContent = error.message; errorBox.hidden = false; }
-    finally { $('#vendorSubmitButton').disabled = false; }
-  });
+    finally { const submit = $('[data-vendor-submit]', form); if (submit) submit.disabled = false; }
+  }
+  Object.values(modalConfigs).forEach((config) => config.form.addEventListener('submit', submitVendorForm));
 
   reloadData().catch((error) => {
     ['vendorRows', 'clientAllocationRows', 'surveyAllocationRows'].forEach((id) => {

@@ -16,8 +16,8 @@ This feature is additive and isolated on the UAT branch. Vendor allocation is en
 1. `Client` identifies a buyer/source account.
 2. `ClientIntegration` stores non-secret upstream connection metadata. It stores the environment-variable name for a credential, never the token.
 3. `VendorCommercialProfile` stores a vendor's default CPI cut, currency and delivery mode (`panel`, `api` or `both`). Internal vendors are always panel-only with zero cut.
-4. `VendorClientAllocation` grants client visibility and limits total quantity across that client's surveys.
-5. `VendorSurveyAllocation` is an optional survey-specific block/limit inside the parent client allocation and may override CPI cut. If it is absent, the client grant applies to every available survey for that client.
+4. `VendorClientAllocation` makes a client eligible for project assignment and limits total completes across that client's allocated projects. It does not expose every client survey.
+5. `VendorSurveyAllocation` is a mandatory project whitelist entry inside the parent client allocation. It controls project visibility, the per-project complete cap and an optional CPI-cut override. Without an active allocation, that project is absent from both panel and API responses and its respondent link is rejected.
 6. `AllocationReservation` records the reserved, consumed, released or expired quantity associated with one survey attempt.
 
 ## CPI precedence and snapshot
@@ -51,13 +51,13 @@ or:
 Authorization: Api-Key exh_...
 ```
 
-The key authenticates as its external vendor. It does not carry a copied client list or copied CPI: every request applies that vendor's current function permissions, active client grants, optional survey overrides, quantities and per-client CPI cut. The same external vendor can therefore receive Client ABC at 30% cut and Client BCZ at 50% cut in both panel and API responses. `/api/v1/surveys/?client_name=ABC` filters the allocated client label.
+The key authenticates as its external vendor. It does not carry a copied client list or copied CPI: every request applies that vendor's current function permissions, active client grants, explicit project allocations, quantities and per-client/project CPI cut. The same external vendor can therefore receive selected Client ABC projects at 30% cut and selected Client BCZ projects at 50% cut in both panel and API responses. `/api/v1/surveys/?client_name=ABC` filters the allocated client label.
 
 ## Quantity lifecycle
 
-The reservation service locks the client row and any optional survey row in one database transaction. Capacity is available only when client remaining, an applicable survey override remaining and upstream survey remaining are all positive.
+The reservation service locks the client row and mandatory project-allocation row in one database transaction. Capacity is available only when client remaining, project remaining and upstream survey remaining are all positive.
 
-- Initiation: reserve one client unit and, when configured, one survey-override unit.
+- Initiation: reserve one client unit and one project-allocation unit.
 - Status `1`: move the reserved unit to consumed.
 - Status `2`, `3` or `4`: release the reserved unit.
 - Abandoned attempt: `vendors.expire_allocation_reservations` runs every `VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS` and releases reservations older than `VENDOR_RESERVATION_TTL_MINUTES`.
@@ -78,7 +78,7 @@ All endpoints require function permissions and are documented in Swagger:
 - `/api/v1/vendors/directory/` (vendor policy directory)
 - `/api/v1/vendors/management-options/` (non-secret vendor/client selector data)
 
-The responsive `/vendors/` workspace uses these APIs for commercial policies, client visibility/quantity grants and optional survey overrides. User creation stays in the Access Control modal so account type, role and function-level allow/deny overrides have one source of truth.
+The responsive `/vendors/` workspace uses separate modals for commercial policy, client allocation, project allocation and API-key operations. User creation stays in the Access Control modal so account type, role and function-level allow/deny overrides have one source of truth.
 
 Super admins and non-vendor management accounts see the full authorized dataset. Vendor accounts and respondents below an internal vendor are restricted to that vendor's allocations. Commercial policies, quantities and API keys remain owner-controlled and read-only for vendor-scoped accounts, even if a manage permission is assigned accidentally.
 
