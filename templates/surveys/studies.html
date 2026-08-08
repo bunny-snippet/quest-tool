@@ -62,9 +62,9 @@
   <div class="table-wrap studies-table-wrap">
     <table class="survey-table studies-table">
       <thead><tr>
-        <th>Project ID</th><th>Survey ID</th><th>Respondent ID</th><th>Name</th><th>IP address</th><th>LOI</th><th>Status</th><th>Started</th>
+        <th>Project ID</th><th>Survey ID</th><th>Respondent ID</th><th>Name</th><th>Device</th><th>IP address</th><th>LOI</th><th>Status</th><th>Start</th><th>End</th>
       </tr></thead>
-      <tbody id="studyRows"><tr><td colspan="8"><div class="table-loader"><i></i><span>Fetching respondent activity…</span></div></td></tr></tbody>
+      <tbody id="studyRows"><tr><td colspan="10"><div class="table-loader"><i></i><span>Fetching respondent activity…</span></div></td></tr></tbody>
     </table>
   </div>
   <div class="mobile-cards studies-cards" id="studyCards"></div>
@@ -79,4 +79,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=4" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=5" defer></script>{% endblock %}

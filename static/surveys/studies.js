@@ -14,6 +14,12 @@
 
   const state = { page: 1, pages: 1, pageSize: 20, timer: null, controller: null };
   const statusTone = { initiated: 'initiate', redirected: 'initiate', '1': 'complete', '2': 'terminate', '3': 'quota', '4': 'quality' };
+  const deviceIcons = {
+    desktop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>',
+    mobile: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/></svg>',
+    tablet: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><circle cx="12" cy="18" r=".7"/></svg>',
+    unknown: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.5 2.2c-.9.5-1.3 1-1.3 2M12 17h.01"/></svg>',
+  };
 
   function escapeHtml(value) {
     const node = document.createElement('div');
@@ -97,6 +103,41 @@
     return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
   }
 
+  function deviceType(value) {
+    const label = String(value || '').toLowerCase();
+    if (label.includes('mobile') || label.includes('phone')) return 'mobile';
+    if (label.includes('tablet') || label.includes('tab')) return 'tablet';
+    if (label.includes('desktop') || label.includes('computer') || label.includes('laptop')) return 'desktop';
+    return 'unknown';
+  }
+
+  function deviceBadge(attempt) {
+    const label = attempt.entry_device || 'Unknown';
+    const type = deviceType(label);
+    return `<span class="study-device ${type}" title="${escapeHtml(label)}"><i>${deviceIcons[type]}</i><b>${escapeHtml(label)}</b></span>`;
+  }
+
+  function ipPair(attempt) {
+    const entry = attempt.entry_ip || '';
+    const exit = attempt.exit_ip || '';
+    const stateClass = entry && exit ? (entry === exit ? 'same' : 'changed') : 'pending';
+    return `<div class="ip-pair ${stateClass}">
+      <span class="entry-ip"><i>IN</i>${escapeHtml(entry || '—')}</span>
+      <span class="exit-ip"><i>OUT</i>${escapeHtml(exit || 'Awaiting')}</span>
+    </div>`;
+  }
+
+  function endTimestamp(attempt) {
+    return ['initiated', 'redirected'].includes(attempt.status)
+      ? attempt.initiated_at
+      : (attempt.callback_at || attempt.initiated_at);
+  }
+
+  function timestampCell(value) {
+    const stamp = formatIst(value, true);
+    return `<div class="study-timestamp"><strong>${stamp.date}</strong><span>${stamp.time} IST</span></div>`;
+  }
+
   function statusPill(attempt) {
     const tone = statusTone[attempt.status] || 'neutral';
     const label = ['initiated', 'redirected'].includes(attempt.status) ? 'Initiated' : (attempt.status_label || attempt.status);
@@ -104,16 +145,17 @@
   }
 
   function rowTemplate(attempt) {
-    const started = formatIst(attempt.initiated_at, true);
     return `<tr>
     <td><strong class="study-project-id">${escapeHtml(attempt.survey_local_id)}</strong></td>
       <td><strong class="study-survey-id">${escapeHtml(attempt.survey_source_id)}</strong></td>
       <td><strong class="respondent-id">${escapeHtml(attempt.rid)}</strong></td>
       <td><strong class="study-user-name">${escapeHtml(attempt.user_name)}</strong><small class="study-secondary">${escapeHtml(attempt.user_email || attempt.username || `User #${attempt.user_id}`)}</small></td>
-      <td><div class="ip-pair"><span><i>IN</i>${escapeHtml(attempt.entry_ip || '—')}</span><span><i>OUT</i>${escapeHtml(attempt.exit_ip || 'Awaiting')}</span></div></td>
+      <td>${deviceBadge(attempt)}</td>
+      <td>${ipPair(attempt)}</td>
       <td><strong class="study-loi">${formatLoi(attempt.loi_seconds)}</strong><small class="study-secondary">${attempt.loi_seconds == null ? 'Awaiting callback' : 'Actual duration'}</small></td>
       <td>${statusPill(attempt)}</td>
-      <td><div class="study-timestamp"><strong>${started.date}</strong><span>${started.time} IST</span></div></td>
+      <td>${timestampCell(attempt.initiated_at)}</td>
+      <td>${timestampCell(endTimestamp(attempt))}</td>
     </tr>`;
   }
 
@@ -124,17 +166,17 @@
       <div class="study-card-grid">
         <span><small>User</small><b>${escapeHtml(attempt.user_name)}</b></span>
         <span><small>LOI</small><b>${formatLoi(attempt.loi_seconds)}</b></span>
-        <span><small>Entry IP</small><b>${escapeHtml(attempt.entry_ip || '—')}</b></span>
-        <span><small>Exit IP</small><b>${escapeHtml(attempt.exit_ip || 'Awaiting')}</b></span>
+        <span><small>Device</small>${deviceBadge(attempt)}</span>
       </div>
-      <time>${formatIst(attempt.initiated_at)} IST</time>
+      <div class="study-card-network">${ipPair(attempt)}</div>
+      <div class="study-card-times"><time><small>Start</small><b>${formatIst(attempt.initiated_at)} IST</b></time><time><small>End</small><b>${formatIst(endTimestamp(attempt))} IST</b></time></div>
     </article>`;
   }
 
   async function loadAttempts() {
     state.controller?.abort();
     state.controller = new AbortController();
-    elements.rows.innerHTML = '<tr><td colspan="8"><div class="table-loader"><i></i><span>Fetching respondent activity…</span></div></td></tr>';
+    elements.rows.innerHTML = '<tr><td colspan="10"><div class="table-loader"><i></i><span>Fetching respondent activity…</span></div></td></tr>';
     try {
       const response = await fetch(`/api/v1/survey-attempts/?${filterParams()}`, { signal: state.controller.signal });
       const data = await response.json();
@@ -148,7 +190,7 @@
         elements.rows.innerHTML = results.map(rowTemplate).join('');
         elements.cards.innerHTML = results.map(cardTemplate).join('');
       } else {
-        elements.rows.innerHTML = '<tr><td colspan="8"><div class="empty-state"><span>◎</span><strong>No study records found</strong><small>Try clearing the filters or start a survey attempt.</small></div></td></tr>';
+        elements.rows.innerHTML = '<tr><td colspan="10"><div class="empty-state"><span>◎</span><strong>No study records found</strong><small>Try clearing the filters or start a survey attempt.</small></div></td></tr>';
         elements.cards.innerHTML = '<div class="empty-state"><span>◎</span><strong>No study records found</strong><small>Try clearing the filters.</small></div>';
       }
       elements.pageInput.value = state.page;
@@ -159,7 +201,7 @@
       elements.next.disabled = elements.last.disabled = state.page >= state.pages;
     } catch (error) {
       if (error.name === 'AbortError') return;
-      elements.rows.innerHTML = `<tr><td colspan="8"><div class="error-state"><strong>Could not load studies</strong><span>${escapeHtml(error.message)}</span><button type="button" id="retryStudies">Try again</button></div></td></tr>`;
+      elements.rows.innerHTML = `<tr><td colspan="10"><div class="error-state"><strong>Could not load studies</strong><span>${escapeHtml(error.message)}</span><button type="button" id="retryStudies">Try again</button></div></td></tr>`;
       byId('retryStudies')?.addEventListener('click', loadAttempts);
       elements.cards.innerHTML = '';
     }

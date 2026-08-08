@@ -455,6 +455,9 @@ class StudiesTrackingTests(TestCase):
         self.assertContains(page, 'id="studyToTime"')
         self.assertContains(page, "Export full CSV")
         self.assertContains(page, "Kanik Sharma")
+        self.assertContains(page, "<th>Device</th>", html=True)
+        self.assertContains(page, "<th>Start</th>", html=True)
+        self.assertContains(page, "<th>End</th>", html=True)
 
         response = self.api.get(reverse("survey-attempt-list"), {
             "user": self.kanik.pk,
@@ -467,6 +470,9 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(result["user_name"], "Kanik Sharma")
         self.assertEqual(result["entry_ip"], "10.0.0.1")
         self.assertEqual(result["exit_ip"], "20.0.0.1")
+        self.assertEqual(result["entry_device"], "Desktop")
+        self.assertIsNotNone(result["initiated_at"])
+        self.assertIsNotNone(result["callback_at"])
 
     def test_filtered_csv_contains_full_backend_record_not_only_ui_columns(self):
         response = self.api.get(reverse("survey-attempt-export"), {
