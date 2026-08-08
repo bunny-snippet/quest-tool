@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from dateutil import parser as date_parser
 from django.db import transaction
@@ -15,6 +16,7 @@ from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuesti
 from .survey_flow import normalize_client_ip
 
 logger = logging.getLogger(__name__)
+INNOVATEMR_TIMEZONE = ZoneInfo("America/Los_Angeles")
 
 
 def _integer(value: Any, default: int = 0) -> int:
@@ -48,10 +50,15 @@ def parse_upstream_datetime(value: Any) -> datetime | None:
         parsed = date_parser.parse(
             str(value),
             fuzzy=True,
-            tzinfos={"PST": -8 * 3600, "PDT": -7 * 3600, "UTC": 0, "GMT": 0},
+            tzinfos={
+                "PST": INNOVATEMR_TIMEZONE,
+                "PDT": INNOVATEMR_TIMEZONE,
+                "UTC": dt_timezone.utc,
+                "GMT": dt_timezone.utc,
+            },
         )
         if timezone.is_naive(parsed):
-            parsed = timezone.make_aware(parsed, timezone.get_default_timezone())
+            parsed = timezone.make_aware(parsed, INNOVATEMR_TIMEZONE)
         return parsed.astimezone(dt_timezone.utc)
     except (ValueError, TypeError, OverflowError):
         logger.warning("Could not parse InnovateMR datetime %r", value)

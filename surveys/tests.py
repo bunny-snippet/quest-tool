@@ -3,6 +3,7 @@ from datetime import datetime, time, timedelta
 from io import StringIO
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
+from zoneinfo import ZoneInfo
 
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
@@ -73,10 +74,15 @@ class MergeAndDateTests(TestCase):
         newer = survey_payload(modified="10/09/2017, 9:26:27 am PST", surveyName="New name")
         self.assertEqual(merge_inventory([older], [newer])[12632]["surveyName"], "New name")
 
-    def test_pst_is_converted_to_utc(self):
+    def test_pst_label_uses_pacific_daylight_saving_offset(self):
         parsed = parse_upstream_datetime("09/11/2017, 11:50:27 pm PST")
         self.assertEqual(parsed.utcoffset(), timedelta(0))
-        self.assertEqual(parsed.hour, 7)
+        self.assertEqual(parsed.hour, 6)
+
+    def test_summer_completion_time_converts_to_exact_ist_end_time(self):
+        parsed = parse_upstream_datetime("08/08/2026, 3:46:24 am PST")
+        ist = parsed.astimezone(ZoneInfo("Asia/Kolkata"))
+        self.assertEqual((ist.hour, ist.minute, ist.second), (16, 16, 24))
 
 
 class SurveySyncTests(TestCase):
@@ -359,7 +365,7 @@ class SurveyFlowTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertContains(response, "could not be attached", status_code=404)
 
-    def test_loi_starts_at_supplier_redirect_not_prescreener_entry(self):
+    def test_loi_includes_prescreener_time(self):
         now = timezone.now()
         attempt = SurveyAttempt.objects.create(
             rid="Aa1Bb2Cc3D",
@@ -376,8 +382,8 @@ class SurveyFlowTests(TestCase):
 
         self.assertEqual(response.status_code, 200)
         attempt.refresh_from_db()
-        self.assertGreaterEqual(attempt.loi_seconds, 300)
-        self.assertLess(attempt.loi_seconds, 310)
+        self.assertGreaterEqual(attempt.loi_seconds, 3900)
+        self.assertLess(attempt.loi_seconds, 3910)
 
     @override_settings(TRUST_X_FORWARDED_FOR=True)
     def test_trusted_proxy_records_public_entry_and_exit_ips(self):
@@ -621,8 +627,8 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(attempt.status_source, "innovatemr_transaction")
         self.assertEqual(attempt.initiation_ip, "8.8.4.4")
         self.assertEqual(attempt.callback_ip, "8.8.4.4")
-        self.assertGreaterEqual(attempt.loi_seconds, 179)
-        self.assertLess(attempt.loi_seconds, 190)
+        self.assertGreaterEqual(attempt.loi_seconds, 3779)
+        self.assertLess(attempt.loi_seconds, 3790)
         self.assertTrue(attempt.is_verified)
         self.assertEqual(attempt.upstream_transaction_data["trackId"], attempt.rid)
 

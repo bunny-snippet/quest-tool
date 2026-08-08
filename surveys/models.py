@@ -216,9 +216,9 @@ class SurveyAttempt(models.Model):
 
     @property
     def loi_started_at(self):
-        """Start actual survey LOI when the respondent leaves our pre-screener."""
+        """Measure the full respondent journey, including our pre-screener."""
 
-        return self.redirected_at or self.submitted_at or self.initiated_at
+        return self.initiated_at
 
     def calculate_loi_seconds(self, ended_at) -> int:
         return max(0, int((ended_at - self.loi_started_at).total_seconds()))
