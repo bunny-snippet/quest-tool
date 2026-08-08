@@ -16,7 +16,7 @@ from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import filters, permissions, status, viewsets
 from rest_framework.decorators import action
-from rest_framework.exceptions import APIException
+from rest_framework.exceptions import APIException, PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -103,9 +103,7 @@ def projects_page(request):
     else:
         companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
     project_columns = _project_columns_for_user(request.user)
-    profile = getattr(request.user, "employee_profile", None)
-    role_slug = profile.role.slug if profile and profile.role else ""
-    can_sort_cpi = request.user.is_superuser or role_slug in {"super-admin", "admin"}
+    can_sort_cpi = has_function_access(request.user, "projects.filter.cpi")
     cpi_min, cpi_max = 0, 100
     if can_sort_cpi:
         cpi_bounds = visible_surveys.aggregate(minimum=Min("cpi"), maximum=Max("cpi"))
@@ -120,6 +118,7 @@ def projects_page(request):
         "company_filter_default": "All clients",
         "project_columns": project_columns, "project_column_count": max(1, len(project_columns)),
         "can_sync": has_function_access(request.user, "sync.run"),
+        "can_export_projects": has_function_access(request.user, "projects.export"),
         "can_sort_cpi": can_sort_cpi, "cpi_min_bound": cpi_min, "cpi_max_bound": cpi_max,
     })
 
@@ -484,7 +483,16 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         return scope_surveys_for_user(super().get_queryset(), self.request.user)
 
     def get_required_function_permission(self):
+        if self.action == "export":
+            return "projects.export"
         return "survey_details.view" if self.action in {"retrieve", "quotas", "targeting"} else "projects.view"
+
+    def filter_queryset(self, queryset):
+        cpi_ordering = self.request.query_params.get("ordering", "").lstrip("-") == "cpi"
+        cpi_filtering = any(self.request.query_params.get(name) not in {None, ""} for name in ("min_cpi", "max_cpi"))
+        if (cpi_ordering or cpi_filtering) and not has_function_access(self.request.user, "projects.filter.cpi"):
+            raise PermissionDenied("Your account cannot filter or sort projects by CPI.")
+        return super().filter_queryset(queryset)
 
     def get_serializer_class(self):
         return SurveyDetailSerializer if self.action == "retrieve" else SurveyListSerializer
@@ -513,6 +521,8 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     )
     @action(detail=False, methods=["get"], url_path="export")
     def export(self, request, *args, **kwargs):
+        if not has_function_access(request.user, "projects.view"):
+            raise PermissionDenied("Project visibility is required before projects can be exported.")
         queryset = self.filter_queryset(self.get_queryset())
         columns = [column for column in _project_columns_for_user(request.user) if column != "actions"]
         local_now = timezone.localtime()

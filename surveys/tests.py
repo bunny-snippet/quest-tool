@@ -195,6 +195,11 @@ class SurveyAPITests(TestCase):
         self.assertEqual(response.data["count"], 2)
 
     def test_cpi_range_and_sort_are_applied_server_side(self):
+        UserFunctionOverride.objects.create(
+            user=self.user,
+            function=AccessFunction.objects.get(code="projects.filter.cpi"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
         self.survey.cpi = "2.50"
         self.survey.save(update_fields=["cpi"])
         higher = Survey.objects.create(source_id=9878, name="Higher CPI", cpi="7.25")
@@ -205,6 +210,11 @@ class SurveyAPITests(TestCase):
         self.assertEqual([item["local_id"] for item in response.data["results"]], [higher.local_id])
 
     def test_project_export_uses_filters_and_column_permissions(self):
+        UserFunctionOverride.objects.create(
+            user=self.user,
+            function=AccessFunction.objects.get(code="projects.filter.cpi"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
         self.survey.cpi = "2.50"
         self.survey.save(update_fields=["cpi"])
         excluded = Survey.objects.create(source_id=9879, name="Excluded high CPI", cpi="8.00")
