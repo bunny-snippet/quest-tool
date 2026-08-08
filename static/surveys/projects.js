@@ -27,8 +27,7 @@
     drawer: $('detailDrawer'), backdrop: $('drawerBackdrop'), closeDrawer: $('closeDrawer'),
     drawerSurvey: $('drawerSurvey'), drawerContent: $('drawerContent'), tabs: [...document.querySelectorAll('.drawer-tab')],
     multiSelects: [...document.querySelectorAll('[data-multi-filter]')],
-    cpiMin: $('cpiMinRange'), cpiMax: $('cpiMaxRange'), cpiValue: $('cpiRangeValue'),
-    cpiFill: $('cpiRangeFill'), ordering: $('projectOrdering'),
+    ordering: $('projectOrdering'),
   };
 
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -112,29 +111,6 @@
     updateMultiLabel(filter);
   });
 
-  function updateCpiRange(changedInput = null, reload = false) {
-    if (!els.cpiMin || !els.cpiMax) return;
-    let minimum = Number(els.cpiMin.value);
-    let maximum = Number(els.cpiMax.value);
-    if (minimum > maximum) {
-      if (changedInput === els.cpiMax) els.cpiMin.value = String(maximum);
-      else els.cpiMax.value = String(minimum);
-      minimum = Number(els.cpiMin.value);
-      maximum = Number(els.cpiMax.value);
-    }
-    const boundMin = Number(els.cpiMin.min);
-    const boundMax = Number(els.cpiMax.max);
-    const span = Math.max(0.01, boundMax - boundMin);
-    const left = ((minimum - boundMin) / span) * 100;
-    const right = ((maximum - boundMin) / span) * 100;
-    if (els.cpiFill) {
-      els.cpiFill.style.left = `${left}%`;
-      els.cpiFill.style.width = `${Math.max(0, right - left)}%`;
-    }
-    if (els.cpiValue) els.cpiValue.textContent = `${money(minimum)} – ${money(maximum)}`;
-    if (reload) scheduleLoad();
-  }
-
   function queryString() {
     const params = new URLSearchParams({ page: state.page, page_size: state.pageSize, ordering: els.ordering?.value || '-source_modified_at' });
     if (els.search.value.trim()) params.set('search', els.search.value.trim());
@@ -145,8 +121,6 @@
     const prefix = els.dateField.value;
     if (els.from.value) params.set(`${prefix}_from`, dateBoundary(els.from.value, els.fromTime.value));
     if (els.to.value) params.set(`${prefix}_to`, dateBoundary(els.to.value, els.toTime.value, true));
-    if (els.cpiMin && Number(els.cpiMin.value) > Number(els.cpiMin.min)) params.set('min_cpi', els.cpiMin.value);
-    if (els.cpiMax && Number(els.cpiMax.value) < Number(els.cpiMax.max)) params.set('max_cpi', els.cpiMax.value);
     return params.toString();
   }
 
@@ -230,7 +204,6 @@
 
   [els.search, els.from, els.fromTime, els.to, els.toTime].forEach((element) => element.addEventListener('input', scheduleLoad));
   els.dateField.addEventListener('change', () => { state.page = 1; loadSurveys(); });
-  [els.cpiMin, els.cpiMax].filter(Boolean).forEach((input) => input.addEventListener('input', () => updateCpiRange(input, true)));
   els.ordering?.addEventListener('change', () => { state.page = 1; loadSurveys(); });
   els.pageSize.addEventListener('change', () => { state.pageSize = Number(els.pageSize.value); state.page = 1; loadSurveys(); });
   els.clear.addEventListener('click', () => {
@@ -242,7 +215,6 @@
       if (search) { search.value = ''; search.dispatchEvent(new Event('input')); }
       updateMultiLabel(filter);
     });
-    if (els.cpiMin && els.cpiMax) { els.cpiMin.value = els.cpiMin.min; els.cpiMax.value = els.cpiMax.max; updateCpiRange(); }
     if (els.ordering) els.ordering.value = '-source_modified_at';
     closeMultiSelects(); state.page = 1; loadSurveys();
   });
@@ -361,6 +333,5 @@
     finally { els.sync.disabled = false; els.sync.classList.remove('syncing'); els.sync.lastChild.textContent = ' Sync now'; }
   });
 
-  updateCpiRange();
   loadSurveys();
 })();
