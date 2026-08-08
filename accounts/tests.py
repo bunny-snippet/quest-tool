@@ -4,6 +4,7 @@ from django.urls import reverse
 from rest_framework.test import APIClient
 
 from .access import has_function_access
+from .function_catalog import sync_access_function_catalog
 from .models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
 
 
@@ -59,6 +60,38 @@ class FunctionAccessTests(TestCase):
         self.assertContains(response, "<th>Market</th>", html=True)
         self.assertNotContains(response, 'id="syncButton"')
 
+    def test_project_export_and_cpi_filter_support_role_and_user_overrides(self):
+        response = self.client.get(reverse("projects"))
+        self.assertContains(response, 'id="exportProjects"')
+        self.assertNotContains(response, 'id="cpiFilterTrigger"')
+
+        UserFunctionOverride.objects.create(
+            user=self.user,
+            function=AccessFunction.objects.get(code="projects.export"),
+            effect="deny",
+        )
+        UserFunctionOverride.objects.create(
+            user=self.user,
+            function=AccessFunction.objects.get(code="projects.filter.cpi"),
+            effect="allow",
+        )
+        response = self.client.get(reverse("projects"))
+        self.assertNotContains(response, 'id="exportProjects"')
+        self.assertContains(response, 'id="cpiFilterTrigger"')
+
+        api = APIClient()
+        api.force_authenticate(self.user)
+        self.assertEqual(api.get(reverse("survey-export")).status_code, 403)
+        self.assertEqual(api.get(reverse("survey-list"), {"min_cpi": "1.00"}).status_code, 200)
+
+    def test_code_catalog_restores_new_permissions_for_access_editor(self):
+        AccessFunction.objects.filter(code="projects.export").delete()
+        sync_access_function_catalog()
+        function = AccessFunction.objects.get(code="projects.export")
+        self.assertTrue(
+            Role.objects.get(slug="employee").function_assignments.filter(function=function, allowed=True).exists()
+        )
+
     def test_employee_cannot_call_protected_tracking_api(self):
         response = APIClient().get(reverse("survey-attempt-list"))
         self.assertIn(response.status_code, {401, 403})
@@ -82,6 +115,9 @@ class FunctionAccessTests(TestCase):
         page = self.client.get(reverse("access-control"))
         self.assertContains(page, "Add user")
         self.assertContains(page, "userModal")
+        self.assertContains(page, "projects.export")
+        self.assertContains(page, "projects.filter.cpi")
+        self.assertContains(page, "projects.column.completes")
 
 
 class DelegatedVendorTests(TestCase):
