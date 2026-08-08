@@ -6,7 +6,10 @@
 {{ project_columns|json_script:"projectColumnAccess" }}
 <section class="page-intro">
   <div><p class="eyebrow">Survey operations</p><h1>All surveys</h1><p>Live inventory synchronized securely from InnovateMR.</p></div>
-  {% if can_sync %}<button class="primary-button sync-button" id="syncButton"><span class="sync-symbol">↻</span> Sync now</button>{% endif %}
+  <div class="page-intro-actions">
+    <button class="primary-button export-button project-export-button" id="exportProjects" type="button"><span aria-hidden="true">↓</span> Export CSV</button>
+    {% if can_sync %}<button class="primary-button sync-button" id="syncButton"><span class="sync-symbol">↻</span> Sync now</button>{% endif %}
+  </div>
 </section>
 
 <section class="filter-panel project-filters" aria-label="Survey filters">
@@ -137,4 +140,4 @@
   <div class="drawer-content" id="drawerContent"></div>
 </aside>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=11" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=12" defer></script>{% endblock %}

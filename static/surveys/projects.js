@@ -23,7 +23,7 @@
     totalPages: $('totalPages'), pageInput: $('pageInput'), first: $('firstPage'), prev: $('prevPage'),
     next: $('nextPage'), last: $('lastPage'), search: $('searchInput'), dateField: $('dateField'),
     from: $('fromDate'), fromTime: $('fromTime'), to: $('toDate'), toTime: $('toTime'),
-    pageSize: $('pageSize'), clear: $('clearFilters'), sync: $('syncButton'),
+    pageSize: $('pageSize'), clear: $('clearFilters'), sync: $('syncButton'), export: $('exportProjects'),
     drawer: $('detailDrawer'), backdrop: $('drawerBackdrop'), closeDrawer: $('closeDrawer'),
     drawerSurvey: $('drawerSurvey'), drawerContent: $('drawerContent'), tabs: [...document.querySelectorAll('.drawer-tab')],
     multiSelects: [...document.querySelectorAll('[data-multi-filter]')],
@@ -193,8 +193,12 @@
   });
   els.cpiReset?.addEventListener('click', () => resetCpiControl(true));
 
-  function queryString() {
-    const params = new URLSearchParams({ page: state.page, page_size: state.pageSize, ordering: selectedOrdering()?.value || '-source_modified_at' });
+  function queryString(includePage = true) {
+    const params = new URLSearchParams({ ordering: selectedOrdering()?.value || '-source_modified_at' });
+    if (includePage) {
+      params.set('page', state.page);
+      params.set('page_size', state.pageSize);
+    }
     if (els.search.value.trim()) params.set('search', els.search.value.trim());
     els.multiSelects.forEach((filter) => {
       const values = selectedValues(filter);
@@ -405,6 +409,13 @@
     if (!items.length) return '<div class="detail-empty"><div class="detail-empty-visual" aria-hidden="true"><span></span><span></span><span></span><i>✓</i></div><strong>No pre-screening questions</strong><p>This survey does not require any targeting questions right now.</p></div>';
     return `<div class="detail-list">${items.map((question, index) => `<article class="question-item"><div class="detail-index">${String(index + 1).padStart(2, '0')}</div><div class="detail-main"><div class="question-meta"><span>${escapeHtml(question.category || 'General')}</span><span>${escapeHtml(question.question_type || 'Question')}</span></div><h3>${escapeHtml(question.text || question.key)}</h3><small>${escapeHtml(question.key)}</small><div class="option-list">${(question.options || []).map((option) => `<span>${escapeHtml(option.OptionText || (option.ageStart != null ? `${option.ageStart}–${option.ageEnd}` : option.OptionId))}</span>`).join('') || '<em>No fixed options</em>'}</div></div></article>`).join('')}</div>`;
   }
+
+  els.export?.addEventListener('click', () => {
+    closeMultiSelects(); closeCpiFilter();
+    els.export.classList.add('exporting');
+    window.location.assign(`/api/v1/surveys/export/?${queryString(false)}`);
+    setTimeout(() => els.export.classList.remove('exporting'), 1200);
+  });
 
   els.sync?.addEventListener('click', async () => {
     els.sync.disabled = true; els.sync.classList.add('syncing'); els.sync.lastChild.textContent = ' Syncing…';
