@@ -101,5 +101,7 @@ class HasFunctionPermission(BasePermission):
 
     def has_permission(self, request, view):
         resolver = getattr(view, "get_required_function_permission", None)
-        code = resolver() if resolver else getattr(view, "required_function_permission", None)
-        return bool(code and has_function_access(request.user, code))
+        codes = resolver() if resolver else getattr(view, "required_function_permission", None)
+        if isinstance(codes, str):
+            codes = (codes,)
+        return bool(codes and any(has_function_access(request.user, code) for code in codes))

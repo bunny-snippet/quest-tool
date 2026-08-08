@@ -26,6 +26,14 @@ from accounts.access import (
     has_function_access,
     subordinate_user_ids,
 )
+from vendors.services import (
+    AllocationUnavailable,
+    finalize_attempt_capacity,
+    reserve_attempt_capacity,
+    resolve_vendor_survey_context,
+    scope_surveys_for_user,
+)
+from vendors.access import is_external_vendor_scope
 
 from .filters import SurveyAttemptFilter, SurveyFilter
 from .integrations import InnovateMRAPIError, InnovateMRClient
@@ -67,8 +75,9 @@ def dashboard_page(request):
 
 @function_permission_required("projects.view")
 def projects_page(request):
-    countries = Survey.objects.exclude(country_code="").values_list("country_code", "country").distinct().order_by("country_code")
-    companies = Survey.objects.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
+    visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
+    countries = visible_surveys.exclude(country_code="").values_list("country_code", "country").distinct().order_by("country_code")
+    companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
     column_permissions = {
         "project_id": "projects.column.project_id", "survey": "projects.column.survey",
         "market": "projects.column.market", "completes": "projects.column.completes",
@@ -132,6 +141,8 @@ def workspace_home(request):
         return HttpResponseRedirect(reverse("studies"))
     if has_function_access(request.user, "user_hits.view"):
         return HttpResponseRedirect(reverse("user-hits"))
+    if any(has_function_access(request.user, code) for code in ("vendors.view", "vendors.manage", "allocations.view", "allocations.manage")):
+        return HttpResponseRedirect(reverse("vendor-management"))
     if any(has_function_access(request.user, code) for code in ("access.manage", "users.view", "users.create", "roles.view", "roles.create")):
         return HttpResponseRedirect(reverse("access-control"))
     from django.core.exceptions import PermissionDenied
@@ -260,7 +271,7 @@ def survey_start(request):
         ):
             return _invalid_survey_link(request)
 
-        survey = Survey.objects.filter(
+        survey = scope_surveys_for_user(Survey.objects.all(), platform_user).filter(
             source_id=int(survey_id), local_id=internal_code, status=Survey.Status.LIVE
         ).first()
         if survey is None or not survey.entry_link:
@@ -276,12 +287,28 @@ def survey_start(request):
             except InnovateMRAPIError:
                 if not survey.targeting_questions.exists():
                     targeting_warning = "Pre-screening criteria are temporarily unavailable. You can still continue."
-        attempt = create_attempt(
-            survey,
-            platform_user,
-            get_request_ip(request),
-            client_data=get_request_client_data(request),
-        )
+        try:
+            with transaction.atomic():
+                allocation_context = resolve_vendor_survey_context(
+                    platform_user,
+                    survey,
+                    require_capacity=True,
+                    for_update=True,
+                )
+                attempt = create_attempt(
+                    survey,
+                    platform_user,
+                    get_request_ip(request),
+                    client_data=get_request_client_data(request),
+                )
+                if allocation_context:
+                    reserve_attempt_capacity(
+                        attempt,
+                        allocation_context.survey_allocation,
+                        client_allocation=allocation_context.client_allocation,
+                    )
+        except AllocationUnavailable as exc:
+            return _invalid_survey_link(request, str(exc), status_code=409)
         if targeting_warning:
             request.session[f"attempt_warning_{attempt.rid}"] = targeting_warning
         return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(attempt.rid)}")
@@ -381,6 +408,7 @@ def survey_status(request):
                 "exit_device", "exit_os", "exit_client_data", "status_source", "last_callback_at",
                 "callback_count", "updated_at"
             ])
+            finalize_attempt_capacity(attempt)
         status_label = attempt.get_status_display()
     else:
         status_label = "Unknown attempt"
@@ -425,6 +453,9 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ["source_modified_at", "source_created_at", "cpi", "sample_size", "completes", "created_at"]
     ordering = ["-source_modified_at", "-created_at"]
     permission_classes = [HasFunctionPermission]
+
+    def get_queryset(self):
+        return scope_surveys_for_user(super().get_queryset(), self.request.user)
 
     def get_required_function_permission(self):
         return "survey_details.view" if self.action in {"retrieve", "quotas", "targeting"} else "projects.view"
@@ -591,7 +622,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         queryset = self.filter_queryset(self.get_queryset())
         local_now = timezone.localtime()
         response = StreamingHttpResponse(
-            _attempt_csv_rows(queryset),
+            _attempt_csv_rows(queryset, request.user),
             content_type="text/csv; charset=utf-8",
         )
         response["Content-Disposition"] = f'attachment; filename="studies-{local_now:%Y%m%d-%H%M%S}-IST.csv"'
@@ -653,7 +684,7 @@ def _csv_safe(value):
     return f"'{value}" if value.startswith(("=", "+", "-", "@")) else value
 
 
-def _attempt_csv_rows(queryset):
+def _attempt_csv_rows(queryset, requesting_user=None):
     headers = [
         "Respondent ID (RID)", "Status code", "Status", "Status source", "Platform user ID", "Username", "Employee name",
         "Email", "Employee ID", "Account type", "Role", "Vendor ID", "Vendor name", "Vendor account type",
@@ -671,6 +702,7 @@ def _attempt_csv_rows(queryset):
     ]
     writer = csv.writer(_CsvEcho())
     yield "\ufeff" + writer.writerow(headers)
+    hide_source_cpi = is_external_vendor_scope(requesting_user)
     for attempt in queryset.iterator(chunk_size=1000):
         user = attempt.platform_user
         profile = getattr(user, "employee_profile", None) if user else None
@@ -690,7 +722,9 @@ def _attempt_csv_rows(queryset):
             attempt.client_id, attempt.client.name if attempt.client else "", attempt.client_allocation_id,
             attempt.survey_allocation_id,
             survey.local_id, survey.source_id, survey.name, survey.company_name, survey.country_code,
-            survey.language_code, attempt.supplier_code, survey.cpi, attempt.source_cpi_snapshot,
+            survey.language_code, attempt.supplier_code,
+            "" if hide_source_cpi else survey.cpi,
+            "" if hide_source_cpi else attempt.source_cpi_snapshot,
             attempt.cpi_cut_percent_snapshot, attempt.payable_cpi_snapshot, attempt.cpi_currency_snapshot,
             survey.loi, attempt.loi_seconds,
             attempt.initiation_ip, attempt.callback_ip, attempt.entry_browser, attempt.exit_browser,

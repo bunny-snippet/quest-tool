@@ -757,6 +757,11 @@ paths:
       summary: List synchronized surveys
       parameters:
       - in: query
+        name: client
+        schema:
+          type: number
+        description: Internal client record ID
+      - in: query
         name: company
         schema:
           type: array
@@ -885,6 +890,11 @@ paths:
       summary: List a survey's quotas
       parameters:
       - in: query
+        name: client
+        schema:
+          type: number
+        description: Internal client record ID
+      - in: query
         name: company
         schema:
           type: array
@@ -996,6 +1006,11 @@ paths:
         Options preserve InnovateMR's source structure.
       summary: List pre-screening questions and accepted answers
       parameters:
+      - in: query
+        name: client
+        schema:
+          type: number
+        description: Internal client record ID
       - in: query
         name: company
         schema:
@@ -1295,6 +1310,7 @@ paths:
   /api/v1/vendors/client-allocations/:
     get:
       operationId: api_v1_vendors_client_allocations_list
+      summary: List vendor client grants and quantities
       parameters:
       - in: query
         name: client
@@ -1345,7 +1361,7 @@ paths:
           * `internal_vendor` - Internal vendor
           * `external_vendor` - External vendor
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1358,8 +1374,9 @@ paths:
           description: ''
     post:
       operationId: api_v1_vendors_client_allocations_create
+      summary: Allocate a client and quantity to a vendor
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1385,6 +1402,7 @@ paths:
   /api/v1/vendors/client-allocations/{id}/:
     get:
       operationId: api_v1_vendors_client_allocations_retrieve
+      summary: Get a vendor client allocation
       parameters:
       - in: path
         name: id
@@ -1393,7 +1411,7 @@ paths:
         description: A unique integer value identifying this vendor client allocation.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1406,6 +1424,7 @@ paths:
           description: ''
     put:
       operationId: api_v1_vendors_client_allocations_update
+      summary: Replace a vendor client allocation
       parameters:
       - in: path
         name: id
@@ -1414,7 +1433,7 @@ paths:
         description: A unique integer value identifying this vendor client allocation.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1439,6 +1458,7 @@ paths:
           description: ''
     patch:
       operationId: api_v1_vendors_client_allocations_partial_update
+      summary: Update a vendor client allocation
       parameters:
       - in: path
         name: id
@@ -1447,7 +1467,7 @@ paths:
         description: A unique integer value identifying this vendor client allocation.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1471,6 +1491,7 @@ paths:
           description: ''
     delete:
       operationId: api_v1_vendors_client_allocations_destroy
+      summary: Deactivate a vendor client allocation
       parameters:
       - in: path
         name: id
@@ -1479,7 +1500,7 @@ paths:
         description: A unique integer value identifying this vendor client allocation.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1489,6 +1510,7 @@ paths:
   /api/v1/vendors/clients/:
     get:
       operationId: api_v1_vendors_clients_list
+      summary: List survey clients
       parameters:
       - in: query
         name: is_active
@@ -1523,7 +1545,7 @@ paths:
         schema:
           type: string
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1536,8 +1558,9 @@ paths:
           description: ''
     post:
       operationId: api_v1_vendors_clients_create
+      summary: Create a survey client
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1563,6 +1586,7 @@ paths:
   /api/v1/vendors/clients/{id}/:
     get:
       operationId: api_v1_vendors_clients_retrieve
+      summary: Get a survey client
       parameters:
       - in: path
         name: id
@@ -1571,7 +1595,7 @@ paths:
         description: A unique integer value identifying this client.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1584,6 +1608,7 @@ paths:
           description: ''
     put:
       operationId: api_v1_vendors_clients_update
+      summary: Replace a survey client
       parameters:
       - in: path
         name: id
@@ -1592,7 +1617,7 @@ paths:
         description: A unique integer value identifying this client.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1617,6 +1642,7 @@ paths:
           description: ''
     patch:
       operationId: api_v1_vendors_clients_partial_update
+      summary: Update a survey client
       parameters:
       - in: path
         name: id
@@ -1625,7 +1651,7 @@ paths:
         description: A unique integer value identifying this client.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1649,6 +1675,7 @@ paths:
           description: ''
     delete:
       operationId: api_v1_vendors_clients_destroy
+      summary: Deactivate a survey client
       parameters:
       - in: path
         name: id
@@ -1657,7 +1684,7 @@ paths:
         description: A unique integer value identifying this client.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1667,6 +1694,7 @@ paths:
   /api/v1/vendors/commercial-profiles/:
     get:
       operationId: api_v1_vendors_commercial_profiles_list
+      summary: List vendor CPI policies
       parameters:
       - in: query
         name: is_active
@@ -1707,7 +1735,7 @@ paths:
           * `internal_vendor` - Internal vendor
           * `external_vendor` - External vendor
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1720,8 +1748,9 @@ paths:
           description: ''
     post:
       operationId: api_v1_vendors_commercial_profiles_create
+      summary: Create a vendor CPI policy
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1747,6 +1776,7 @@ paths:
   /api/v1/vendors/commercial-profiles/{id}/:
     get:
       operationId: api_v1_vendors_commercial_profiles_retrieve
+      summary: Get a vendor CPI policy
       parameters:
       - in: path
         name: id
@@ -1755,7 +1785,7 @@ paths:
         description: A unique integer value identifying this vendor commercial profile.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1768,6 +1798,7 @@ paths:
           description: ''
     put:
       operationId: api_v1_vendors_commercial_profiles_update
+      summary: Replace a vendor CPI policy
       parameters:
       - in: path
         name: id
@@ -1776,7 +1807,7 @@ paths:
         description: A unique integer value identifying this vendor commercial profile.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1801,6 +1832,7 @@ paths:
           description: ''
     patch:
       operationId: api_v1_vendors_commercial_profiles_partial_update
+      summary: Update a vendor CPI policy
       parameters:
       - in: path
         name: id
@@ -1809,7 +1841,7 @@ paths:
         description: A unique integer value identifying this vendor commercial profile.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1833,6 +1865,7 @@ paths:
           description: ''
     delete:
       operationId: api_v1_vendors_commercial_profiles_destroy
+      summary: Deactivate a vendor CPI policy
       parameters:
       - in: path
         name: id
@@ -1841,16 +1874,97 @@ paths:
         description: A unique integer value identifying this vendor commercial profile.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
       responses:
         '204':
           description: No response body
+  /api/v1/vendors/directory/:
+    get:
+      operationId: api_v1_vendors_directory_list
+      summary: List internal and external vendor accounts
+      parameters:
+      - in: query
+        name: employee_profile__account_type
+        schema:
+          type: string
+          enum:
+          - employee
+          - external_vendor
+          - internal_vendor
+        description: |-
+          * `employee` - Employee
+          * `internal_vendor` - Internal vendor
+          * `external_vendor` - External vendor
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - Vendors & allocations
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedVendorDirectoryList'
+          description: ''
+  /api/v1/vendors/directory/{id}/:
+    get:
+      operationId: api_v1_vendors_directory_retrieve
+      summary: Get a vendor account and commercial summary
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this user.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorDirectory'
+          description: ''
   /api/v1/vendors/integrations/:
     get:
       operationId: api_v1_vendors_integrations_list
+      summary: List non-secret client integration metadata
       parameters:
       - in: query
         name: client
@@ -1887,7 +2001,7 @@ paths:
         schema:
           type: string
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1900,8 +2014,9 @@ paths:
           description: ''
     post:
       operationId: api_v1_vendors_integrations_create
+      summary: Create client integration metadata
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1927,6 +2042,7 @@ paths:
   /api/v1/vendors/integrations/{id}/:
     get:
       operationId: api_v1_vendors_integrations_retrieve
+      summary: Get client integration metadata
       parameters:
       - in: path
         name: id
@@ -1935,7 +2051,7 @@ paths:
         description: A unique integer value identifying this client integration.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -1948,6 +2064,7 @@ paths:
           description: ''
     put:
       operationId: api_v1_vendors_integrations_update
+      summary: Replace client integration metadata
       parameters:
       - in: path
         name: id
@@ -1956,7 +2073,7 @@ paths:
         description: A unique integer value identifying this client integration.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -1981,6 +2098,7 @@ paths:
           description: ''
     patch:
       operationId: api_v1_vendors_integrations_partial_update
+      summary: Update client integration metadata
       parameters:
       - in: path
         name: id
@@ -1989,7 +2107,7 @@ paths:
         description: A unique integer value identifying this client integration.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -2013,6 +2131,7 @@ paths:
           description: ''
     delete:
       operationId: api_v1_vendors_integrations_destroy
+      summary: Deactivate client integration metadata
       parameters:
       - in: path
         name: id
@@ -2021,16 +2140,35 @@ paths:
         description: A unique integer value identifying this client integration.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
       responses:
         '204':
           description: No response body
+  /api/v1/vendors/management-options/:
+    get:
+      operationId: api_v1_vendors_management_options_retrieve
+      description: Returns non-secret active vendor and client labels for allocation
+        modals, scoped to the current vendor hierarchy when applicable.
+      summary: List safe vendor-management selector options
+      tags:
+      - Vendors & allocations
+      security:
+      - cookieAuth: []
+      - basicAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorManagementOptions'
+          description: ''
   /api/v1/vendors/reservations/:
     get:
       operationId: api_v1_vendors_reservations_list
+      summary: List allocation reservation audit records
       parameters:
       - in: query
         name: client_allocation
@@ -2083,7 +2221,7 @@ paths:
         schema:
           type: integer
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -2097,6 +2235,7 @@ paths:
   /api/v1/vendors/reservations/{id}/:
     get:
       operationId: api_v1_vendors_reservations_retrieve
+      summary: Get an allocation reservation audit record
       parameters:
       - in: path
         name: id
@@ -2105,7 +2244,7 @@ paths:
         description: A unique integer value identifying this allocation reservation.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -2119,6 +2258,7 @@ paths:
   /api/v1/vendors/survey-allocations/:
     get:
       operationId: api_v1_vendors_survey_allocations_list
+      summary: List optional vendor survey overrides
       parameters:
       - in: query
         name: client_allocation
@@ -2165,7 +2305,7 @@ paths:
         schema:
           type: integer
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -2178,8 +2318,9 @@ paths:
           description: ''
     post:
       operationId: api_v1_vendors_survey_allocations_create
+      summary: Create a survey-specific quantity or CPI override
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -2205,6 +2346,7 @@ paths:
   /api/v1/vendors/survey-allocations/{id}/:
     get:
       operationId: api_v1_vendors_survey_allocations_retrieve
+      summary: Get a survey allocation override
       parameters:
       - in: path
         name: id
@@ -2213,7 +2355,7 @@ paths:
         description: A unique integer value identifying this vendor survey allocation.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -2226,6 +2368,7 @@ paths:
           description: ''
     put:
       operationId: api_v1_vendors_survey_allocations_update
+      summary: Replace a survey allocation override
       parameters:
       - in: path
         name: id
@@ -2234,7 +2377,7 @@ paths:
         description: A unique integer value identifying this vendor survey allocation.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -2259,6 +2402,7 @@ paths:
           description: ''
     patch:
       operationId: api_v1_vendors_survey_allocations_partial_update
+      summary: Update a survey allocation override
       parameters:
       - in: path
         name: id
@@ -2267,7 +2411,7 @@ paths:
         description: A unique integer value identifying this vendor survey allocation.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       requestBody:
         content:
           application/json:
@@ -2291,6 +2435,7 @@ paths:
           description: ''
     delete:
       operationId: api_v1_vendors_survey_allocations_destroy
+      summary: Deactivate a survey allocation override
       parameters:
       - in: path
         name: id
@@ -2299,7 +2444,7 @@ paths:
         description: A unique integer value identifying this vendor survey allocation.
         required: true
       tags:
-      - api
+      - Vendors & allocations
       security:
       - cookieAuth: []
       - basicAuth: []
@@ -2396,9 +2541,11 @@ components:
         survey_allocation:
           type: integer
           readOnly: true
+          nullable: true
         survey:
           type: integer
           readOnly: true
+          nullable: true
         quantity:
           type: integer
           readOnly: true
@@ -2908,6 +3055,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/VendorCommercialProfile'
+    PaginatedVendorDirectoryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorDirectory'
     PaginatedVendorSurveyAllocationList:
       type: object
       required:
@@ -3322,6 +3492,7 @@ components:
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
+          readOnly: true
         cpi_cut_percent_snapshot:
           type: string
           format: decimal
@@ -3446,6 +3617,7 @@ components:
       - exit_ip
       - language_code
       - rid
+      - source_cpi_snapshot
       - status_label
       - survey_local_id
       - survey_name
@@ -3475,6 +3647,9 @@ components:
     SurveyDetail:
       type: object
       properties:
+        id:
+          type: integer
+          readOnly: true
         local_id:
           type: string
           readOnly: true
@@ -3524,6 +3699,16 @@ components:
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
+          readOnly: true
+        cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          readOnly: true
+        vendor_pricing:
+          type: boolean
+          readOnly: true
         loi:
           type: integer
           maximum: 9223372036854775807
@@ -3632,7 +3817,10 @@ components:
       required:
       - client_name
       - country_label
+      - cpi
+      - cpi_cut_percent
       - created_at
+      - id
       - local_id
       - progress_percent
       - quotas
@@ -3642,9 +3830,13 @@ components:
       - start_link
       - targeting_questions
       - updated_at
+      - vendor_pricing
     SurveyList:
       type: object
       properties:
+        id:
+          type: integer
+          readOnly: true
         local_id:
           type: string
           readOnly: true
@@ -3694,6 +3886,16 @@ components:
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
+          readOnly: true
+        cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          readOnly: true
+        vendor_pricing:
+          type: boolean
+          readOnly: true
         loi:
           type: integer
           maximum: 9223372036854775807
@@ -3781,7 +3983,10 @@ components:
       required:
       - client_name
       - country_label
+      - cpi
+      - cpi_cut_percent
       - created_at
+      - id
       - local_id
       - progress_percent
       - source_created_display
@@ -3789,6 +3994,7 @@ components:
       - source_modified_display
       - start_link
       - updated_at
+      - vendor_pricing
     SurveyQuota:
       type: object
       properties:
@@ -4403,6 +4609,123 @@ components:
           type: boolean
       required:
       - vendor
+    VendorDirectory:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+        full_name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+          title: Email address
+        account_type:
+          type: string
+          readOnly: true
+        role_name:
+          type: string
+          readOnly: true
+          nullable: true
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+        commercial_profile_id:
+          type: integer
+          readOnly: true
+          nullable: true
+        default_cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          readOnly: true
+          nullable: true
+        currency:
+          type: string
+          readOnly: true
+          nullable: true
+        allocation_count:
+          type: integer
+          readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+          title: Active
+          description: Designates whether this user should be treated as active. Unselect
+            this instead of deleting accounts.
+        date_joined:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - account_type
+      - allocation_count
+      - commercial_profile_id
+      - created_by
+      - currency
+      - date_joined
+      - default_cpi_cut_percent
+      - email
+      - full_name
+      - id
+      - is_active
+      - role_name
+      - username
+    VendorManagementClientOption:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        code:
+          type: string
+        provider_code:
+          type: string
+      required:
+      - code
+      - id
+      - name
+      - provider_code
+    VendorManagementOptions:
+      type: object
+      properties:
+        vendors:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorManagementVendorOption'
+        clients:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorManagementClientOption'
+      required:
+      - clients
+      - vendors
+    VendorManagementVendorOption:
+      type: object
+      properties:
+        id:
+          type: integer
+        full_name:
+          type: string
+        username:
+          type: string
+        account_type:
+          $ref: '#/components/schemas/AccountTypeEnum'
+      required:
+      - account_type
+      - full_name
+      - id
+      - username
     VendorSurveyAllocation:
       type: object
       properties:

@@ -1,12 +1,16 @@
 from datetime import timedelta
+from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP
 
+from django.conf import settings
 from django.db import transaction
+from django.db.models import Exists, F, OuterRef, Prefetch, Q
 from django.utils import timezone
 
 from accounts.models import EmployeeProfile
-from surveys.models import SurveyAttempt
+from surveys.models import Survey, SurveyAttempt
 
+from .access import vendor_scope_user_id
 from .models import AllocationReservation, VendorClientAllocation, VendorSurveyAllocation
 
 
@@ -15,6 +19,15 @@ MONEY_QUANTUM = Decimal("0.01")
 
 class AllocationUnavailable(ValueError):
     """Raised when a vendor cannot reserve capacity for a survey."""
+
+
+@dataclass(frozen=True)
+class VendorSurveyContext:
+    vendor_id: int
+    client_allocation: VendorClientAllocation
+    survey_allocation: VendorSurveyAllocation | None
+    cpi_cut_percent: Decimal
+    payable_cpi: Decimal | None
 
 
 def payable_cpi(source_cpi, cut_percent) -> Decimal | None:
@@ -36,11 +49,151 @@ def _is_active_now(allocation, now) -> bool:
     )
 
 
+def _active_window_q(now, prefix="") -> Q:
+    start = f"{prefix}starts_at"
+    end = f"{prefix}ends_at"
+    return (Q(**{f"{start}__isnull": True}) | Q(**{f"{start}__lte": now})) & (
+        Q(**{f"{end}__isnull": True}) | Q(**{f"{end}__gt": now})
+    )
+
+
+def _available_quantity_q(prefix="") -> Q:
+    return Q(**{
+        f"{prefix}quantity_limit__gt": F(f"{prefix}consumed_quantity") + F(f"{prefix}reserved_quantity")
+    })
+
+
+def scope_surveys_for_user(queryset, user):
+    """Apply client visibility and optional survey-rule availability for a vendor hierarchy."""
+
+    vendor_id = vendor_scope_user_id(user)
+    if not vendor_id:
+        return queryset
+    now = timezone.now()
+    client_allocations = (
+        VendorClientAllocation.objects.filter(
+            vendor_id=vendor_id,
+            vendor__is_active=True,
+            client__is_active=True,
+            is_active=True,
+        )
+        .filter(
+            Q(vendor__vendor_commercial_profile__isnull=True)
+            | Q(vendor__vendor_commercial_profile__is_active=True)
+        )
+        .filter(_active_window_q(now))
+        .filter(_available_quantity_q())
+        .select_related("vendor", "vendor__employee_profile", "vendor__vendor_commercial_profile", "client")
+    )
+    survey_rules = VendorSurveyAllocation.objects.filter(
+        client_allocation__vendor_id=vendor_id,
+        survey_id=OuterRef("pk"),
+    )
+    available_rules = survey_rules.filter(is_active=True).filter(_active_window_q(now)).filter(_available_quantity_q())
+    available_rule_prefetch = (
+        VendorSurveyAllocation.objects.filter(client_allocation__vendor_id=vendor_id, is_active=True)
+        .filter(_active_window_q(now))
+        .filter(_available_quantity_q())
+        .select_related("client_allocation", "client_allocation__vendor", "client_allocation__vendor__employee_profile")
+    )
+    return (
+        queryset.filter(client__vendor_allocations__in=client_allocations, remaining__gt=0)
+        .annotate(
+            vendor_has_survey_rule=Exists(survey_rules),
+            vendor_survey_rule_available=Exists(available_rules),
+        )
+        .filter(Q(vendor_has_survey_rule=False) | Q(vendor_survey_rule_available=True))
+        .prefetch_related(
+            Prefetch("client__vendor_allocations", queryset=client_allocations, to_attr="request_vendor_allocations"),
+            Prefetch("vendor_allocations", queryset=available_rule_prefetch, to_attr="request_vendor_survey_allocations"),
+        )
+        .distinct()
+    )
+
+
+def resolve_vendor_survey_context(user, survey: Survey, *, require_capacity=True, for_update=False):
+    """Resolve the vendor's active client grant and optional per-survey override."""
+
+    vendor_id = vendor_scope_user_id(user)
+    if not vendor_id:
+        return None
+    now = timezone.now()
+    client_queryset = VendorClientAllocation.objects.select_related(
+        "vendor", "vendor__employee_profile", "vendor__vendor_commercial_profile", "client"
+    )
+    if for_update:
+        client_queryset = client_queryset.select_for_update()
+    client_allocation = client_queryset.filter(
+        vendor_id=vendor_id,
+        vendor__is_active=True,
+        client__is_active=True,
+        client_id=survey.client_id,
+        is_active=True,
+    ).filter(
+        Q(vendor__vendor_commercial_profile__isnull=True)
+        | Q(vendor__vendor_commercial_profile__is_active=True)
+    ).first()
+    if not client_allocation or not _is_active_now(client_allocation, now):
+        raise AllocationUnavailable("This client is not allocated to the vendor.")
+    if require_capacity and client_allocation.remaining_quantity < 1:
+        raise AllocationUnavailable("Client quantity is exhausted.")
+
+    survey_queryset = VendorSurveyAllocation.objects.select_related("client_allocation")
+    if for_update:
+        survey_queryset = survey_queryset.select_for_update()
+    survey_allocation = survey_queryset.filter(
+        client_allocation=client_allocation,
+        survey=survey,
+    ).first()
+    if survey_allocation:
+        if not _is_active_now(survey_allocation, now):
+            raise AllocationUnavailable("This survey is disabled or outside its allocation dates.")
+        if require_capacity and survey_allocation.remaining_quantity < 1:
+            raise AllocationUnavailable("Survey quantity is exhausted.")
+    if require_capacity and survey.remaining < 1:
+        raise AllocationUnavailable("Upstream survey quantity is exhausted.")
+
+    account_type = client_allocation.vendor.employee_profile.account_type
+    cut = (
+        survey_allocation.effective_cpi_cut_percent
+        if survey_allocation
+        else client_allocation.effective_cpi_cut_percent
+    )
+    if account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
+        cut = Decimal("0.00")
+    return VendorSurveyContext(
+        vendor_id=vendor_id,
+        client_allocation=client_allocation,
+        survey_allocation=survey_allocation,
+        cpi_cut_percent=cut,
+        payable_cpi=payable_cpi(survey.cpi, cut),
+    )
+
+
+def survey_pricing_for_user(user, survey: Survey) -> tuple[Decimal | None, Decimal | None]:
+    """Return request-visible CPI and applied cut without exposing source CPI to external vendors."""
+
+    if not vendor_scope_user_id(user):
+        return survey.cpi, None
+    client_allocations = getattr(getattr(survey, "client", None), "request_vendor_allocations", None)
+    survey_allocations = getattr(survey, "request_vendor_survey_allocations", None)
+    if client_allocations:
+        client_allocation = client_allocations[0]
+        survey_allocation = survey_allocations[0] if survey_allocations else None
+        cut = survey_allocation.effective_cpi_cut_percent if survey_allocation else client_allocation.effective_cpi_cut_percent
+        if client_allocation.vendor.employee_profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
+            cut = Decimal("0.00")
+        return payable_cpi(survey.cpi, cut), cut
+    context = resolve_vendor_survey_context(user, survey, require_capacity=False)
+    return context.payable_cpi, context.cpi_cut_percent
+
+
 @transaction.atomic
 def reserve_attempt_capacity(
     attempt: SurveyAttempt,
-    survey_allocation: VendorSurveyAllocation,
+    survey_allocation: VendorSurveyAllocation | None = None,
     *,
+    client_allocation: VendorClientAllocation | None = None,
     expires_at=None,
 ) -> AllocationReservation:
     """Reserve one unit and freeze the attempt's vendor/client/CPI context.
@@ -54,38 +207,50 @@ def reserve_attempt_capacity(
     if existing:
         return existing
 
-    locked_survey_allocation = (
-        VendorSurveyAllocation.objects.select_for_update()
-        .select_related(
-            "survey", "client_allocation", "client_allocation__vendor",
-            "client_allocation__vendor__employee_profile",
-            "client_allocation__vendor__vendor_commercial_profile",
-            "client_allocation__client",
+    if client_allocation is None and survey_allocation is not None:
+        client_allocation = survey_allocation.client_allocation
+    if client_allocation is None:
+        raise AllocationUnavailable("A client allocation is required.")
+    client_allocation = (
+        VendorClientAllocation.objects.select_for_update()
+        .select_related("vendor", "vendor__employee_profile", "vendor__vendor_commercial_profile", "client")
+        .get(pk=client_allocation.pk)
+    )
+    locked_survey_allocation = None
+    if survey_allocation is not None:
+        locked_survey_allocation = (
+            VendorSurveyAllocation.objects.select_for_update()
+            .select_related("survey", "client_allocation")
+            .get(pk=survey_allocation.pk)
         )
-        .get(pk=survey_allocation.pk)
-    )
-    client_allocation = VendorClientAllocation.objects.select_for_update().get(
-        pk=locked_survey_allocation.client_allocation_id
-    )
     now = timezone.now()
 
-    if attempt.survey_id != locked_survey_allocation.survey_id:
+    commercial_profile = getattr(client_allocation.vendor, "vendor_commercial_profile", None)
+    if not client_allocation.vendor.is_active or not client_allocation.client.is_active:
+        raise AllocationUnavailable("Vendor or client access is inactive.")
+    if commercial_profile and not commercial_profile.is_active:
+        raise AllocationUnavailable("Vendor commercial access is inactive.")
+    if locked_survey_allocation and attempt.survey_id != locked_survey_allocation.survey_id:
         raise AllocationUnavailable("Attempt survey does not match the assigned survey.")
     if attempt.survey.client_id != client_allocation.client_id:
         raise AllocationUnavailable("Survey is not mapped to the allocation's client.")
     if not _is_active_now(client_allocation, now):
         raise AllocationUnavailable("Client allocation is inactive or outside its active dates.")
-    if not _is_active_now(locked_survey_allocation, now):
+    if locked_survey_allocation and not _is_active_now(locked_survey_allocation, now):
         raise AllocationUnavailable("Survey allocation is inactive or outside its active dates.")
     if client_allocation.remaining_quantity < 1:
         raise AllocationUnavailable("Client quantity is exhausted.")
-    if locked_survey_allocation.remaining_quantity < 1:
+    if locked_survey_allocation and locked_survey_allocation.remaining_quantity < 1:
         raise AllocationUnavailable("Survey quantity is exhausted.")
     if attempt.survey.remaining < 1:
         raise AllocationUnavailable("Upstream survey quantity is exhausted.")
 
     vendor_profile = client_allocation.vendor.employee_profile
-    cut = locked_survey_allocation.effective_cpi_cut_percent
+    cut = (
+        locked_survey_allocation.effective_cpi_cut_percent
+        if locked_survey_allocation
+        else client_allocation.effective_cpi_cut_percent
+    )
     if vendor_profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
         cut = Decimal("0.00")
     source_cpi = attempt.survey.cpi
@@ -93,8 +258,9 @@ def reserve_attempt_capacity(
 
     client_allocation.reserved_quantity += 1
     client_allocation.save(update_fields=["reserved_quantity", "updated_at"])
-    locked_survey_allocation.reserved_quantity += 1
-    locked_survey_allocation.save(update_fields=["reserved_quantity", "updated_at"])
+    if locked_survey_allocation:
+        locked_survey_allocation.reserved_quantity += 1
+        locked_survey_allocation.save(update_fields=["reserved_quantity", "updated_at"])
 
     SurveyAttempt.objects.filter(pk=attempt.pk).update(
         vendor=client_allocation.vendor,
@@ -105,8 +271,8 @@ def reserve_attempt_capacity(
         cpi_cut_percent_snapshot=cut,
         payable_cpi_snapshot=final_cpi,
         cpi_currency_snapshot=(
-            getattr(client_allocation.vendor, "vendor_commercial_profile", None).currency
-            if hasattr(client_allocation.vendor, "vendor_commercial_profile")
+            commercial_profile.currency
+            if commercial_profile
             else "USD"
         ),
     )
@@ -116,7 +282,7 @@ def reserve_attempt_capacity(
         client_allocation=client_allocation,
         survey_allocation=locked_survey_allocation,
         quantity=1,
-        expires_at=expires_at or now + timedelta(minutes=30),
+        expires_at=expires_at or now + timedelta(minutes=settings.VENDOR_RESERVATION_TTL_MINUTES),
     )
 
 
@@ -133,16 +299,24 @@ def finalize_attempt_capacity(attempt: SurveyAttempt) -> AllocationReservation |
         return reservation
 
     client_allocation = VendorClientAllocation.objects.select_for_update().get(pk=reservation.client_allocation_id)
-    survey_allocation = VendorSurveyAllocation.objects.select_for_update().get(pk=reservation.survey_allocation_id)
+    survey_allocation = (
+        VendorSurveyAllocation.objects.select_for_update().get(pk=reservation.survey_allocation_id)
+        if reservation.survey_allocation_id
+        else None
+    )
     quantity = reservation.quantity
-    if client_allocation.reserved_quantity < quantity or survey_allocation.reserved_quantity < quantity:
+    if client_allocation.reserved_quantity < quantity or (
+        survey_allocation and survey_allocation.reserved_quantity < quantity
+    ):
         raise RuntimeError("Allocation counters are inconsistent with the reservation.")
 
     client_allocation.reserved_quantity -= quantity
-    survey_allocation.reserved_quantity -= quantity
+    if survey_allocation:
+        survey_allocation.reserved_quantity -= quantity
     if attempt.status == SurveyAttempt.Status.COMPLETED:
         client_allocation.consumed_quantity += quantity
-        survey_allocation.consumed_quantity += quantity
+        if survey_allocation:
+            survey_allocation.consumed_quantity += quantity
         reservation.status = AllocationReservation.Status.CONSUMED
         reservation.reason = "Completed survey"
     else:
@@ -150,7 +324,8 @@ def finalize_attempt_capacity(attempt: SurveyAttempt) -> AllocationReservation |
         reservation.reason = f"Released for attempt status {attempt.status}"
 
     client_allocation.save(update_fields=["reserved_quantity", "consumed_quantity", "updated_at"])
-    survey_allocation.save(update_fields=["reserved_quantity", "consumed_quantity", "updated_at"])
+    if survey_allocation:
+        survey_allocation.save(update_fields=["reserved_quantity", "consumed_quantity", "updated_at"])
     reservation.finalized_at = timezone.now()
     reservation.save(update_fields=["status", "reason", "finalized_at", "updated_at"])
     return reservation
@@ -165,14 +340,22 @@ def expire_reservation(reservation: AllocationReservation) -> AllocationReservat
         raise AllocationUnavailable("Reservation has not expired yet.")
 
     client_allocation = VendorClientAllocation.objects.select_for_update().get(pk=locked.client_allocation_id)
-    survey_allocation = VendorSurveyAllocation.objects.select_for_update().get(pk=locked.survey_allocation_id)
+    survey_allocation = (
+        VendorSurveyAllocation.objects.select_for_update().get(pk=locked.survey_allocation_id)
+        if locked.survey_allocation_id
+        else None
+    )
     quantity = locked.quantity
-    if client_allocation.reserved_quantity < quantity or survey_allocation.reserved_quantity < quantity:
+    if client_allocation.reserved_quantity < quantity or (
+        survey_allocation and survey_allocation.reserved_quantity < quantity
+    ):
         raise RuntimeError("Allocation counters are inconsistent with the reservation.")
     client_allocation.reserved_quantity -= quantity
-    survey_allocation.reserved_quantity -= quantity
+    if survey_allocation:
+        survey_allocation.reserved_quantity -= quantity
     client_allocation.save(update_fields=["reserved_quantity", "updated_at"])
-    survey_allocation.save(update_fields=["reserved_quantity", "updated_at"])
+    if survey_allocation:
+        survey_allocation.save(update_fields=["reserved_quantity", "updated_at"])
     locked.status = AllocationReservation.Status.EXPIRED
     locked.reason = "Reservation expired before a terminal callback"
     locked.finalized_at = timezone.now()

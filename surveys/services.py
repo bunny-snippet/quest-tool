@@ -256,6 +256,10 @@ def reconcile_attempt_status(client: InnovateMRClient, attempt: SurveyAttempt) -
             ])
 
         locked.save(update_fields=list(dict.fromkeys(update_fields)))
+        if terminal_status:
+            from vendors.services import finalize_attempt_capacity
+
+            finalize_attempt_capacity(locked)
     return bool(terminal_status)
 
 

@@ -57,6 +57,12 @@
   }
 
   $$('[data-open-user]').forEach((button) => button.addEventListener('click', () => { resetUserForm(); showModal(userModal); }));
+  if (new URLSearchParams(window.location.search).get('open') === 'user' && userModal) {
+    resetUserForm();
+    if (userForm.elements.account_type) userForm.elements.account_type.value = 'internal_vendor';
+    showModal(userModal);
+    history.replaceState({}, '', window.location.pathname);
+  }
   $$('[data-edit-user]').forEach((button) => button.addEventListener('click', async () => {
     resetUserForm(); userId = button.dataset.editUser;
     try {

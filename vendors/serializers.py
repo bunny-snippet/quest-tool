@@ -1,5 +1,6 @@
 from decimal import Decimal
 
+from django.contrib.auth import get_user_model
 from rest_framework import serializers
 
 from accounts.models import EmployeeProfile
@@ -12,6 +13,54 @@ from .models import (
     VendorCommercialProfile,
     VendorSurveyAllocation,
 )
+
+
+class VendorDirectorySerializer(serializers.ModelSerializer):
+    full_name = serializers.SerializerMethodField()
+    account_type = serializers.CharField(source="employee_profile.account_type", read_only=True)
+    role_name = serializers.CharField(source="employee_profile.role.name", read_only=True, allow_null=True)
+    created_by = serializers.CharField(source="employee_profile.created_by.username", read_only=True, allow_null=True)
+    commercial_profile_id = serializers.IntegerField(source="vendor_commercial_profile.id", read_only=True, allow_null=True)
+    default_cpi_cut_percent = serializers.DecimalField(
+        source="vendor_commercial_profile.default_cpi_cut_percent",
+        max_digits=5,
+        decimal_places=2,
+        read_only=True,
+        allow_null=True,
+    )
+    currency = serializers.CharField(source="vendor_commercial_profile.currency", read_only=True, allow_null=True)
+    allocation_count = serializers.IntegerField(read_only=True)
+
+    class Meta:
+        model = get_user_model()
+        fields = [
+            "id", "username", "full_name", "email", "account_type", "role_name", "created_by",
+            "commercial_profile_id", "default_cpi_cut_percent", "currency", "allocation_count",
+            "is_active", "date_joined",
+        ]
+        read_only_fields = fields
+
+    def get_full_name(self, obj) -> str:
+        return obj.get_full_name() or obj.username
+
+
+class VendorManagementVendorOptionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    full_name = serializers.CharField()
+    username = serializers.CharField()
+    account_type = serializers.ChoiceField(choices=EmployeeProfile.AccountType.choices)
+
+
+class VendorManagementClientOptionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    code = serializers.CharField()
+    provider_code = serializers.CharField()
+
+
+class VendorManagementOptionsSerializer(serializers.Serializer):
+    vendors = VendorManagementVendorOptionSerializer(many=True)
+    clients = VendorManagementClientOptionSerializer(many=True)
 
 
 class ClientIntegrationSerializer(serializers.ModelSerializer):
@@ -166,7 +215,7 @@ class VendorSurveyAllocationSerializer(serializers.ModelSerializer):
 class AllocationReservationSerializer(serializers.ModelSerializer):
     rid = serializers.CharField(source="attempt.rid", read_only=True)
     vendor = serializers.IntegerField(source="client_allocation.vendor_id", read_only=True)
-    survey = serializers.IntegerField(source="survey_allocation.survey_id", read_only=True)
+    survey = serializers.IntegerField(source="survey_allocation.survey_id", read_only=True, allow_null=True)
 
     class Meta:
         model = AllocationReservation

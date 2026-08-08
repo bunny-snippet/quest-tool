@@ -13,6 +13,7 @@ from surveys.models import Survey, SurveyAttempt
 
 from .models import AllocationReservation, Client, VendorClientAllocation, VendorCommercialProfile, VendorSurveyAllocation
 from .services import AllocationUnavailable, finalize_attempt_capacity, payable_cpi, reserve_attempt_capacity
+from .tasks import expire_allocation_reservations_task
 
 
 class VendorFoundationTests(TestCase):
@@ -122,6 +123,70 @@ class VendorFoundationTests(TestCase):
         with self.assertRaisesMessage(AllocationUnavailable, "Survey quantity is exhausted"):
             reserve_attempt_capacity(self.attempt("Ua7Hh8Ii9J"), self.external_survey_allocation)
 
+    def test_client_grant_without_survey_override_scopes_projects_and_tracks_completion(self):
+        unrestricted_survey = Survey.objects.create(
+            client=self.client_record,
+            source_id=88002,
+            name="Client-level survey",
+            status=Survey.Status.LIVE,
+            remaining=10,
+            cpi=Decimal("10.00"),
+            entry_link="https://edgeapi.innovatemr.net/startSurvey?survNum=uat&supCode=1150&PID=[%%pid%%]",
+            targeting_synced_at=timezone.now(),
+        )
+        hidden_client = Client.objects.create(code="hidden", name="Hidden client", created_by=self.owner)
+        Survey.objects.create(
+            client=hidden_client,
+            source_id=88003,
+            name="Hidden survey",
+            status=Survey.Status.LIVE,
+            remaining=10,
+            cpi=Decimal("20.00"),
+        )
+        for code in ["projects.view", "survey_links.copy", "attempts.view"]:
+            UserFunctionOverride.objects.create(
+                user=self.external,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
+
+        api = APIClient()
+        api.force_authenticate(self.external)
+        listing = api.get(reverse("survey-list"))
+        self.assertEqual(listing.status_code, 200)
+        rows = {item["source_id"]: item for item in listing.data["results"]}
+        self.assertEqual(set(rows), {88001, 88002})
+        self.assertEqual(Decimal(rows[88002]["cpi"]), Decimal("7.00"))
+        self.assertEqual(Decimal(rows[88002]["cpi_cut_percent"]), Decimal("30.00"))
+
+        start = self.client.get(
+            reverse("survey-start"),
+            {
+                "surveyId": unrestricted_survey.source_id,
+                "supplierCode": "1000",
+                "userId": self.external.pk,
+                "code": unrestricted_survey.local_id,
+            },
+        )
+        self.assertEqual(start.status_code, 302)
+        attempt = SurveyAttempt.objects.get(survey=unrestricted_survey)
+        reservation = AllocationReservation.objects.get(attempt=attempt)
+        self.assertIsNone(reservation.survey_allocation)
+        self.assertEqual(attempt.payable_cpi_snapshot, Decimal("7.00"))
+
+        callback = self.client.get(reverse("survey-status"), {"status": "1", "rid": attempt.rid})
+        self.assertEqual(callback.status_code, 200)
+        reservation.refresh_from_db()
+        self.external_client_allocation.refresh_from_db()
+        self.assertEqual(reservation.status, AllocationReservation.Status.CONSUMED)
+        self.assertEqual(self.external_client_allocation.consumed_quantity, 1)
+
+        attempt_api = api.get(reverse("survey-attempt-list"))
+        self.assertEqual(attempt_api.status_code, 200)
+        attempt_row = attempt_api.data["results"][0]
+        self.assertIsNone(attempt_row["source_cpi_snapshot"])
+        self.assertEqual(Decimal(attempt_row["payable_cpi_snapshot"]), Decimal("7.00"))
+
     def test_superuser_can_manage_foundation_api_and_employee_cannot(self):
         owner_api = APIClient()
         owner_api.force_authenticate(self.owner)
@@ -131,6 +196,9 @@ class VendorFoundationTests(TestCase):
             "provider_code": "custom",
         })
         self.assertEqual(response.status_code, 201)
+        directory = owner_api.get(reverse("vendor-directory-list"))
+        self.assertEqual(directory.status_code, 200)
+        self.assertEqual(directory.data["count"], 2)
 
         employee_api = APIClient()
         employee_api.force_authenticate(self.employee)
@@ -181,3 +249,49 @@ class VendorFoundationTests(TestCase):
             expires_at=timezone.now() + timedelta(minutes=15),
         )
         self.assertGreater(reservation.expires_at, timezone.now())
+
+        AllocationReservation.objects.filter(pk=reservation.pk).update(expires_at=timezone.now() - timedelta(seconds=1))
+        result = expire_allocation_reservations_task.run()
+        reservation.refresh_from_db()
+        self.external_client_allocation.refresh_from_db()
+        self.external_survey_allocation.refresh_from_db()
+        self.assertEqual(result["expired"], 1)
+        self.assertEqual(reservation.status, AllocationReservation.Status.EXPIRED)
+        self.assertEqual(self.external_client_allocation.reserved_quantity, 0)
+        self.assertEqual(self.external_survey_allocation.reserved_quantity, 0)
+
+    def test_explicit_inactive_survey_rule_blocks_only_that_survey(self):
+        second = Survey.objects.create(
+            client=self.client_record,
+            source_id=88004,
+            name="Client fallback survey",
+            status=Survey.Status.LIVE,
+            remaining=4,
+            cpi=Decimal("4.00"),
+        )
+        self.external_survey_allocation.is_active = False
+        self.external_survey_allocation.save(update_fields=["is_active"])
+        UserFunctionOverride.objects.create(
+            user=self.external,
+            function=AccessFunction.objects.get(code="projects.view"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        api = APIClient()
+        api.force_authenticate(self.external)
+        ids = {row["source_id"] for row in api.get(reverse("survey-list")).data["results"]}
+        self.assertEqual(ids, {second.source_id})
+
+    def test_allocation_manager_can_open_workspace_and_use_safe_options(self):
+        UserFunctionOverride.objects.create(
+            user=self.employee,
+            function=AccessFunction.objects.get(code="allocations.manage"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        self.client.force_login(self.employee)
+        page = self.client.get(reverse("vendor-management"))
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, "Commercial policies")
+        options = self.client.get(reverse("vendor-management-options"))
+        self.assertEqual(options.status_code, 200)
+        self.assertEqual(len(options.json()["vendors"]), 2)
+        self.assertIn(self.client_record.pk, {item["id"] for item in options.json()["clients"]})

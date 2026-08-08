@@ -11,6 +11,8 @@ All four values are required and the copied link is generated with the authentic
 - `supplierCode` matches the platform-facing `PUBLIC_SUPPLIER_CODE` setting (`1000` by default); and
 - the survey has a non-empty allocated entry link.
 
+For a vendor or an internal-vendor respondent, validation also requires a currently active client allocation with remaining quantity. An explicit survey override acts as an additional allow/block, date-window and quantity rule. Attempt creation and capacity reservation commit together, so an exhausted allocation cannot create an untracked respondent attempt.
+
 An invalid or inconsistent user, code, survey, supplier, or additional query parameter returns the generic Invalid survey link page and creates no attempt.
 
 The server creates a unique RID and records the validated user foreign key, a user-ID snapshot, `initiated`, initiation time/IP, browser, device, OS, user-agent, accepted language and safe client hints before redirecting to the canonical RID form. Cookies and authorization headers are never copied into this audit snapshot. RID is exactly 10 characters and always includes uppercase, lowercase and numeric characters. The canonical `?rid=` route also rejects unknown RIDs, extra parameters, and attempts whose user was removed or disabled.
@@ -41,6 +43,8 @@ Use status 1, 2, 3 and 4 for complete, terminate, over-quota and quality-termina
 `GET /survey?status={1|2|3|4}&rid={RID}`
 
 The first callback sets the terminal status, callback time/exit IP, exit browser/device/OS/user-agent and `loi_seconds = callback_at - initiated_at`. Later requests only update `last_callback_at` and `callback_count`, protecting the original outcome, exit audit and LOI from refreshes.
+
+The same transaction finalizes the vendor reservation: complete consumes the frozen quantity, while terminate, over-quota and quality-terminate release it. Reconciled upstream terminal statuses use the identical finalization service.
 
 When a survey still has a legacy redirect configured, the browser cannot return its result to this application. As a temporary fallback, Celery polls InnovateMR's authenticated `getSurveyTransactionsByCond/{surveyId}/{PID}` endpoint for recent redirected attempts. PID and `trackId` both contain our RID, so the task can reconcile the terminal status, upstream public IP, end time and LOI without access to the legacy destination. Direct callbacks remain preferred and win any race with polling.
 

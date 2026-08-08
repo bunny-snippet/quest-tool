@@ -167,6 +167,8 @@ INNOVATEMR_DETAIL_SYNC_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_DETAIL_SYNC_
 INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS", "60"))
 INNOVATEMR_ATTEMPT_RECONCILE_BATCH = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_BATCH", "20"))
 INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS", "168"))
+VENDOR_RESERVATION_TTL_MINUTES = int(os.getenv("VENDOR_RESERVATION_TTL_MINUTES", "180"))
+VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS = int(os.getenv("VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS", "60"))
 CELERY_BEAT_SCHEDULE = {
     "sync-innovatemr-survey-inventory": {
         "task": "surveys.sync_innovatemr_surveys",
@@ -179,5 +181,9 @@ CELERY_BEAT_SCHEDULE = {
     "reconcile-legacy-redirect-attempts": {
         "task": "surveys.reconcile_pending_attempts",
         "schedule": float(INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS),
+    },
+    "expire-vendor-allocation-reservations": {
+        "task": "vendors.expire_allocation_reservations",
+        "schedule": float(VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS),
     },
 } if ENABLE_SCHEDULED_JOBS else {}

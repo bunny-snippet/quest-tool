@@ -302,6 +302,8 @@ class AllocationReservation(models.Model):
     )
     survey_allocation = models.ForeignKey(
         VendorSurveyAllocation,
+        null=True,
+        blank=True,
         on_delete=models.PROTECT,
         related_name="reservations",
     )
@@ -319,9 +321,9 @@ class AllocationReservation(models.Model):
 
     def clean(self):
         super().clean()
-        if self.survey_allocation.client_allocation_id != self.client_allocation_id:
+        if self.survey_allocation and self.survey_allocation.client_allocation_id != self.client_allocation_id:
             raise ValidationError({"survey_allocation": "Survey and client allocations must belong to the same vendor scope."})
-        if self.attempt.survey_id != self.survey_allocation.survey_id:
+        if self.survey_allocation and self.attempt.survey_id != self.survey_allocation.survey_id:
             raise ValidationError({"attempt": "Attempt survey must match the survey allocation."})
 
     def __str__(self):

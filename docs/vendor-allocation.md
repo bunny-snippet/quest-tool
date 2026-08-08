@@ -1,6 +1,6 @@
-# Vendor, client, quantity and CPI foundation
+# Vendor, client, quantity and CPI operations
 
-This foundation is additive and is isolated on the UAT branch. Existing respondent entry/callback code does not enforce allocations yet.
+This feature is additive and isolated on the UAT branch. Vendor allocation is enforced in project listing, copied-link validation, respondent initiation, callback finalization and legacy callback reconciliation. Ordinary non-vendor accounts continue to use the original inventory flow.
 
 ## Account rules
 
@@ -16,12 +16,12 @@ This foundation is additive and is isolated on the UAT branch. Existing responde
 2. `ClientIntegration` stores non-secret upstream connection metadata. It stores the environment-variable name for a credential, never the token.
 3. `VendorCommercialProfile` stores a vendor's default CPI cut and currency.
 4. `VendorClientAllocation` grants client visibility and limits total quantity across that client's surveys.
-5. `VendorSurveyAllocation` limits one survey inside the parent client allocation and may override CPI cut.
+5. `VendorSurveyAllocation` is an optional survey-specific block/limit inside the parent client allocation and may override CPI cut. If it is absent, the client grant applies to every available survey for that client.
 6. `AllocationReservation` records the reserved, consumed, released or expired quantity associated with one survey attempt.
 
 ## CPI precedence and snapshot
 
-For external vendors, cut precedence is survey override, client override, then vendor default. Internal vendors always receive a zero-percent cut. On reservation, `SurveyAttempt` freezes:
+For external vendors, cut precedence is survey override, client override, then vendor default. Internal vendors always receive a zero-percent cut. External-vendor project and tracking APIs do not expose source CPI; they return payable CPI and the applied cut. On reservation, `SurveyAttempt` freezes:
 
 - vendor and client;
 - client and survey allocation IDs;
@@ -34,12 +34,12 @@ Changing the live survey CPI later cannot change an existing attempt snapshot.
 
 ## Quantity lifecycle
 
-The reservation service locks client and survey allocation rows in one database transaction. Capacity is available only when client remaining, survey remaining and upstream survey remaining are all positive.
+The reservation service locks the client row and any optional survey row in one database transaction. Capacity is available only when client remaining, an applicable survey override remaining and upstream survey remaining are all positive.
 
-- Initiation: reserve one client unit and one survey unit.
-- Status `1`: move the unit from reserved to consumed at both levels.
-- Status `2`, `3` or `4`: release both reserved units.
-- Abandoned attempt: a future cleanup task will expire the reservation and release both units.
+- Initiation: reserve one client unit and, when configured, one survey-override unit.
+- Status `1`: move the reserved unit to consumed.
+- Status `2`, `3` or `4`: release the reserved unit.
+- Abandoned attempt: `vendors.expire_allocation_reservations` runs every `VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS` and releases reservations older than `VENDOR_RESERVATION_TTL_MINUTES`.
 
 Finalization is idempotent. Database check constraints prevent consumed or reserved counters from exceeding their limits.
 
@@ -53,6 +53,10 @@ All endpoints require function permissions and are documented in Swagger:
 - `/api/v1/vendors/client-allocations/`
 - `/api/v1/vendors/survey-allocations/`
 - `/api/v1/vendors/reservations/` (read-only audit)
+- `/api/v1/vendors/directory/` (vendor policy directory)
+- `/api/v1/vendors/management-options/` (non-secret vendor/client selector data)
+
+The responsive `/vendors/` workspace uses these APIs for commercial policies, client visibility/quantity grants and optional survey overrides. User creation stays in the Access Control modal so account type, role and function-level allow/deny overrides have one source of truth.
 
 Super admins and non-vendor management accounts see the full authorized dataset. Vendor accounts and respondents below an internal vendor are restricted to that vendor's allocations. Commercial policies and quantities remain owner-controlled and read-only for vendor-scoped accounts, even if a manage permission is assigned accidentally.
 
