@@ -5,6 +5,7 @@ from urllib.parse import quote
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Max, Min
 from django.http import HttpResponseRedirect, StreamingHttpResponse
 from django.shortcuts import render
 from django.urls import reverse
@@ -98,6 +99,13 @@ def projects_page(request):
     profile = getattr(request.user, "employee_profile", None)
     role_slug = profile.role.slug if profile and profile.role else ""
     can_sort_cpi = request.user.is_superuser or role_slug in {"super-admin", "admin"}
+    cpi_min, cpi_max = 0, 100
+    if can_sort_cpi:
+        cpi_bounds = visible_surveys.aggregate(minimum=Min("cpi"), maximum=Max("cpi"))
+        cpi_min = cpi_bounds["minimum"] or 0
+        cpi_max = cpi_bounds["maximum"] or 100
+        if cpi_max <= cpi_min:
+            cpi_max = cpi_min + 1
     return render(request, "surveys/projects.html", {
         "active_page": "projects", "countries": countries, "companies": companies,
         "company_filter_label": "Client",
@@ -105,7 +113,7 @@ def projects_page(request):
         "company_filter_default": "All clients",
         "project_columns": project_columns, "project_column_count": max(1, len(project_columns)),
         "can_sync": has_function_access(request.user, "sync.run"),
-        "can_sort_cpi": can_sort_cpi,
+        "can_sort_cpi": can_sort_cpi, "cpi_min_bound": cpi_min, "cpi_max_bound": cpi_max,
     })
 
 

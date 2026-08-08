@@ -27,7 +27,10 @@
     drawer: $('detailDrawer'), backdrop: $('drawerBackdrop'), closeDrawer: $('closeDrawer'),
     drawerSurvey: $('drawerSurvey'), drawerContent: $('drawerContent'), tabs: [...document.querySelectorAll('.drawer-tab')],
     multiSelects: [...document.querySelectorAll('[data-multi-filter]')],
-    ordering: $('projectOrdering'),
+    cpiFilter: document.querySelector('[data-cpi-filter]'), cpiTrigger: $('cpiFilterTrigger'), cpiMenu: $('cpiFilterMenu'),
+    orderingInputs: [...document.querySelectorAll('input[name="projectOrdering"]')],
+    cpiMin: $('cpiMinRange'), cpiMax: $('cpiMaxRange'), cpiValue: $('cpiRangeValue'), cpiFill: $('cpiRangeFill'),
+    cpiReset: $('resetCpiFilter'),
   };
 
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
@@ -88,6 +91,7 @@
     trigger.addEventListener('click', (event) => {
       event.stopPropagation();
       const willOpen = !filter.classList.contains('open');
+      closeCpiFilter();
       closeMultiSelects(filter);
       filter.classList.toggle('open', willOpen);
       trigger.setAttribute('aria-expanded', String(willOpen));
@@ -111,8 +115,86 @@
     updateMultiLabel(filter);
   });
 
+  function selectedOrdering() {
+    return els.orderingInputs.find((input) => input.checked) || null;
+  }
+
+  function closeCpiFilter() {
+    if (!els.cpiFilter) return;
+    els.cpiFilter.querySelector('.cpi-filter-select')?.classList.remove('open');
+    els.cpiTrigger.setAttribute('aria-expanded', 'false');
+    els.cpiMenu.hidden = true;
+  }
+
+  function updateCpiControl(changedInput = null, reload = false) {
+    if (!els.cpiFilter) return;
+    let minimum = Number(els.cpiMin.value);
+    let maximum = Number(els.cpiMax.value);
+    if (minimum > maximum) {
+      if (changedInput === els.cpiMax) els.cpiMin.value = String(maximum);
+      else els.cpiMax.value = String(minimum);
+      minimum = Number(els.cpiMin.value);
+      maximum = Number(els.cpiMax.value);
+    }
+    const boundMin = Number(els.cpiMin.min);
+    const boundMax = Number(els.cpiMax.max);
+    const span = Math.max(0.01, boundMax - boundMin);
+    const left = ((minimum - boundMin) / span) * 100;
+    const right = ((maximum - boundMin) / span) * 100;
+    els.cpiFill.style.left = `${left}%`;
+    els.cpiFill.style.width = `${Math.max(0, right - left)}%`;
+    els.cpiValue.textContent = `${money(minimum)} – ${money(maximum)}`;
+    const ordering = selectedOrdering();
+    const rangeActive = minimum > boundMin || maximum < boundMax;
+    els.cpiTrigger.querySelector('span').textContent = rangeActive
+      ? `${ordering?.dataset.label || 'Recently updated'} · ${money(minimum)}–${money(maximum)}`
+      : (ordering?.dataset.label || 'Recently updated');
+    els.cpiTrigger.classList.toggle('has-value', rangeActive || ordering?.value !== '-source_modified_at');
+    if (reload) scheduleLoad();
+  }
+
+  function resetCpiControl(reload = false) {
+    if (!els.cpiFilter) return;
+    const defaultOrdering = els.orderingInputs.find((input) => input.value === '-source_modified_at');
+    if (defaultOrdering) defaultOrdering.checked = true;
+    els.cpiMin.value = els.cpiMin.min;
+    els.cpiMax.value = els.cpiMax.max;
+    updateCpiControl(null, reload);
+  }
+
+  els.cpiTrigger?.addEventListener('click', (event) => {
+    event.stopPropagation();
+    const select = els.cpiFilter.querySelector('.cpi-filter-select');
+    const willOpen = !select.classList.contains('open');
+    closeMultiSelects();
+    select.classList.toggle('open', willOpen);
+    els.cpiTrigger.setAttribute('aria-expanded', String(willOpen));
+    els.cpiMenu.hidden = !willOpen;
+  });
+  els.cpiMenu?.addEventListener('click', (event) => event.stopPropagation());
+  els.orderingInputs.forEach((input) => input.addEventListener('change', () => {
+    updateCpiControl(); state.page = 1; loadSurveys();
+  }));
+  [els.cpiMin, els.cpiMax].filter(Boolean).forEach((input) => {
+    input.addEventListener('input', () => updateCpiControl(input, true));
+    input.addEventListener('keydown', (event) => {
+      const step = Number(input.step) || 0.01;
+      const shortcuts = {
+        ArrowLeft: Number(input.value) - step, ArrowDown: Number(input.value) - step,
+        ArrowRight: Number(input.value) + step, ArrowUp: Number(input.value) + step,
+        PageDown: Number(input.value) - (step * 10), PageUp: Number(input.value) + (step * 10),
+        Home: Number(input.min), End: Number(input.max),
+      };
+      if (!(event.key in shortcuts)) return;
+      event.preventDefault();
+      input.value = String(Math.min(Number(input.max), Math.max(Number(input.min), shortcuts[event.key])));
+      updateCpiControl(input, true);
+    });
+  });
+  els.cpiReset?.addEventListener('click', () => resetCpiControl(true));
+
   function queryString() {
-    const params = new URLSearchParams({ page: state.page, page_size: state.pageSize, ordering: els.ordering?.value || '-source_modified_at' });
+    const params = new URLSearchParams({ page: state.page, page_size: state.pageSize, ordering: selectedOrdering()?.value || '-source_modified_at' });
     if (els.search.value.trim()) params.set('search', els.search.value.trim());
     els.multiSelects.forEach((filter) => {
       const values = selectedValues(filter);
@@ -121,6 +203,8 @@
     const prefix = els.dateField.value;
     if (els.from.value) params.set(`${prefix}_from`, dateBoundary(els.from.value, els.fromTime.value));
     if (els.to.value) params.set(`${prefix}_to`, dateBoundary(els.to.value, els.toTime.value, true));
+    if (els.cpiMin && Number(els.cpiMin.value) > Number(els.cpiMin.min)) params.set('min_cpi', els.cpiMin.value);
+    if (els.cpiMax && Number(els.cpiMax.value) < Number(els.cpiMax.max)) params.set('max_cpi', els.cpiMax.value);
     return params.toString();
   }
 
@@ -204,7 +288,6 @@
 
   [els.search, els.from, els.fromTime, els.to, els.toTime].forEach((element) => element.addEventListener('input', scheduleLoad));
   els.dateField.addEventListener('change', () => { state.page = 1; loadSurveys(); });
-  els.ordering?.addEventListener('change', () => { state.page = 1; loadSurveys(); });
   els.pageSize.addEventListener('change', () => { state.pageSize = Number(els.pageSize.value); state.page = 1; loadSurveys(); });
   els.clear.addEventListener('click', () => {
     els.search.value = ''; els.dateField.value = 'modified';
@@ -215,8 +298,8 @@
       if (search) { search.value = ''; search.dispatchEvent(new Event('input')); }
       updateMultiLabel(filter);
     });
-    if (els.ordering) els.ordering.value = '-source_modified_at';
-    closeMultiSelects(); state.page = 1; loadSurveys();
+    resetCpiControl();
+    closeMultiSelects(); closeCpiFilter(); state.page = 1; loadSurveys();
   });
   els.first.addEventListener('click', () => go(1));
   els.prev.addEventListener('click', () => go(state.page - 1));
@@ -232,6 +315,7 @@
 
   document.addEventListener('click', async (event) => {
     if (!event.target.closest('.multi-select')) closeMultiSelects();
+    if (!event.target.closest('[data-cpi-filter]')) closeCpiFilter();
     const copy = event.target.closest('[data-copy]');
     if (copy) { await navigator.clipboard.writeText(copy.dataset.copy); toast('Project ID copied'); }
     const copyLink = event.target.closest('[data-copy-link]');
@@ -304,7 +388,7 @@
   els.tabs.forEach((tab) => tab.addEventListener('click', () => setActiveTab(tab.dataset.tab)));
   els.closeDrawer.addEventListener('click', closeDrawer);
   els.backdrop.addEventListener('click', closeDrawer);
-  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeMultiSelects(); if (!els.drawer.hidden) closeDrawer(); } });
+  document.addEventListener('keydown', (event) => { if (event.key === 'Escape') { closeMultiSelects(); closeCpiFilter(); if (!els.drawer.hidden) closeDrawer(); } });
 
   function renderQuotas(items) {
     if (!items.length) return '<div class="detail-empty"><div class="detail-empty-visual" aria-hidden="true"><span></span><span></span><span></span><i>✓</i></div><strong>No quota data</strong><p>This survey currently has no quota definitions.</p></div>';
@@ -333,5 +417,6 @@
     finally { els.sync.disabled = false; els.sync.classList.remove('syncing'); els.sync.lastChild.textContent = ' Sync now'; }
   });
 
+  updateCpiControl();
   loadSurveys();
 })();
