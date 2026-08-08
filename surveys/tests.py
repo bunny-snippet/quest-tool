@@ -230,7 +230,7 @@ class SurveyAPITests(TestCase):
         self.assertContains(projects, 'placeholder="Search country')
         self.assertContains(projects, 'placeholder="Search client')
         self.assertContains(projects, 'id="companyLabel">Client')
-        self.assertNotContains(projects, 'id="cpiMinRange"')
+        self.assertNotContains(projects, 'id="projectOrdering"')
         self.assertNotContains(projects, "Quest")
         self.assertContains(self.client.get(reverse("dashboard")), "dashboard is ready")
 
@@ -238,9 +238,9 @@ class SurveyAPITests(TestCase):
         profile.role = Role.objects.get(slug="admin")
         profile.save(update_fields=["role"])
         admin_projects = self.client.get(reverse("projects"))
-        self.assertContains(admin_projects, 'id="cpiMinRange"')
-        self.assertContains(admin_projects, 'id="cpiMaxRange"')
         self.assertContains(admin_projects, 'id="projectOrdering"')
+        self.assertContains(admin_projects, "CPI: highest to lowest")
+        self.assertNotContains(admin_projects, 'id="cpiMinRange"')
 
 
 class SurveyFlowTests(TestCase):
