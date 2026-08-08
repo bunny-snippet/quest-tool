@@ -30,6 +30,7 @@ The UI's Quota and Pre-screening actions apply the same stale test. When refresh
 ## Operational checks
 
 - `/api/v1/sync-runs/?status=failed` shows inventory failures.
+- `vendors.expire_allocation_reservations` releases abandoned vendor starts. Its interval and reservation TTL are independently controlled by `VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS` and `VENDOR_RESERVATION_TTL_MINUTES`.
 
 ## Legacy redirect reconciliation
 

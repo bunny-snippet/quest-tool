@@ -17,9 +17,9 @@ class TargetingQuestionInline(admin.TabularInline):
 
 @admin.register(Survey)
 class SurveyAdmin(admin.ModelAdmin):
-    list_display = ["local_id", "source_id", "company_name", "name", "country_code", "language_code", "completes", "sample_size", "status", "source_modified_at"]
+    list_display = ["local_id", "client", "source_id", "company_name", "name", "country_code", "language_code", "completes", "sample_size", "status", "source_modified_at"]
     search_fields = ["local_id", "source_id", "company_name", "name"]
-    list_filter = ["status", "company_name", "country_code", "language_code", "has_quota"]
+    list_filter = ["status", "client", "company_name", "country_code", "language_code", "has_quota"]
     readonly_fields = ["local_id", "source_id", "raw_data", "created_at", "updated_at", "last_seen_at", "detail_synced_at"]
     inlines = [SurveyQuotaInline, TargetingQuestionInline]
 
@@ -33,7 +33,7 @@ class SyncRunAdmin(admin.ModelAdmin):
 @admin.register(SurveyAttempt)
 class SurveyAttemptAdmin(admin.ModelAdmin):
     list_display = [
-        "rid", "survey", "platform_user", "status", "status_source", "initiated_at", "loi_seconds", "initiation_ip",
+        "rid", "survey", "platform_user", "vendor", "client", "status", "status_source", "initiated_at", "loi_seconds", "initiation_ip",
         "callback_ip", "entry_browser", "entry_device", "is_verified",
     ]
     search_fields = [

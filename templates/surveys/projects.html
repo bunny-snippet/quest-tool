@@ -43,9 +43,9 @@
   {% endif %}
   {% if project_filters.client %}
   <div class="field multi-field">
-    <label id="companyLabel">Client</label>
-    <div class="multi-select" data-multi-filter="company" data-default-label="All clients">
-      <button class="multi-trigger" type="button" aria-labelledby="companyLabel" aria-expanded="false"><span>All clients</span><i>⌄</i></button>
+    <label id="companyLabel">{{ company_filter_label }}</label>
+    <div class="multi-select" data-multi-filter="{{ company_filter_param }}" data-default-label="{{ company_filter_default }}">
+      <button class="multi-trigger" type="button" aria-labelledby="companyLabel" aria-expanded="false"><span>{{ company_filter_default }}</span><i>⌄</i></button>
       <div class="multi-menu" hidden>
         <div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search client…" aria-label="Search clients" autocomplete="off"></div>
         <div class="multi-options">{% for company in companies %}<label><input type="checkbox" value="{{ company }}"><span>{{ company }}</span></label>{% empty %}<label><input type="checkbox" value="InnovateMR"><span>InnovateMR</span></label>{% endfor %}</div>
@@ -143,4 +143,4 @@
   <div class="drawer-content" id="drawerContent"></div>
 </aside>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=14" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=15" defer></script>{% endblock %}

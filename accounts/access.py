@@ -7,6 +7,17 @@ from rest_framework.permissions import BasePermission
 from .models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
 
 
+EXTERNAL_VENDOR_FORBIDDEN_CODES = frozenset({
+    "access.manage",
+    "permissions.view",
+    "roles.view", "roles.create", "roles.update", "roles.delete",
+    "users.manage", "users.view", "users.create", "users.update", "users.delete",
+    "respondents.create",
+    "clients.manage", "vendors.manage", "allocations.manage",
+    "sync.run",
+})
+
+
 def effective_permission_codes(user) -> set[str]:
     if not user or not user.is_authenticated or not user.is_active:
         return set()
@@ -25,6 +36,8 @@ def effective_permission_codes(user) -> set[str]:
             codes.add(code)
         else:
             codes.discard(code)
+    if profile and profile.account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+        codes.difference_update(EXTERNAL_VENDOR_FORBIDDEN_CODES)
     return codes
 
 
@@ -75,6 +88,47 @@ def subordinate_user_ids(user) -> set[int]:
     return descendants
 
 
+def activity_visible_user_ids(user) -> set[int]:
+    """Return users whose tracking activity is visible to ``user``.
+
+    The explicit ``created_by`` tree remains the primary ownership boundary. In
+    addition, employee accounts at Team Lead rank or above can see lower-ranked
+    employee siblings in the same branch. This covers the common setup where an
+    admin creates both a Team Lead and that lead's employees, without exposing
+    another vendor, branch, or higher-level account.
+    """
+    if not user or not user.is_authenticated:
+        return set()
+    if user.is_superuser:
+        from django.contrib.auth import get_user_model
+        return set(get_user_model().objects.values_list("id", flat=True))
+
+    visible_ids = subordinate_user_ids(user)
+    visible_ids.add(user.id)
+    profile = EmployeeProfile.objects.select_related("role").filter(user=user).first()
+    if (
+        not profile
+        or profile.account_type != EmployeeProfile.AccountType.EMPLOYEE
+        or not profile.role
+        or profile.role.rank < 20
+        or not profile.created_by_id
+    ):
+        return visible_ids
+
+    lower_rank_peers = EmployeeProfile.objects.filter(
+        created_by_id=profile.created_by_id,
+        account_type=EmployeeProfile.AccountType.EMPLOYEE,
+        role__isnull=False,
+        role__rank__lt=profile.role.rank,
+    )
+    if profile.company_name.strip():
+        lower_rank_peers = lower_rank_peers.filter(company_name__iexact=profile.company_name.strip())
+    if profile.department.strip():
+        lower_rank_peers = lower_rank_peers.filter(department__iexact=profile.department.strip())
+    visible_ids.update(lower_rank_peers.values_list("user_id", flat=True))
+    return visible_ids
+
+
 def assignable_functions(user):
     queryset = AccessFunction.objects.filter(is_active=True)
     return queryset if user.is_superuser else queryset.filter(code__in=effective_permission_codes(user))
@@ -101,5 +155,7 @@ class HasFunctionPermission(BasePermission):
 
     def has_permission(self, request, view):
         resolver = getattr(view, "get_required_function_permission", None)
-        code = resolver() if resolver else getattr(view, "required_function_permission", None)
-        return bool(code and has_function_access(request.user, code))
+        codes = resolver() if resolver else getattr(view, "required_function_permission", None)
+        if isinstance(codes, str):
+            codes = (codes,)
+        return bool(codes and any(has_function_access(request.user, code) for code in codes))

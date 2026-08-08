@@ -11,6 +11,8 @@ from dateutil import parser as date_parser
 from django.db import transaction
 from django.utils import timezone
 
+from vendors.models import Client
+
 from .integrations import InnovateMRAPIError, InnovateMRClient, InnovateMRNotFound
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
 from .survey_flow import normalize_client_ip
@@ -261,6 +263,10 @@ def reconcile_attempt_status(client: InnovateMRClient, attempt: SurveyAttempt) -
             ])
 
         locked.save(update_fields=list(dict.fromkeys(update_fields)))
+        if terminal_status:
+            from vendors.services import finalize_attempt_capacity
+
+            finalize_attempt_capacity(locked)
     return bool(terminal_status)
 
 
@@ -289,9 +295,11 @@ def sync_surveys(client: InnovateMRClient | None = None) -> SyncSummary:
         run.unique_surveys = len(merged)
 
         with transaction.atomic():
+            source_client = Client.objects.filter(code="innovatemr", is_active=True).first()
             for source_id, payload in merged.items():
                 existing = Survey.objects.filter(source_id=source_id).first()
                 values = _survey_values(payload, now)
+                values["client"] = source_client
                 if existing is None:
                     survey = Survey.objects.create(source_id=source_id, **values)
                     run.created += 1
@@ -305,7 +313,12 @@ def sync_surveys(client: InnovateMRClient | None = None) -> SyncSummary:
                     existing.save(update_fields=["last_seen_at"])
                     run.unchanged += 1
 
-            closed = Survey.objects.filter(status=Survey.Status.LIVE).exclude(source_id__in=merged.keys())
+            closed = Survey.objects.filter(status=Survey.Status.LIVE)
+            if source_client:
+                closed = closed.filter(client=source_client)
+            else:
+                closed = closed.filter(company_name__iexact="InnovateMR")
+            closed = closed.exclude(source_id__in=merged.keys())
             run.closed = closed.update(status=Survey.Status.CLOSED, updated_at=now)
 
         # Detail endpoints are refreshed separately in bounded batches. This

@@ -16,6 +16,8 @@ Hostinger Ubuntu VPS deployment with MySQL, Nginx, Gunicorn, Redis and Celery is
 - Direct survey detail drawer with equal-width Pre-screening and Quota tabs.
 - Dynamic respondent pre-screener with 10-character RID, answer capture, supplier redirect, four callback outcomes, IP tracking and measured LOI.
 - Session login plus dynamic role/function access control with per-user allow and deny overrides.
+- UAT vendor operations workspace with internal/external policy, client visibility, quantity limits, CPI cuts and optional survey overrides.
+- Transactional allocation reservation at respondent start, terminal consume/release and scheduled abandoned-reservation expiry.
 - Swagger UI, ReDoc, downloadable OpenAPI schema, Django Admin, sync audit records, and automated tests.
 
 ## Local setup
@@ -54,10 +56,12 @@ celery -A config worker --loglevel=info --pool=solo
 celery -A config beat --loglevel=info
 ```
 
-Beat schedules two jobs every minute:
+Beat schedules four independent jobs every minute by default:
 
 1. `surveys.sync_innovatemr_surveys` fetches both inventory endpoints, merges them, upserts current rows, and closes surveys no longer present.
 2. `surveys.refresh_stale_details` refreshes a bounded batch of quotas and targeting. `INNOVATEMR_DETAIL_REFRESH_BATCH` controls the batch size.
+3. `surveys.reconcile_pending_attempts` checks redirected attempts whose legacy client return URL has not called this application.
+4. `vendors.expire_allocation_reservations` releases capacity held by abandoned vendor attempts after the configured TTL.
 
 Opening Quota or Pre-screening in the UI also refreshes that survey immediately when its cached details are older than its source `modifiedDate`. Cached details remain available during a temporary upstream outage.
 
@@ -73,6 +77,11 @@ Opening Quota or Pre-screening in the UI also refreshes that survey immediately 
 | `POST` | `/api/v1/sync/?wait=true` | Run a synchronous operational sync |
 | `GET` | `/api/v1/sync-runs/` | Sync audit history |
 | `GET` | `/api/v1/survey-attempts/` | Staff-only RID, answers, status, IP and LOI audit |
+| CRUD | `/api/v1/vendors/commercial-profiles/` | Internal/external vendor CPI policy |
+| CRUD | `/api/v1/vendors/client-allocations/` | Vendor client visibility and total quantity |
+| CRUD | `/api/v1/vendors/survey-allocations/` | Optional per-survey limit or CPI override |
+| CRUD | `/api/v1/vendors/api-keys/` | Issue/revoke hashed external-vendor API credentials (plaintext returned once) |
+| `GET` | `/api/v1/vendors/reservations/` | Reservation lifecycle audit |
 | CRUD | `/api/v1/access/roles/` | Roles and their explicit function assignments |
 | CRUD | `/api/v1/access/functions/` | Function permission catalog |
 | CRUD | `/api/v1/access/users/` | Employee accounts, role and individual allow/deny overrides |

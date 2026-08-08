@@ -2,9 +2,12 @@ from urllib.parse import urlencode
 
 from django.conf import settings
 from django.urls import reverse
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from accounts.access import has_function_access
+from vendors.access import is_external_vendor_scope, vendor_scope_user_id
+from vendors.services import survey_pricing_for_user
 
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
 
@@ -22,17 +25,22 @@ class TargetingQuestionSerializer(serializers.ModelSerializer):
 
 
 class SurveyListSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source="client.name", read_only=True, allow_null=True)
+    display_company_name = serializers.SerializerMethodField()
     country_label = serializers.SerializerMethodField()
     progress_percent = serializers.SerializerMethodField()
     source_created_display = serializers.SerializerMethodField()
     source_modified_display = serializers.SerializerMethodField()
     start_link = serializers.SerializerMethodField()
+    cpi = serializers.SerializerMethodField()
+    cpi_cut_percent = serializers.SerializerMethodField()
+    vendor_pricing = serializers.SerializerMethodField()
 
     class Meta:
         model = Survey
         fields = [
-            "local_id", "source_id", "company_name", "name", "status", "sample_size", "completes", "remaining",
-            "starts", "cpi", "loi", "incidence_rate", "country", "country_code", "country_label",
+            "id", "local_id", "client", "client_name", "display_company_name", "source_id", "company_name", "name", "status", "sample_size", "completes", "remaining",
+            "starts", "cpi", "cpi_cut_percent", "vendor_pricing", "loi", "incidence_rate", "country", "country_code", "country_label",
             "language", "language_code", "group_type", "device_type", "entry_link", "start_link", "has_quota",
             "source_created_at", "source_modified_at", "source_created_display", "source_modified_display",
             "detail_synced_at", "quota_synced_at", "targeting_synced_at", "created_at", "updated_at",
@@ -42,6 +50,12 @@ class SurveyListSerializer(serializers.ModelSerializer):
     def get_country_label(self, obj) -> str:
         return " ".join(part for part in [obj.country_code, obj.language_code] if part) or obj.country
 
+    def get_display_company_name(self, obj) -> str:
+        request = self.context.get("request")
+        if request and vendor_scope_user_id(request.user) and obj.client:
+            return obj.client.name
+        return obj.company_name
+
     def get_progress_percent(self, obj) -> float:
         return round((obj.completes / obj.sample_size) * 100, 1) if obj.sample_size else 0
 
@@ -50,6 +64,22 @@ class SurveyListSerializer(serializers.ModelSerializer):
 
     def get_source_modified_display(self, obj) -> str | None:
         return obj.raw_data.get("modifiedDate") or None
+
+    def _pricing(self, obj):
+        request = self.context.get("request")
+        return survey_pricing_for_user(request.user, obj) if request and request.user.is_authenticated else (obj.cpi, None)
+
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True))
+    def get_cpi(self, obj):
+        return self._pricing(obj)[0]
+
+    @extend_schema_field(serializers.DecimalField(max_digits=5, decimal_places=2, allow_null=True))
+    def get_cpi_cut_percent(self, obj):
+        return self._pricing(obj)[1]
+
+    def get_vendor_pricing(self, obj) -> bool:
+        request = self.context.get("request")
+        return bool(request and vendor_scope_user_id(request.user))
 
     def get_start_link(self, obj) -> str | None:
         """Return the shareable platform pre-screener URL, never the supplier entry URL."""
@@ -115,8 +145,8 @@ class UserHitRowSerializer(serializers.Serializer):
     user_name = serializers.CharField()
     username = serializers.CharField()
     user_email = serializers.EmailField(allow_blank=True)
-    branch = serializers.CharField()
-    sub_branch = serializers.CharField()
+    branch = serializers.CharField(allow_blank=True)
+    sub_branch = serializers.CharField(allow_blank=True)
     date = serializers.DateField()
     hits = UserHitDeviceCountsSerializer()
     completes = UserHitDeviceCountsSerializer()
@@ -151,12 +181,17 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     status_label = serializers.SerializerMethodField()
     entry_ip = serializers.IPAddressField(source="initiation_ip", read_only=True, allow_null=True)
     exit_ip = serializers.IPAddressField(source="callback_ip", read_only=True, allow_null=True)
+    client_name = serializers.CharField(source="client.name", read_only=True, allow_null=True)
+    vendor_name = serializers.SerializerMethodField()
+    source_cpi_snapshot = serializers.SerializerMethodField()
 
     class Meta:
         model = SurveyAttempt
         fields = [
             "rid", "survey_local_id", "survey_source_id", "survey_name", "company_name", "country_code",
-            "language_code", "platform_user", "user_id", "user_name", "username", "user_email", "supplier_code",
+            "language_code", "platform_user", "user_id", "user_name", "username", "user_email", "vendor",
+            "vendor_name", "client", "client_name", "client_allocation", "survey_allocation", "supplier_code",
+            "source_cpi_snapshot", "cpi_cut_percent_snapshot", "payable_cpi_snapshot", "cpi_currency_snapshot",
             "status_label",
             "status", "initiated_at", "submitted_at", "redirected_at", "callback_at", "last_callback_at",
             "loi_seconds", "entry_ip", "exit_ip", "initiation_ip", "callback_ip", "entry_user_agent",
@@ -170,6 +205,16 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
         if not obj.platform_user:
             return "Deleted user"
         return obj.platform_user.get_full_name() or obj.platform_user.username
+
+    def get_vendor_name(self, obj) -> str | None:
+        if not obj.vendor:
+            return None
+        return obj.vendor.get_full_name() or obj.vendor.username
+
+    @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True))
+    def get_source_cpi_snapshot(self, obj):
+        request = self.context.get("request")
+        return None if request and is_external_vendor_scope(request.user) else obj.source_cpi_snapshot
 
     def get_status_label(self, obj) -> str:
         if obj.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED}:

@@ -6,7 +6,7 @@ from django.contrib.auth import get_user_model
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_time
 
-from accounts.access import subordinate_user_ids
+from accounts.access import activity_visible_user_ids
 from accounts.models import EmployeeProfile
 
 from .models import SurveyAttempt
@@ -16,11 +16,7 @@ DEVICE_KEYS = ("desktop", "mobile", "tablet", "unclassified")
 
 
 def _visible_user_ids(user) -> set[int]:
-    if user.is_superuser:
-        return set(get_user_model().objects.values_list("id", flat=True))
-    ids = subordinate_user_ids(user)
-    ids.add(user.pk)
-    return ids
+    return activity_visible_user_ids(user)
 
 
 def _csv_values(value: str) -> set[str]:
@@ -48,10 +44,18 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
         .select_related("employee_profile", "employee_profile__created_by")
         .order_by("first_name", "last_name", "username")
     )
-    profiles = {
-        profile.user_id: profile
-        for profile in EmployeeProfile.objects.filter(user_id__in=user_ids).select_related("user", "created_by")
-    }
+    profiles = {}
+    pending_ids = set(user_ids)
+    while pending_ids:
+        batch = list(
+            EmployeeProfile.objects.filter(user_id__in=pending_ids)
+            .select_related("user", "created_by")
+        )
+        profiles.update({profile.user_id: profile for profile in batch})
+        pending_ids = {
+            profile.created_by_id for profile in batch
+            if profile.created_by_id and profile.created_by_id not in profiles
+        }
 
     def inherited_branch(user_id: int) -> str:
         current_id = user_id
@@ -61,6 +65,8 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
             profile = profiles.get(current_id)
             if not profile:
                 break
+            if profile.account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+                return ""
             if profile.company_name.strip():
                 return profile.company_name.strip()
             current_id = profile.created_by_id
@@ -70,7 +76,7 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
     for platform_user in users:
         profile = profiles.get(platform_user.pk)
         branch = inherited_branch(platform_user.pk)
-        sub_branch = (profile.department.strip() if profile and profile.department else "") or branch
+        sub_branch = (profile.department.strip() if profile and profile.department and branch else "") or branch
         metadata[platform_user.pk] = {
             "user_id": platform_user.pk,
             "user_name": platform_user.get_full_name() or platform_user.username,
@@ -94,8 +100,8 @@ def user_hit_filter_options(user) -> dict:
     tracked.sort(key=lambda item: (item["user_name"].casefold(), item["user_id"]))
     return {
         "users": tracked,
-        "branches": sorted({item["branch"] for item in tracked}, key=str.casefold),
-        "sub_branches": sorted({item["sub_branch"] for item in tracked}, key=str.casefold),
+        "branches": sorted({item["branch"] for item in tracked if item["branch"]}, key=str.casefold),
+        "sub_branches": sorted({item["sub_branch"] for item in tracked if item["sub_branch"]}, key=str.casefold),
     }
 
 

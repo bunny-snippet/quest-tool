@@ -4,8 +4,11 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-$HOME/htdocs/quest-tool}"
 ENV_FILE="$APP_DIR/.env"
 SUPERVISOR_CONFIG="$APP_DIR/deploy/supervisord.conf"
+SUPERVISOR_CONFIG="${SUPERVISOR_CONFIG_OVERRIDE:-$SUPERVISOR_CONFIG}"
 SUPERVISORCTL="$APP_DIR/.venv/bin/supervisorctl"
 SUPERVISORD="$APP_DIR/.venv/bin/supervisord"
+HEALTH_PORT="${HEALTH_PORT:-8091}"
+APP_LABEL="${APP_LABEL:-Quest Tool}"
 
 cd "$APP_DIR"
 test -f "$ENV_FILE" || { echo "Missing $ENV_FILE" >&2; exit 1; }
@@ -69,5 +72,5 @@ fi
 
 sleep 6
 "$SUPERVISORCTL" -c "$SUPERVISOR_CONFIG" status
-curl --fail --silent --show-error --head http://127.0.0.1:8091/login/ >/dev/null
-echo "Quest Tool is healthy on 127.0.0.1:8091"
+curl --fail --silent --show-error --head "http://127.0.0.1:$HEALTH_PORT/login/" >/dev/null
+echo "$APP_LABEL is healthy on 127.0.0.1:$HEALTH_PORT"

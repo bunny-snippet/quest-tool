@@ -73,8 +73,8 @@
 
   function rowTemplate(row) {
     const cells = [];
-    if (columns.has('branch')) cells.push(`<td><strong class="hit-branch">${escapeHtml(row.branch)}</strong></td>`);
-    if (columns.has('sub_branch')) cells.push(`<td><span class="hit-sub-branch">${escapeHtml(row.sub_branch)}</span></td>`);
+    if (columns.has('branch')) cells.push(`<td><strong class="hit-branch">${escapeHtml(row.branch || '—')}</strong></td>`);
+    if (columns.has('sub_branch')) cells.push(`<td><span class="hit-sub-branch">${escapeHtml(row.sub_branch || '—')}</span></td>`);
     if (columns.has('user')) cells.push(`<td>${userCell(row)}</td>`);
     if (columns.has('date')) cells.push(`<td><time class="hit-date" datetime="${escapeHtml(row.date)}"><strong>${formatDate(row.date)}</strong><span>IST calendar day</span></time></td>`);
     if (columns.has('hits')) cells.push(`<td>${deviceBreakdown(row.hits)}</td>`);

@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "django_filters",
     "accounts.apps.AccountsConfig",
+    "vendors.apps.VendorsConfig",
     "surveys",
 ]
 
@@ -36,6 +37,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "vendors.middleware.VendorPanelAccessMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
 ]
@@ -108,6 +110,10 @@ REST_FRAMEWORK = {
     "DEFAULT_PAGINATION_CLASS": "surveys.pagination.SurveyPagination",
     "PAGE_SIZE": 20,
     "DEFAULT_FILTER_BACKENDS": ["django_filters.rest_framework.DjangoFilterBackend"],
+    "DEFAULT_AUTHENTICATION_CLASSES": [
+        "vendors.authentication.VendorAPIKeyAuthentication",
+        "rest_framework.authentication.SessionAuthentication",
+    ],
     "DEFAULT_RENDERER_CLASSES": ["rest_framework.renderers.JSONRenderer"] if not DEBUG else [
         "rest_framework.renderers.JSONRenderer",
         "rest_framework.renderers.BrowsableAPIRenderer",
@@ -127,6 +133,7 @@ SPECTACULAR_SETTINGS = {
         {"name": "User hits", "description": "Date-wise user hits and completes aggregated by respondent device."},
         {"name": "Synchronization", "description": "Trigger and audit upstream inventory synchronization."},
         {"name": "Access control", "description": "Dynamic roles, function assignments and per-user access overrides."},
+        {"name": "Vendors & allocations", "description": "UAT client scope, vendor commercial policy and quantity allocation APIs."},
     ],
     "ENUM_NAME_OVERRIDES": {
         "SurveyStatusEnum": "surveys.models.Survey.Status",
@@ -159,11 +166,14 @@ CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 300
+ENABLE_SCHEDULED_JOBS = env_bool("ENABLE_SCHEDULED_JOBS", True)
 INNOVATEMR_INVENTORY_SYNC_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_INVENTORY_SYNC_INTERVAL_SECONDS", "60"))
 INNOVATEMR_DETAIL_SYNC_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_DETAIL_SYNC_INTERVAL_SECONDS", "60"))
 INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS", "60"))
 INNOVATEMR_ATTEMPT_RECONCILE_BATCH = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_BATCH", "20"))
 INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS", "168"))
+VENDOR_RESERVATION_TTL_MINUTES = int(os.getenv("VENDOR_RESERVATION_TTL_MINUTES", "180"))
+VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS = int(os.getenv("VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS", "60"))
 CELERY_BEAT_SCHEDULE = {
     "sync-innovatemr-survey-inventory": {
         "task": "surveys.sync_innovatemr_surveys",
@@ -177,4 +187,8 @@ CELERY_BEAT_SCHEDULE = {
         "task": "surveys.reconcile_pending_attempts",
         "schedule": float(INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS),
     },
-}
+    "expire-vendor-allocation-reservations": {
+        "task": "vendors.expire_allocation_reservations",
+        "schedule": float(VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS),
+    },
+} if ENABLE_SCHEDULED_JOBS else {}

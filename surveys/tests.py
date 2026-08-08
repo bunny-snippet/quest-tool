@@ -12,6 +12,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
+from vendors.models import Client
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
@@ -93,6 +94,7 @@ class SurveySyncTests(TestCase):
         survey = Survey.objects.get(source_id=12632)
         self.assertEqual(summary.created, 1)
         self.assertEqual(survey.name, "Newest")
+        self.assertEqual(survey.client, Client.objects.get(code="innovatemr"))
         self.assertEqual(len(survey.local_id), 14)
         self.assertTrue(survey.local_id.isdigit())
         self.assertEqual(survey.local_id[:6], timezone.localdate().strftime("%Y%m"))
@@ -570,6 +572,7 @@ class StudiesTrackingTests(TestCase):
         self.assertIn("Entry user agent", content)
         self.assertIn("Pre-screener answers", content)
         self.assertIn("Outbound supplier URL", content)
+        self.assertIn("Payable CPI snapshot", content)
         self.assertIn("Kanik Sharma", content)
         self.assertIn(self.complete.rid, content)
         self.assertNotIn("Ee4Ff5Gg6H", content)
@@ -600,6 +603,64 @@ class StudiesTrackingTests(TestCase):
         self.assertNotContains(page, 'id="studySearch"')
         self.assertNotContains(page, "<th>Status</th>", html=True)
         self.assertEqual(scoped_api.get(reverse("survey-attempt-list"), {"status": "1"}).status_code, 403)
+
+    def test_team_lead_sees_lower_rank_employee_activity_in_same_branch_only(self):
+        team_lead = get_user_model().objects.create_user(
+            username="tracking-lead", first_name="Tracking", last_name="Lead"
+        )
+        employee = get_user_model().objects.create_user(
+            username="tracking-employee", first_name="Branch", last_name="Employee"
+        )
+        other_branch_employee = get_user_model().objects.create_user(
+            username="other-branch-employee", first_name="Other", last_name="Branch"
+        )
+        manager = get_user_model().objects.create_user(
+            username="tracking-manager", first_name="Branch", last_name="Manager"
+        )
+        profiles = [
+            (team_lead, "team-lead", "Delhi", "Operations"),
+            (employee, "employee", "Delhi", "Operations"),
+            (other_branch_employee, "employee", "Mumbai", "Operations"),
+            (manager, "manager", "Delhi", "Operations"),
+        ]
+        for platform_user, role_slug, company, department in profiles:
+            EmployeeProfile.objects.filter(user=platform_user).update(
+                role=Role.objects.get(slug=role_slug),
+                created_by=self.owner,
+                company_name=company,
+                department=department,
+            )
+
+        visible_attempt = SurveyAttempt.objects.create(
+            rid="Tl1Ee2Aa3D", survey=self.survey, platform_user=employee, user_id=str(employee.pk),
+            status=SurveyAttempt.Status.COMPLETED, entry_device="Desktop",
+        )
+        SurveyAttempt.objects.create(
+            rid="Tl4Oo5Bb6M", survey=self.survey, platform_user=other_branch_employee,
+            user_id=str(other_branch_employee.pk), status=SurveyAttempt.Status.COMPLETED, entry_device="Mobile",
+        )
+        SurveyAttempt.objects.create(
+            rid="Tl7Mm8Cc9R", survey=self.survey, platform_user=manager, user_id=str(manager.pk),
+            status=SurveyAttempt.Status.COMPLETED, entry_device="Tablet",
+        )
+
+        lead_api = APIClient()
+        lead_api.force_authenticate(team_lead)
+        studies = lead_api.get(reverse("survey-attempt-list"))
+        self.assertEqual(studies.status_code, 200)
+        self.assertEqual(studies.data["count"], 1)
+        self.assertEqual(studies.data["results"][0]["rid"], visible_attempt.rid)
+
+        hits = lead_api.get(reverse("user-hits-api"))
+        self.assertEqual(hits.status_code, 200)
+        self.assertEqual(hits.data["count"], 1)
+        self.assertEqual(hits.data["results"][0]["user_id"], employee.pk)
+
+        self.client.force_login(team_lead)
+        page = self.client.get(reverse("studies"))
+        self.assertContains(page, "Branch Employee")
+        self.assertNotContains(page, "Other Branch")
+        self.assertNotContains(page, "Branch Manager")
 
     def test_upstream_transaction_reconciles_legacy_redirect_status_ip_and_loi(self):
         initiated_at = timezone.now() - timedelta(minutes=63)

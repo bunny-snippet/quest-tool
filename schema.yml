@@ -37,8 +37,8 @@ paths:
       tags:
       - Access control
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -64,8 +64,8 @@ paths:
               $ref: '#/components/schemas/AccessFunctionRequest'
         required: true
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '201':
           content:
@@ -87,8 +87,8 @@ paths:
       tags:
       - Access control
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -121,8 +121,8 @@ paths:
               $ref: '#/components/schemas/AccessFunctionRequest'
         required: true
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -154,8 +154,8 @@ paths:
             schema:
               $ref: '#/components/schemas/PatchedAccessFunctionRequest'
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -176,8 +176,8 @@ paths:
       tags:
       - Access control
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '204':
           description: No response body
@@ -213,8 +213,8 @@ paths:
       tags:
       - Access control
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -240,8 +240,8 @@ paths:
               $ref: '#/components/schemas/RoleRequest'
         required: true
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '201':
           content:
@@ -262,8 +262,8 @@ paths:
       tags:
       - Access control
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -295,8 +295,8 @@ paths:
               $ref: '#/components/schemas/RoleRequest'
         required: true
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -327,8 +327,8 @@ paths:
             schema:
               $ref: '#/components/schemas/PatchedRoleRequest'
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -348,8 +348,8 @@ paths:
       tags:
       - Access control
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '204':
           description: No response body
@@ -385,8 +385,8 @@ paths:
       tags:
       - Access control
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -411,8 +411,8 @@ paths:
             schema:
               $ref: '#/components/schemas/UserAccessRequest'
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '201':
           content:
@@ -434,8 +434,8 @@ paths:
       tags:
       - Access control
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -467,8 +467,8 @@ paths:
             schema:
               $ref: '#/components/schemas/UserAccessRequest'
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -500,8 +500,8 @@ paths:
             schema:
               $ref: '#/components/schemas/PatchedUserAccessRequest'
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -522,8 +522,8 @@ paths:
       tags:
       - Access control
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '204':
           description: No response body
@@ -624,8 +624,8 @@ paths:
       tags:
       - Survey attempts
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -648,8 +648,8 @@ paths:
       tags:
       - Survey attempts
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -738,8 +738,8 @@ paths:
       tags:
       - Survey attempts
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -756,6 +756,20 @@ paths:
         Date filters accept ISO-8601 timestamps.
       summary: List synchronized surveys
       parameters:
+      - in: query
+        name: client
+        schema:
+          type: number
+        description: Internal client record ID
+      - in: query
+        name: client_name
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated allocated client names
+        explode: false
+        style: form
       - in: query
         name: company
         schema:
@@ -844,8 +858,8 @@ paths:
       tags:
       - Surveys
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -868,8 +882,8 @@ paths:
       tags:
       - Surveys
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -885,6 +899,20 @@ paths:
       summary: List a survey's quotas
       parameters:
       - in: query
+        name: client
+        schema:
+          type: number
+        description: Internal client record ID
+      - in: query
+        name: client_name
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated allocated client names
+        explode: false
+        style: form
+      - in: query
         name: company
         schema:
           type: array
@@ -980,8 +1008,8 @@ paths:
       tags:
       - Survey details
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -997,6 +1025,20 @@ paths:
       summary: List pre-screening questions and accepted answers
       parameters:
       - in: query
+        name: client
+        schema:
+          type: number
+        description: Internal client record ID
+      - in: query
+        name: client_name
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated allocated client names
+        explode: false
+        style: form
+      - in: query
         name: company
         schema:
           type: array
@@ -1092,8 +1134,8 @@ paths:
       tags:
       - Survey details
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -1119,8 +1161,8 @@ paths:
       tags:
       - Synchronization
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -1186,8 +1228,8 @@ paths:
       tags:
       - Synchronization
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -1209,8 +1251,8 @@ paths:
       tags:
       - Synchronization
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -1283,8 +1325,8 @@ paths:
       tags:
       - User hits
       security:
+      - VendorApiKeyAuth: []
       - cookieAuth: []
-      - basicAuth: []
       responses:
         '200':
           content:
@@ -1292,6 +1334,1336 @@ paths:
               schema:
                 $ref: '#/components/schemas/UserHitsResponse'
           description: ''
+  /api/v1/vendors/api-keys/:
+    get:
+      operationId: api_v1_vendors_api_keys_list
+      summary: List external-vendor API keys (masked)
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: vendor
+        schema:
+          type: integer
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedVendorAPIKeyList'
+          description: ''
+    post:
+      operationId: api_v1_vendors_api_keys_create
+      description: Returns the plaintext api_key once. Store it securely; later responses
+        contain only the masked identifier.
+      summary: Issue an external-vendor API key
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VendorAPIKeyRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VendorAPIKeyRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VendorAPIKeyRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorAPIKey'
+          description: ''
+  /api/v1/vendors/api-keys/{id}/:
+    get:
+      operationId: api_v1_vendors_api_keys_retrieve
+      summary: Get masked API-key metadata
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor api key.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorAPIKey'
+          description: ''
+    put:
+      operationId: api_v1_vendors_api_keys_update
+      summary: Replace API-key label or expiration
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor api key.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VendorAPIKeyRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VendorAPIKeyRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VendorAPIKeyRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorAPIKey'
+          description: ''
+    patch:
+      operationId: api_v1_vendors_api_keys_partial_update
+      summary: Update API-key label or expiration
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor api key.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorAPIKeyRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorAPIKeyRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorAPIKeyRequest'
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorAPIKey'
+          description: ''
+    delete:
+      operationId: api_v1_vendors_api_keys_destroy
+      summary: Revoke an external-vendor API key
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor api key.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/vendors/client-allocations/:
+    get:
+      operationId: api_v1_vendors_client_allocations_list
+      summary: List vendor client grants and quantities
+      parameters:
+      - in: query
+        name: client
+        schema:
+          type: integer
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: vendor
+        schema:
+          type: integer
+      - in: query
+        name: vendor__employee_profile__account_type
+        schema:
+          type: string
+          enum:
+          - employee
+          - external_vendor
+          - internal_vendor
+        description: |-
+          * `employee` - Employee
+          * `internal_vendor` - Internal vendor
+          * `external_vendor` - External vendor
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedVendorClientAllocationList'
+          description: ''
+    post:
+      operationId: api_v1_vendors_client_allocations_create
+      summary: Allocate a client and quantity to a vendor
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VendorClientAllocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VendorClientAllocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VendorClientAllocationRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorClientAllocation'
+          description: ''
+  /api/v1/vendors/client-allocations/{id}/:
+    get:
+      operationId: api_v1_vendors_client_allocations_retrieve
+      summary: Get a vendor client allocation
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor client allocation.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorClientAllocation'
+          description: ''
+    put:
+      operationId: api_v1_vendors_client_allocations_update
+      summary: Replace a vendor client allocation
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor client allocation.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VendorClientAllocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VendorClientAllocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VendorClientAllocationRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorClientAllocation'
+          description: ''
+    patch:
+      operationId: api_v1_vendors_client_allocations_partial_update
+      summary: Update a vendor client allocation
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor client allocation.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorClientAllocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorClientAllocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorClientAllocationRequest'
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorClientAllocation'
+          description: ''
+    delete:
+      operationId: api_v1_vendors_client_allocations_destroy
+      summary: Deactivate a vendor client allocation
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor client allocation.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/vendors/clients/:
+    get:
+      operationId: api_v1_vendors_clients_list
+      summary: List survey clients
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: provider_code
+        schema:
+          type: string
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedClientList'
+          description: ''
+    post:
+      operationId: api_v1_vendors_clients_create
+      summary: Create a survey client
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClientRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClientRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+          description: ''
+  /api/v1/vendors/clients/{id}/:
+    get:
+      operationId: api_v1_vendors_clients_retrieve
+      summary: Get a survey client
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+          description: ''
+    put:
+      operationId: api_v1_vendors_clients_update
+      summary: Replace a survey client
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClientRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClientRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+          description: ''
+    patch:
+      operationId: api_v1_vendors_clients_partial_update
+      summary: Update a survey client
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedClientRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedClientRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedClientRequest'
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Client'
+          description: ''
+    delete:
+      operationId: api_v1_vendors_clients_destroy
+      summary: Deactivate a survey client
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/vendors/commercial-profiles/:
+    get:
+      operationId: api_v1_vendors_commercial_profiles_list
+      summary: List vendor CPI policies
+      parameters:
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: vendor
+        schema:
+          type: integer
+      - in: query
+        name: vendor__employee_profile__account_type
+        schema:
+          type: string
+          enum:
+          - employee
+          - external_vendor
+          - internal_vendor
+        description: |-
+          * `employee` - Employee
+          * `internal_vendor` - Internal vendor
+          * `external_vendor` - External vendor
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedVendorCommercialProfileList'
+          description: ''
+    post:
+      operationId: api_v1_vendors_commercial_profiles_create
+      summary: Create a vendor CPI policy
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VendorCommercialProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VendorCommercialProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VendorCommercialProfileRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorCommercialProfile'
+          description: ''
+  /api/v1/vendors/commercial-profiles/{id}/:
+    get:
+      operationId: api_v1_vendors_commercial_profiles_retrieve
+      summary: Get a vendor CPI policy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor commercial profile.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorCommercialProfile'
+          description: ''
+    put:
+      operationId: api_v1_vendors_commercial_profiles_update
+      summary: Replace a vendor CPI policy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor commercial profile.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VendorCommercialProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VendorCommercialProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VendorCommercialProfileRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorCommercialProfile'
+          description: ''
+    patch:
+      operationId: api_v1_vendors_commercial_profiles_partial_update
+      summary: Update a vendor CPI policy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor commercial profile.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorCommercialProfileRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorCommercialProfileRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorCommercialProfileRequest'
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorCommercialProfile'
+          description: ''
+    delete:
+      operationId: api_v1_vendors_commercial_profiles_destroy
+      summary: Deactivate a vendor CPI policy
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor commercial profile.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/vendors/directory/:
+    get:
+      operationId: api_v1_vendors_directory_list
+      summary: List internal and external vendor accounts
+      parameters:
+      - in: query
+        name: employee_profile__account_type
+        schema:
+          type: string
+          enum:
+          - employee
+          - external_vendor
+          - internal_vendor
+        description: |-
+          * `employee` - Employee
+          * `internal_vendor` - Internal vendor
+          * `external_vendor` - External vendor
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedVendorDirectoryList'
+          description: ''
+  /api/v1/vendors/directory/{id}/:
+    get:
+      operationId: api_v1_vendors_directory_retrieve
+      summary: Get a vendor account and commercial summary
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this user.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorDirectory'
+          description: ''
+  /api/v1/vendors/integrations/:
+    get:
+      operationId: api_v1_vendors_integrations_list
+      summary: List non-secret client integration metadata
+      parameters:
+      - in: query
+        name: client
+        schema:
+          type: integer
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: provider_code
+        schema:
+          type: string
+      - in: query
+        name: scheduled_sync_enabled
+        schema:
+          type: boolean
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedClientIntegrationList'
+          description: ''
+    post:
+      operationId: api_v1_vendors_integrations_create
+      summary: Create client integration metadata
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientIntegration'
+          description: ''
+  /api/v1/vendors/integrations/{id}/:
+    get:
+      operationId: api_v1_vendors_integrations_retrieve
+      summary: Get client integration metadata
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client integration.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientIntegration'
+          description: ''
+    put:
+      operationId: api_v1_vendors_integrations_update
+      summary: Replace client integration metadata
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client integration.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientIntegration'
+          description: ''
+    patch:
+      operationId: api_v1_vendors_integrations_partial_update
+      summary: Update client integration metadata
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client integration.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedClientIntegrationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedClientIntegrationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedClientIntegrationRequest'
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientIntegration'
+          description: ''
+    delete:
+      operationId: api_v1_vendors_integrations_destroy
+      summary: Deactivate client integration metadata
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client integration.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
+  /api/v1/vendors/management-options/:
+    get:
+      operationId: api_v1_vendors_management_options_retrieve
+      description: Returns non-secret active vendor and client labels for allocation
+        modals, scoped to the current vendor hierarchy when applicable.
+      summary: List safe vendor-management selector options
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorManagementOptions'
+          description: ''
+  /api/v1/vendors/reservations/:
+    get:
+      operationId: api_v1_vendors_reservations_list
+      summary: List allocation reservation audit records
+      parameters:
+      - in: query
+        name: client_allocation
+        schema:
+          type: integer
+      - in: query
+        name: client_allocation__vendor
+        schema:
+          type: integer
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: status
+        schema:
+          type: string
+          enum:
+          - consumed
+          - expired
+          - released
+          - reserved
+        description: |-
+          * `reserved` - Reserved
+          * `consumed` - Consumed
+          * `released` - Released
+          * `expired` - Expired
+      - in: query
+        name: survey_allocation
+        schema:
+          type: integer
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedAllocationReservationList'
+          description: ''
+  /api/v1/vendors/reservations/{id}/:
+    get:
+      operationId: api_v1_vendors_reservations_retrieve
+      summary: Get an allocation reservation audit record
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this allocation reservation.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AllocationReservation'
+          description: ''
+  /api/v1/vendors/survey-allocations/:
+    get:
+      operationId: api_v1_vendors_survey_allocations_list
+      summary: List optional vendor survey overrides
+      parameters:
+      - in: query
+        name: client_allocation
+        schema:
+          type: integer
+      - in: query
+        name: client_allocation__client
+        schema:
+          type: integer
+      - in: query
+        name: client_allocation__vendor
+        schema:
+          type: integer
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: ordering
+        required: false
+        in: query
+        description: Which field to use when ordering the results.
+        schema:
+          type: string
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      - in: query
+        name: survey
+        schema:
+          type: integer
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedVendorSurveyAllocationList'
+          description: ''
+    post:
+      operationId: api_v1_vendors_survey_allocations_create
+      summary: Create a survey-specific quantity or CPI override
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VendorSurveyAllocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VendorSurveyAllocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VendorSurveyAllocationRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '201':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorSurveyAllocation'
+          description: ''
+  /api/v1/vendors/survey-allocations/{id}/:
+    get:
+      operationId: api_v1_vendors_survey_allocations_retrieve
+      summary: Get a survey allocation override
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor survey allocation.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorSurveyAllocation'
+          description: ''
+    put:
+      operationId: api_v1_vendors_survey_allocations_update
+      summary: Replace a survey allocation override
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor survey allocation.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/VendorSurveyAllocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/VendorSurveyAllocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/VendorSurveyAllocationRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorSurveyAllocation'
+          description: ''
+    patch:
+      operationId: api_v1_vendors_survey_allocations_partial_update
+      summary: Update a survey allocation override
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor survey allocation.
+        required: true
+      tags:
+      - Vendors & allocations
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorSurveyAllocationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorSurveyAllocationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/PatchedVendorSurveyAllocationRequest'
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/VendorSurveyAllocation'
+          description: ''
+    delete:
+      operationId: api_v1_vendors_survey_allocations_destroy
+      summary: Deactivate a survey allocation override
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this vendor survey allocation.
+        required: true
+      tags:
+      - Vendors & allocations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '204':
+          description: No response body
 components:
   schemas:
     AccessFunction:
@@ -1361,6 +2733,252 @@ components:
         * `employee` - Employee
         * `internal_vendor` - Internal vendor
         * `external_vendor` - External vendor
+    AllocationReservation:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        attempt:
+          type: integer
+          readOnly: true
+        rid:
+          type: string
+          readOnly: true
+        vendor:
+          type: integer
+          readOnly: true
+        client_allocation:
+          type: integer
+          readOnly: true
+        survey_allocation:
+          type: integer
+          readOnly: true
+          nullable: true
+        survey:
+          type: integer
+          readOnly: true
+          nullable: true
+        quantity:
+          type: integer
+          readOnly: true
+        status:
+          allOf:
+          - $ref: '#/components/schemas/AllocationReservationStatusEnum'
+          readOnly: true
+        expires_at:
+          type: string
+          format: date-time
+          readOnly: true
+        finalized_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        reason:
+          type: string
+          readOnly: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - attempt
+      - client_allocation
+      - created_at
+      - expires_at
+      - finalized_at
+      - id
+      - quantity
+      - reason
+      - rid
+      - status
+      - survey
+      - survey_allocation
+      - updated_at
+      - vendor
+    AllocationReservationStatusEnum:
+      enum:
+      - reserved
+      - consumed
+      - released
+      - expired
+      type: string
+      description: |-
+        * `reserved` - Reserved
+        * `consumed` - Consumed
+        * `released` - Released
+        * `expired` - Expired
+    Client:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        code:
+          type: string
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        name:
+          type: string
+          maxLength: 160
+        provider_code:
+          type: string
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        company_name_match:
+          type: string
+          description: Current survey company label used while legacy inventory is
+            mapped to this client.
+          maxLength: 160
+        is_active:
+          type: boolean
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+        integrations:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClientIntegration'
+          readOnly: true
+      required:
+      - code
+      - created_at
+      - created_by
+      - id
+      - integrations
+      - name
+      - updated_at
+    ClientIntegration:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        client:
+          type: integer
+        name:
+          type: string
+          maxLength: 120
+        provider_code:
+          type: string
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        base_url:
+          type: string
+          format: uri
+          maxLength: 500
+        credential_env_key:
+          type: string
+          description: Environment-variable name containing the token. Secret values
+            are never stored here.
+          maxLength: 120
+        scheduled_sync_enabled:
+          type: boolean
+        is_active:
+          type: boolean
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - base_url
+      - client
+      - created_at
+      - created_by
+      - id
+      - name
+      - updated_at
+    ClientIntegrationRequest:
+      type: object
+      properties:
+        client:
+          type: integer
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        provider_code:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        base_url:
+          type: string
+          format: uri
+          minLength: 1
+          maxLength: 500
+        credential_env_key:
+          type: string
+          description: Environment-variable name containing the token. Secret values
+            are never stored here.
+          maxLength: 120
+        scheduled_sync_enabled:
+          type: boolean
+        is_active:
+          type: boolean
+      required:
+      - base_url
+      - client
+      - name
+    ClientRequest:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+        provider_code:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        company_name_match:
+          type: string
+          description: Current survey company label used while legacy inventory is
+            mapped to this client.
+          maxLength: 160
+        is_active:
+          type: boolean
+      required:
+      - code
+      - name
+    DeliveryModeEnum:
+      enum:
+      - panel
+      - api
+      - both
+      type: string
+      description: |-
+        * `panel` - Panel only
+        * `api` - API only
+        * `both` - Panel and API
     PaginatedAccessFunctionList:
       type: object
       required:
@@ -1384,6 +3002,75 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/AccessFunction'
+    PaginatedAllocationReservationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/AllocationReservation'
+    PaginatedClientIntegrationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ClientIntegration'
+    PaginatedClientList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/Client'
     PaginatedRoleList:
       type: object
       required:
@@ -1545,6 +3232,121 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/UserAccess'
+    PaginatedVendorAPIKeyList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorAPIKey'
+    PaginatedVendorClientAllocationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorClientAllocation'
+    PaginatedVendorCommercialProfileList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorCommercialProfile'
+    PaginatedVendorDirectoryList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorDirectory'
+    PaginatedVendorSurveyAllocationList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorSurveyAllocation'
     PatchedAccessFunctionRequest:
       type: object
       properties:
@@ -1562,6 +3364,58 @@ components:
           maxLength: 80
         description:
           type: string
+        is_active:
+          type: boolean
+    PatchedClientIntegrationRequest:
+      type: object
+      properties:
+        client:
+          type: integer
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        provider_code:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        base_url:
+          type: string
+          format: uri
+          minLength: 1
+          maxLength: 500
+        credential_env_key:
+          type: string
+          description: Environment-variable name containing the token. Secret values
+            are never stored here.
+          maxLength: 120
+        scheduled_sync_enabled:
+          type: boolean
+        is_active:
+          type: boolean
+    PatchedClientRequest:
+      type: object
+      properties:
+        code:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        name:
+          type: string
+          minLength: 1
+          maxLength: 160
+        provider_code:
+          type: string
+          minLength: 1
+          maxLength: 80
+          pattern: ^[-a-zA-Z0-9_]+$
+        company_name_match:
+          type: string
+          description: Current survey company label used while legacy inventory is
+            mapped to this client.
+          maxLength: 160
         is_active:
           type: boolean
     PatchedRoleRequest:
@@ -1654,6 +3508,101 @@ components:
           type: string
           writeOnly: true
           maxLength: 120
+    PatchedVendorAPIKeyRequest:
+      type: object
+      properties:
+        vendor:
+          type: integer
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+    PatchedVendorClientAllocationRequest:
+      type: object
+      properties:
+        vendor:
+          type: integer
+        client:
+          type: integer
+        quantity_limit:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        cpi_cut_override_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          description: Optional client-specific cut. Blank uses the vendor commercial
+            default.
+        starts_at:
+          type: string
+          format: date-time
+          nullable: true
+        ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_active:
+          type: boolean
+    PatchedVendorCommercialProfileRequest:
+      type: object
+      properties:
+        vendor:
+          type: integer
+        default_cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+        currency:
+          type: string
+          minLength: 1
+          maxLength: 3
+        delivery_mode:
+          allOf:
+          - $ref: '#/components/schemas/DeliveryModeEnum'
+          description: |-
+            Controls whether an external vendor can sign in to the panel, use API keys, or both.
+
+            * `panel` - Panel only
+            * `api` - API only
+            * `both` - Panel and API
+        is_active:
+          type: boolean
+    PatchedVendorSurveyAllocationRequest:
+      type: object
+      properties:
+        client_allocation:
+          type: integer
+        survey:
+          type: integer
+        quantity_limit:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        cpi_cut_override_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          description: Optional survey-specific cut. Blank uses the client/vendor
+            policy.
+        starts_at:
+          type: string
+          format: date-time
+          nullable: true
+        ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_active:
+          type: boolean
     Role:
       type: object
       properties:
@@ -1783,9 +3732,48 @@ components:
           format: email
           readOnly: true
           nullable: true
+        vendor:
+          type: integer
+          nullable: true
+        vendor_name:
+          type: string
+          nullable: true
+          readOnly: true
+        client:
+          type: integer
+          nullable: true
+        client_name:
+          type: string
+          readOnly: true
+          nullable: true
+        client_allocation:
+          type: integer
+          nullable: true
+        survey_allocation:
+          type: integer
+          nullable: true
         supplier_code:
           type: string
           maxLength: 40
+        source_cpi_snapshot:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+          readOnly: true
+        cpi_cut_percent_snapshot:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+        payable_cpi_snapshot:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        cpi_currency_snapshot:
+          type: string
+          maxLength: 3
         status_label:
           type: string
           readOnly: true
@@ -1889,6 +3877,7 @@ components:
           format: date-time
           readOnly: true
       required:
+      - client_name
       - company_name
       - country_code
       - created_at
@@ -1896,6 +3885,7 @@ components:
       - exit_ip
       - language_code
       - rid
+      - source_cpi_snapshot
       - status_label
       - survey_local_id
       - survey_name
@@ -1905,6 +3895,7 @@ components:
       - user_id
       - user_name
       - username
+      - vendor_name
     SurveyAttemptStatusEnum:
       enum:
       - initiated
@@ -1924,7 +3915,20 @@ components:
     SurveyDetail:
       type: object
       properties:
+        id:
+          type: integer
+          readOnly: true
         local_id:
+          type: string
+          readOnly: true
+        client:
+          type: integer
+          nullable: true
+        client_name:
+          type: string
+          readOnly: true
+          nullable: true
+        display_company_name:
           type: string
           readOnly: true
         source_id:
@@ -1966,6 +3970,16 @@ components:
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
+          readOnly: true
+        cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          readOnly: true
+        vendor_pricing:
+          type: boolean
+          readOnly: true
         loi:
           type: integer
           maximum: 9223372036854775807
@@ -2072,8 +4086,13 @@ components:
             $ref: '#/components/schemas/TargetingQuestion'
           readOnly: true
       required:
+      - client_name
       - country_label
+      - cpi
+      - cpi_cut_percent
       - created_at
+      - display_company_name
+      - id
       - local_id
       - progress_percent
       - quotas
@@ -2083,10 +4102,24 @@ components:
       - start_link
       - targeting_questions
       - updated_at
+      - vendor_pricing
     SurveyList:
       type: object
       properties:
+        id:
+          type: integer
+          readOnly: true
         local_id:
+          type: string
+          readOnly: true
+        client:
+          type: integer
+          nullable: true
+        client_name:
+          type: string
+          readOnly: true
+          nullable: true
+        display_company_name:
           type: string
           readOnly: true
         source_id:
@@ -2128,6 +4161,16 @@ components:
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
+          readOnly: true
+        cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          readOnly: true
+        vendor_pricing:
+          type: boolean
+          readOnly: true
         loi:
           type: integer
           maximum: 9223372036854775807
@@ -2213,8 +4256,13 @@ components:
           format: double
           readOnly: true
       required:
+      - client_name
       - country_label
+      - cpi
+      - cpi_cut_percent
       - created_at
+      - display_company_name
+      - id
       - local_id
       - progress_percent
       - source_created_display
@@ -2222,6 +4270,7 @@ components:
       - source_modified_display
       - start_link
       - updated_at
+      - vendor_pricing
     SurveyQuota:
       type: object
       properties:
@@ -2663,10 +4712,549 @@ components:
       - previous
       - results
       - summary
+    VendorAPIKey:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        vendor:
+          type: integer
+        vendor_name:
+          type: string
+          readOnly: true
+        account_type:
+          type: string
+          readOnly: true
+        name:
+          type: string
+          maxLength: 120
+        prefix:
+          type: string
+          readOnly: true
+        last_four:
+          type: string
+          readOnly: true
+        masked_key:
+          type: string
+          readOnly: true
+        api_key:
+          type: string
+          readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        last_used_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        revoked_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - account_type
+      - api_key
+      - created_at
+      - created_by
+      - id
+      - is_active
+      - last_four
+      - last_used_at
+      - masked_key
+      - name
+      - prefix
+      - revoked_at
+      - updated_at
+      - vendor
+      - vendor_name
+    VendorAPIKeyRequest:
+      type: object
+      properties:
+        vendor:
+          type: integer
+        name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - name
+      - vendor
+    VendorClientAllocation:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        vendor:
+          type: integer
+        vendor_name:
+          type: string
+          readOnly: true
+        account_type:
+          type: string
+          readOnly: true
+        client:
+          type: integer
+        client_name:
+          type: string
+          readOnly: true
+        quantity_limit:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        reserved_quantity:
+          type: integer
+          readOnly: true
+        consumed_quantity:
+          type: integer
+          readOnly: true
+        remaining_quantity:
+          type: integer
+          readOnly: true
+        cpi_cut_override_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          description: Optional client-specific cut. Blank uses the vendor commercial
+            default.
+        effective_cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          readOnly: true
+        starts_at:
+          type: string
+          format: date-time
+          nullable: true
+        ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_active:
+          type: boolean
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - account_type
+      - client
+      - client_name
+      - consumed_quantity
+      - created_at
+      - created_by
+      - effective_cpi_cut_percent
+      - id
+      - remaining_quantity
+      - reserved_quantity
+      - updated_at
+      - vendor
+      - vendor_name
+    VendorClientAllocationRequest:
+      type: object
+      properties:
+        vendor:
+          type: integer
+        client:
+          type: integer
+        quantity_limit:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        cpi_cut_override_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          description: Optional client-specific cut. Blank uses the vendor commercial
+            default.
+        starts_at:
+          type: string
+          format: date-time
+          nullable: true
+        ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_active:
+          type: boolean
+      required:
+      - client
+      - vendor
+    VendorCommercialProfile:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        vendor:
+          type: integer
+        vendor_name:
+          type: string
+          readOnly: true
+        account_type:
+          type: string
+          readOnly: true
+        default_cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+        currency:
+          type: string
+          maxLength: 3
+        delivery_mode:
+          allOf:
+          - $ref: '#/components/schemas/DeliveryModeEnum'
+          description: |-
+            Controls whether an external vendor can sign in to the panel, use API keys, or both.
+
+            * `panel` - Panel only
+            * `api` - API only
+            * `both` - Panel and API
+        is_active:
+          type: boolean
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - account_type
+      - created_at
+      - created_by
+      - id
+      - updated_at
+      - vendor
+      - vendor_name
+    VendorCommercialProfileRequest:
+      type: object
+      properties:
+        vendor:
+          type: integer
+        default_cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+        currency:
+          type: string
+          minLength: 1
+          maxLength: 3
+        delivery_mode:
+          allOf:
+          - $ref: '#/components/schemas/DeliveryModeEnum'
+          description: |-
+            Controls whether an external vendor can sign in to the panel, use API keys, or both.
+
+            * `panel` - Panel only
+            * `api` - API only
+            * `both` - Panel and API
+        is_active:
+          type: boolean
+      required:
+      - vendor
+    VendorDirectory:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        username:
+          type: string
+          readOnly: true
+          description: Required. 150 characters or fewer. Letters, digits and @/./+/-/_
+            only.
+        full_name:
+          type: string
+          readOnly: true
+        email:
+          type: string
+          format: email
+          readOnly: true
+          title: Email address
+        account_type:
+          type: string
+          readOnly: true
+        role_name:
+          type: string
+          readOnly: true
+          nullable: true
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+        commercial_profile_id:
+          type: integer
+          readOnly: true
+          nullable: true
+        default_cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          readOnly: true
+          nullable: true
+        currency:
+          type: string
+          readOnly: true
+          nullable: true
+        delivery_mode:
+          type: string
+          readOnly: true
+          nullable: true
+        allocation_count:
+          type: integer
+          readOnly: true
+        api_key_count:
+          type: integer
+          readOnly: true
+        is_active:
+          type: boolean
+          readOnly: true
+          title: Active
+          description: Designates whether this user should be treated as active. Unselect
+            this instead of deleting accounts.
+        date_joined:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - account_type
+      - allocation_count
+      - api_key_count
+      - commercial_profile_id
+      - created_by
+      - currency
+      - date_joined
+      - default_cpi_cut_percent
+      - delivery_mode
+      - email
+      - full_name
+      - id
+      - is_active
+      - role_name
+      - username
+    VendorManagementClientOption:
+      type: object
+      properties:
+        id:
+          type: integer
+        name:
+          type: string
+        code:
+          type: string
+        provider_code:
+          type: string
+      required:
+      - code
+      - id
+      - name
+      - provider_code
+    VendorManagementOptions:
+      type: object
+      properties:
+        vendors:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorManagementVendorOption'
+        clients:
+          type: array
+          items:
+            $ref: '#/components/schemas/VendorManagementClientOption'
+      required:
+      - clients
+      - vendors
+    VendorManagementVendorOption:
+      type: object
+      properties:
+        id:
+          type: integer
+        full_name:
+          type: string
+        username:
+          type: string
+        account_type:
+          $ref: '#/components/schemas/AccountTypeEnum'
+      required:
+      - account_type
+      - full_name
+      - id
+      - username
+    VendorSurveyAllocation:
+      type: object
+      properties:
+        id:
+          type: integer
+          readOnly: true
+        client_allocation:
+          type: integer
+        vendor:
+          type: integer
+          readOnly: true
+        vendor_name:
+          type: string
+          readOnly: true
+        client:
+          type: integer
+          readOnly: true
+        client_name:
+          type: string
+          readOnly: true
+        survey:
+          type: integer
+        survey_local_id:
+          type: string
+          readOnly: true
+        survey_source_id:
+          type: integer
+          readOnly: true
+        survey_name:
+          type: string
+          readOnly: true
+        quantity_limit:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        reserved_quantity:
+          type: integer
+          readOnly: true
+        consumed_quantity:
+          type: integer
+          readOnly: true
+        remaining_quantity:
+          type: integer
+          readOnly: true
+        cpi_cut_override_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          description: Optional survey-specific cut. Blank uses the client/vendor
+            policy.
+        effective_cpi_cut_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          readOnly: true
+        starts_at:
+          type: string
+          format: date-time
+          nullable: true
+        ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_active:
+          type: boolean
+        created_by:
+          type: string
+          readOnly: true
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+          readOnly: true
+        updated_at:
+          type: string
+          format: date-time
+          readOnly: true
+      required:
+      - client
+      - client_allocation
+      - client_name
+      - consumed_quantity
+      - created_at
+      - created_by
+      - effective_cpi_cut_percent
+      - id
+      - remaining_quantity
+      - reserved_quantity
+      - survey
+      - survey_local_id
+      - survey_name
+      - survey_source_id
+      - updated_at
+      - vendor
+      - vendor_name
+    VendorSurveyAllocationRequest:
+      type: object
+      properties:
+        client_allocation:
+          type: integer
+        survey:
+          type: integer
+        quantity_limit:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 0
+          format: int64
+        cpi_cut_override_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          nullable: true
+          description: Optional survey-specific cut. Blank uses the client/vendor
+            policy.
+        starts_at:
+          type: string
+          format: date-time
+          nullable: true
+        ends_at:
+          type: string
+          format: date-time
+          nullable: true
+        is_active:
+          type: boolean
+      required:
+      - client_allocation
+      - survey
   securitySchemes:
-    basicAuth:
-      type: http
-      scheme: basic
+    VendorApiKeyAuth:
+      type: apiKey
+      in: header
+      name: X-API-Key
+      description: External-vendor API key. The authenticated vendor's permissions,
+        client grants, survey rules and CPI cuts are applied automatically.
     cookieAuth:
       type: apiKey
       in: cookie
@@ -2684,3 +5272,6 @@ tags:
   description: Trigger and audit upstream inventory synchronization.
 - name: Access control
   description: Dynamic roles, function assignments and per-user access overrides.
+- name: Vendors & allocations
+  description: UAT client scope, vendor commercial policy and quantity allocation
+    APIs.
