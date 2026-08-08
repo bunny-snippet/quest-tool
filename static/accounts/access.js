@@ -11,6 +11,39 @@
   let userId = null;
   let roleSlug = null;
   let deleteTarget = null;
+  const externalForbidden = new Set(JSON.parse($('#externalVendorForbiddenCodes')?.textContent || '[]'));
+
+  function ensureRoleOption(value, label) {
+    if (!userForm?.elements.role || [...userForm.elements.role.options].some((item) => item.value === value)) return;
+    userForm.elements.role.add(new Option(label, value));
+  }
+
+  function applyAccountTypeRules() {
+    if (!userForm?.elements.account_type) return;
+    const type = userForm.elements.account_type.value;
+    const role = userForm.elements.role;
+    const note = $('[data-role-note]', userModal);
+    const forcedRole = type === 'internal_vendor' ? ['admin', 'Admin'] : type === 'external_vendor' ? ['external-vendor', 'External Vendor'] : null;
+    if (forcedRole) {
+      ensureRoleOption(...forcedRole);
+      role.value = forcedRole[0];
+      role.disabled = true;
+      note.textContent = type === 'internal_vendor' ? 'Admin is assigned automatically.' : 'Safe External Vendor defaults are assigned automatically.';
+    } else {
+      role.disabled = false;
+      note.textContent = 'Choose a role for this respondent.';
+    }
+    $$('[data-branch-field]', userModal).forEach((item) => { item.hidden = type === 'external_vendor'; });
+    if (type === 'external_vendor') {
+      userForm.elements.company_name.value = '';
+      userForm.elements.department.value = '';
+    }
+    $$('[data-function]', userModal).forEach((row) => {
+      const blocked = type === 'external_vendor' && externalForbidden.has(row.dataset.function);
+      row.hidden = blocked;
+      if (blocked) $('select', row).value = 'role';
+    });
+  }
 
   function toast(message, error = false) {
     const node = $('[data-access-toast]');
@@ -54,12 +87,14 @@
     $('[data-password-note]').textContent = 'Required for a new user, minimum 8 characters.';
     $$('[data-function] select', userModal).forEach((select) => { select.value = 'role'; });
     $('[data-user-error]').hidden = true;
+    applyAccountTypeRules();
   }
 
   $$('[data-open-user]').forEach((button) => button.addEventListener('click', () => { resetUserForm(); showModal(userModal); }));
   if (new URLSearchParams(window.location.search).get('open') === 'user' && userModal) {
     resetUserForm();
-    if (userForm.elements.account_type) userForm.elements.account_type.value = 'internal_vendor';
+    if ([...userForm.elements.account_type.options].some((item) => item.value === 'internal_vendor')) userForm.elements.account_type.value = 'internal_vendor';
+    applyAccountTypeRules();
     showModal(userModal);
     history.replaceState({}, '', window.location.pathname);
   }
@@ -67,6 +102,9 @@
     resetUserForm(); userId = button.dataset.editUser;
     try {
       const data = await api(`/api/v1/access/users/${userId}/`);
+      if (data.account_type_details?.value === 'employee' && ![...userForm.elements.account_type.options].some((item) => item.value === 'employee')) {
+        userForm.elements.account_type.add(new Option('Employee / respondent', 'employee'));
+      }
       userForm.elements.first_name.value = data.first_name || '';
       userForm.elements.last_name.value = data.last_name || '';
       userForm.elements.email.value = data.email || '';
@@ -77,11 +115,13 @@
       userForm.elements.is_active.checked = data.is_active;
       (data.allowed_overrides || []).forEach((code) => { const item = $(`[data-function="${CSS.escape(code)}"] select`, userModal); if (item) item.value = 'allow'; });
       (data.denied_overrides || []).forEach((code) => { const item = $(`[data-function="${CSS.escape(code)}"] select`, userModal); if (item) item.value = 'deny'; });
+      applyAccountTypeRules();
       $('#userModalTitle').textContent = 'Edit user access'; $('[data-user-submit]').textContent = 'Save changes';
       $('[data-password-note]').textContent = 'Leave blank to keep the current password.';
       showModal(userModal);
     } catch (error) { toast(error.message, true); }
   }));
+  userForm?.elements.account_type.addEventListener('change', applyAccountTypeRules);
 
   userForm?.addEventListener('submit', async (event) => {
     event.preventDefault(); const errorBox = $('[data-user-error]'); errorBox.hidden = true;

@@ -7,6 +7,17 @@ from rest_framework.permissions import BasePermission
 from .models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
 
 
+EXTERNAL_VENDOR_FORBIDDEN_CODES = frozenset({
+    "access.manage",
+    "permissions.view",
+    "roles.view", "roles.create", "roles.update", "roles.delete",
+    "users.manage", "users.view", "users.create", "users.update", "users.delete",
+    "respondents.create",
+    "clients.manage", "vendors.manage", "allocations.manage",
+    "sync.run",
+})
+
+
 def effective_permission_codes(user) -> set[str]:
     if not user or not user.is_authenticated or not user.is_active:
         return set()
@@ -25,6 +36,8 @@ def effective_permission_codes(user) -> set[str]:
             codes.add(code)
         else:
             codes.discard(code)
+    if profile and profile.account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+        codes.difference_update(EXTERNAL_VENDOR_FORBIDDEN_CODES)
     return codes
 
 

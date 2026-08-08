@@ -1,6 +1,7 @@
 from django.contrib.auth import get_user_model
-from django.db.models import Count
+from django.db.models import Count, Q
 from django.shortcuts import render
+from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import filters, status, viewsets
@@ -19,6 +20,7 @@ from .models import (
     ClientIntegration,
     VendorClientAllocation,
     VendorCommercialProfile,
+    VendorAPIKey,
     VendorSurveyAllocation,
 )
 from .serializers import (
@@ -27,6 +29,7 @@ from .serializers import (
     ClientSerializer,
     VendorClientAllocationSerializer,
     VendorCommercialProfileSerializer,
+    VendorAPIKeySerializer,
     VendorSurveyAllocationSerializer,
     VendorDirectorySerializer,
     VendorManagementOptionsSerializer,
@@ -35,14 +38,15 @@ from .serializers import (
 
 @any_function_permission_required("vendors.view", "vendors.manage", "allocations.view", "allocations.manage")
 def vendor_management_page(request):
+    owner_controlled = vendor_scope_user_id(request.user) is None
     can_view_vendors = any(has_function_access(request.user, code) for code in ("vendors.view", "vendors.manage"))
     can_view_allocations = any(has_function_access(request.user, code) for code in ("allocations.view", "allocations.manage"))
     return render(request, "vendors/management.html", {
         "active_page": "vendors",
         "can_view_vendors": can_view_vendors,
         "can_view_allocations": can_view_allocations,
-        "can_manage_vendors": has_function_access(request.user, "vendors.manage"),
-        "can_manage_allocations": has_function_access(request.user, "allocations.manage"),
+        "can_manage_vendors": owner_controlled and has_function_access(request.user, "vendors.manage"),
+        "can_manage_allocations": owner_controlled and has_function_access(request.user, "allocations.manage"),
     })
 
 
@@ -150,7 +154,10 @@ class VendorDirectoryViewSet(viewsets.ReadOnlyModelViewSet):
         ).select_related(
             "employee_profile", "employee_profile__role", "employee_profile__created_by",
             "vendor_commercial_profile",
-        ).annotate(allocation_count=Count("client_allocations", distinct=True))
+        ).annotate(
+            allocation_count=Count("client_allocations", distinct=True),
+            api_key_count=Count("vendor_api_keys", filter=Q(vendor_api_keys__is_active=True), distinct=True),
+        )
         vendor_id = vendor_scope_user_id(self.request.user)
         return queryset.filter(pk=vendor_id) if vendor_id else queryset
 
@@ -217,6 +224,61 @@ class VendorCommercialProfileViewSet(PermissionByActionMixin, viewsets.ModelView
     filterset_fields = ["vendor", "vendor__employee_profile__account_type", "is_active"]
     search_fields = ["vendor__username", "vendor__first_name", "vendor__last_name", "vendor__email"]
     vendor_scope_filter = "vendor_id"
+
+
+@extend_schema_view(
+    list=extend_schema(tags=["Vendors & allocations"], summary="List external-vendor API keys (masked)"),
+    create=extend_schema(
+        tags=["Vendors & allocations"],
+        summary="Issue an external-vendor API key",
+        description="Returns the plaintext api_key once. Store it securely; later responses contain only the masked identifier.",
+    ),
+    retrieve=extend_schema(tags=["Vendors & allocations"], summary="Get masked API-key metadata"),
+    update=extend_schema(tags=["Vendors & allocations"], summary="Replace API-key label or expiration"),
+    partial_update=extend_schema(tags=["Vendors & allocations"], summary="Update API-key label or expiration"),
+    destroy=extend_schema(tags=["Vendors & allocations"], summary="Revoke an external-vendor API key"),
+)
+class VendorAPIKeyViewSet(viewsets.ModelViewSet):
+    queryset = VendorAPIKey.objects.select_related(
+        "vendor", "vendor__employee_profile", "vendor__vendor_commercial_profile", "created_by"
+    ).all()
+    serializer_class = VendorAPIKeySerializer
+    permission_classes = [HasFunctionPermission]
+    required_function_permission = "vendors.manage"
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ["vendor", "is_active"]
+    search_fields = ["name", "prefix", "vendor__username", "vendor__first_name", "vendor__last_name"]
+    ordering_fields = ["created_at", "last_used_at", "expires_at", "name"]
+    ordering = ["-created_at"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        return queryset.none() if vendor_scope_user_id(self.request.user) else queryset
+
+    def create(self, request, *args, **kwargs):
+        if vendor_scope_user_id(request.user):
+            raise PermissionDenied("Only the owner workspace can issue vendor API keys.")
+        return super().create(request, *args, **kwargs)
+
+    def perform_create(self, serializer):
+        if vendor_scope_user_id(self.request.user):
+            raise PermissionDenied("Only the owner workspace can issue vendor API keys.")
+        serializer.save()
+
+    def perform_update(self, serializer):
+        if vendor_scope_user_id(self.request.user):
+            raise PermissionDenied("Only the owner workspace can change vendor API keys.")
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        if vendor_scope_user_id(request.user):
+            raise PermissionDenied("Only the owner workspace can revoke vendor API keys.")
+        instance = self.get_object()
+        if instance.is_active:
+            instance.is_active = False
+            instance.revoked_at = timezone.now()
+            instance.save(update_fields=["is_active", "revoked_at", "updated_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @extend_schema_view(

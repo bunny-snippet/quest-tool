@@ -80,6 +80,7 @@ Opening Quota or Pre-screening in the UI also refreshes that survey immediately 
 | CRUD | `/api/v1/vendors/commercial-profiles/` | Internal/external vendor CPI policy |
 | CRUD | `/api/v1/vendors/client-allocations/` | Vendor client visibility and total quantity |
 | CRUD | `/api/v1/vendors/survey-allocations/` | Optional per-survey limit or CPI override |
+| CRUD | `/api/v1/vendors/api-keys/` | Issue/revoke hashed external-vendor API credentials (plaintext returned once) |
 | `GET` | `/api/v1/vendors/reservations/` | Reservation lifecycle audit |
 | CRUD | `/api/v1/access/roles/` | Roles and their explicit function assignments |
 | CRUD | `/api/v1/access/functions/` | Function permission catalog |

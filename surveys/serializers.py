@@ -26,6 +26,7 @@ class TargetingQuestionSerializer(serializers.ModelSerializer):
 
 class SurveyListSerializer(serializers.ModelSerializer):
     client_name = serializers.CharField(source="client.name", read_only=True, allow_null=True)
+    display_company_name = serializers.SerializerMethodField()
     country_label = serializers.SerializerMethodField()
     progress_percent = serializers.SerializerMethodField()
     source_created_display = serializers.SerializerMethodField()
@@ -38,7 +39,7 @@ class SurveyListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Survey
         fields = [
-            "id", "local_id", "client", "client_name", "source_id", "company_name", "name", "status", "sample_size", "completes", "remaining",
+            "id", "local_id", "client", "client_name", "display_company_name", "source_id", "company_name", "name", "status", "sample_size", "completes", "remaining",
             "starts", "cpi", "cpi_cut_percent", "vendor_pricing", "loi", "incidence_rate", "country", "country_code", "country_label",
             "language", "language_code", "group_type", "device_type", "entry_link", "start_link", "has_quota",
             "source_created_at", "source_modified_at", "source_created_display", "source_modified_display",
@@ -48,6 +49,12 @@ class SurveyListSerializer(serializers.ModelSerializer):
 
     def get_country_label(self, obj) -> str:
         return " ".join(part for part in [obj.country_code, obj.language_code] if part) or obj.country
+
+    def get_display_company_name(self, obj) -> str:
+        request = self.context.get("request")
+        if request and vendor_scope_user_id(request.user) and obj.client:
+            return obj.client.name
+        return obj.company_name
 
     def get_progress_percent(self, obj) -> float:
         return round((obj.completes / obj.sample_size) * 100, 1) if obj.sample_size else 0

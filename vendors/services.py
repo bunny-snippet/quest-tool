@@ -74,12 +74,9 @@ def scope_surveys_for_user(queryset, user):
         VendorClientAllocation.objects.filter(
             vendor_id=vendor_id,
             vendor__is_active=True,
+            vendor__vendor_commercial_profile__is_active=True,
             client__is_active=True,
             is_active=True,
-        )
-        .filter(
-            Q(vendor__vendor_commercial_profile__isnull=True)
-            | Q(vendor__vendor_commercial_profile__is_active=True)
         )
         .filter(_active_window_q(now))
         .filter(_available_quantity_q())
@@ -126,12 +123,10 @@ def resolve_vendor_survey_context(user, survey: Survey, *, require_capacity=True
     client_allocation = client_queryset.filter(
         vendor_id=vendor_id,
         vendor__is_active=True,
+        vendor__vendor_commercial_profile__is_active=True,
         client__is_active=True,
         client_id=survey.client_id,
         is_active=True,
-    ).filter(
-        Q(vendor__vendor_commercial_profile__isnull=True)
-        | Q(vendor__vendor_commercial_profile__is_active=True)
     ).first()
     if not client_allocation or not _is_active_now(client_allocation, now):
         raise AllocationUnavailable("This client is not allocated to the vendor.")
@@ -228,7 +223,7 @@ def reserve_attempt_capacity(
     commercial_profile = getattr(client_allocation.vendor, "vendor_commercial_profile", None)
     if not client_allocation.vendor.is_active or not client_allocation.client.is_active:
         raise AllocationUnavailable("Vendor or client access is inactive.")
-    if commercial_profile and not commercial_profile.is_active:
+    if not commercial_profile or not commercial_profile.is_active:
         raise AllocationUnavailable("Vendor commercial access is inactive.")
     if locked_survey_allocation and attempt.survey_id != locked_survey_allocation.survey_id:
         raise AllocationUnavailable("Attempt survey does not match the assigned survey.")

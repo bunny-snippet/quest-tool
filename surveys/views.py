@@ -33,7 +33,7 @@ from vendors.services import (
     resolve_vendor_survey_context,
     scope_surveys_for_user,
 )
-from vendors.access import is_external_vendor_scope
+from vendors.access import is_external_vendor_scope, vendor_scope_user_id
 
 from .filters import SurveyAttemptFilter, SurveyFilter
 from .integrations import InnovateMRAPIError, InnovateMRClient
@@ -77,7 +77,11 @@ def dashboard_page(request):
 def projects_page(request):
     visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
     countries = visible_surveys.exclude(country_code="").values_list("country_code", "country").distinct().order_by("country_code")
-    companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
+    is_vendor_panel = bool(vendor_scope_user_id(request.user))
+    if is_vendor_panel:
+        companies = visible_surveys.filter(client__isnull=False).values_list("client__name", flat=True).distinct().order_by("client__name")
+    else:
+        companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
     column_permissions = {
         "project_id": "projects.column.project_id", "survey": "projects.column.survey",
         "market": "projects.column.market", "completes": "projects.column.completes",
@@ -93,6 +97,9 @@ def projects_page(request):
         project_columns.remove("actions")
     return render(request, "surveys/projects.html", {
         "active_page": "projects", "countries": countries, "companies": companies,
+        "company_filter_label": "Client" if is_vendor_panel else "Company",
+        "company_filter_param": "client_name" if is_vendor_panel else "company",
+        "company_filter_default": "All clients" if is_vendor_panel else "All companies",
         "project_columns": project_columns, "project_column_count": max(1, len(project_columns)),
         "can_sync": has_function_access(request.user, "sync.run"),
     })

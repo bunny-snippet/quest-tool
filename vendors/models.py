@@ -76,6 +76,11 @@ class ClientIntegration(models.Model):
 class VendorCommercialProfile(models.Model):
     """Commercial defaults for a user marked as an internal or external vendor."""
 
+    class DeliveryMode(models.TextChoices):
+        PANEL = "panel", "Panel only"
+        API = "api", "API only"
+        BOTH = "both", "Panel and API"
+
     vendor = models.OneToOneField(
         settings.AUTH_USER_MODEL,
         on_delete=models.PROTECT,
@@ -88,6 +93,13 @@ class VendorCommercialProfile(models.Model):
         validators=PERCENTAGE_VALIDATORS,
     )
     currency = models.CharField(max_length=3, default="USD")
+    delivery_mode = models.CharField(
+        max_length=8,
+        choices=DeliveryMode.choices,
+        default=DeliveryMode.PANEL,
+        db_index=True,
+        help_text="Controls whether an external vendor can sign in to the panel, use API keys, or both.",
+    )
     is_active = models.BooleanField(default=True, db_index=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -102,6 +114,14 @@ class VendorCommercialProfile(models.Model):
     class Meta:
         ordering = ["vendor__first_name", "vendor__username"]
 
+    @property
+    def panel_access_enabled(self):
+        return self.delivery_mode in {self.DeliveryMode.PANEL, self.DeliveryMode.BOTH}
+
+    @property
+    def api_access_enabled(self):
+        return self.delivery_mode in {self.DeliveryMode.API, self.DeliveryMode.BOTH}
+
     def clean(self):
         super().clean()
         employee_profile = getattr(self.vendor, "employee_profile", None)
@@ -110,9 +130,58 @@ class VendorCommercialProfile(models.Model):
             raise ValidationError({"vendor": "Commercial profiles can only be assigned to vendor accounts."})
         if account_type == "internal_vendor" and self.default_cpi_cut_percent != Decimal("0.00"):
             raise ValidationError({"default_cpi_cut_percent": "Internal vendors must receive the full source CPI."})
+        if account_type == "internal_vendor" and self.delivery_mode != self.DeliveryMode.PANEL:
+            raise ValidationError({"delivery_mode": "Internal vendors use the panel delivery mode."})
 
     def __str__(self):
         return self.vendor.get_full_name() or self.vendor.username
+
+
+class VendorAPIKey(models.Model):
+    """Revocable, hashed API credential for one external vendor account."""
+
+    vendor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="vendor_api_keys",
+    )
+    name = models.CharField(max_length=120)
+    prefix = models.CharField(max_length=16, db_index=True)
+    last_four = models.CharField(max_length=4)
+    key_hash = models.CharField(max_length=64, unique=True, editable=False)
+    is_active = models.BooleanField(default=True, db_index=True)
+    expires_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    last_used_at = models.DateTimeField(null=True, blank=True)
+    revoked_at = models.DateTimeField(null=True, blank=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_vendor_api_keys",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        constraints = [
+            models.UniqueConstraint(fields=["vendor", "name"], name="unique_vendor_api_key_name"),
+        ]
+        indexes = [models.Index(fields=["vendor", "is_active"])]
+
+    @property
+    def masked_key(self):
+        return f"{self.prefix}••••{self.last_four}"
+
+    def clean(self):
+        super().clean()
+        account_type = getattr(getattr(self.vendor, "employee_profile", None), "account_type", "")
+        if account_type != "external_vendor":
+            raise ValidationError({"vendor": "API keys can only be issued to external vendors."})
+
+    def __str__(self):
+        return f"{self.vendor} · {self.name} · {self.masked_key}"
 
 
 class VendorClientAllocation(models.Model):

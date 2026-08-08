@@ -11,7 +11,7 @@
   const canManageVendors = workspace.dataset.manageVendors === 'true';
   const canManageAllocations = workspace.dataset.manageAllocations === 'true';
   const state = {
-    vendors: [], profiles: [], clients: [], clientAllocations: [], surveyAllocations: [],
+    vendors: [], profiles: [], clients: [], clientAllocations: [], surveyAllocations: [], apiKeys: [],
     selectedSurvey: null, searchTimer: null,
   };
 
@@ -72,6 +72,10 @@
 
   function accountLabel(type) {
     return type === 'internal_vendor' ? 'Internal' : type === 'external_vendor' ? 'External' : 'Vendor';
+  }
+
+  function deliveryLabel(mode) {
+    return mode === 'api' ? 'API only' : mode === 'both' ? 'Panel + API' : 'Panel only';
   }
 
   function number(value) {
@@ -157,13 +161,13 @@
     const rows = state.vendors.map((vendor) => {
       const profile = profiles.get(Number(vendor.id));
       const cut = vendor.account_type === 'internal_vendor' ? '0.00' : (profile?.default_cpi_cut_percent ?? vendor.default_cpi_cut_percent ?? '0.00');
-      return `<tr><td>${vendorIdentity(vendor)}</td><td>${typeBadge(vendor.account_type)}</td><td><div class="vendor-money"><strong>${escapeHtml(cut)}%</strong><small>${escapeHtml(profile?.currency || vendor.currency || 'USD')} policy</small></div></td><td>${number(vendor.allocation_count)}</td><td>${stateBadge(vendor.is_active && (profile?.is_active ?? true))}</td><td>${actionButton('policy', vendor.id, canManageVendors)}</td></tr>`;
+      return `<tr><td>${vendorIdentity(vendor)}</td><td>${typeBadge(vendor.account_type)}</td><td><div class="vendor-money"><strong>${escapeHtml(cut)}%</strong><small>${escapeHtml(profile?.currency || vendor.currency || 'USD')} policy</small></div></td><td>${number(vendor.allocation_count)}</td><td>${stateBadge(vendor.is_active && (profile?.is_active ?? true))}<small class="delivery-label">${escapeHtml(deliveryLabel(profile?.delivery_mode || vendor.delivery_mode))}</small></td><td>${actionButton('policy', vendor.id, canManageVendors)}</td></tr>`;
     }).join('') || emptyRow(6, 'No internal or external vendors have been created yet.');
     $('#vendorRows').innerHTML = rows;
     $('#vendorCards').innerHTML = state.vendors.map((vendor) => {
       const profile = profiles.get(Number(vendor.id));
       const cut = vendor.account_type === 'internal_vendor' ? '0.00' : (profile?.default_cpi_cut_percent ?? '0.00');
-      return `<article class="vendor-card"><div class="vendor-card-head">${vendorIdentity(vendor)}${typeBadge(vendor.account_type)}</div><div class="vendor-card-grid"><span>Default CPI cut<strong>${escapeHtml(cut)}%</strong></span><span>Client grants<strong>${number(vendor.allocation_count)}</strong></span><span>Currency<strong>${escapeHtml(profile?.currency || 'USD')}</strong></span><span>Status<strong>${vendor.is_active && (profile?.is_active ?? true) ? 'Active' : 'Inactive'}</strong></span></div>${actionButton('policy', vendor.id, canManageVendors)}</article>`;
+      return `<article class="vendor-card"><div class="vendor-card-head">${vendorIdentity(vendor)}${typeBadge(vendor.account_type)}</div><div class="vendor-card-grid"><span>Default CPI cut<strong>${escapeHtml(cut)}%</strong></span><span>Client grants<strong>${number(vendor.allocation_count)}</strong></span><span>Delivery<strong>${escapeHtml(deliveryLabel(profile?.delivery_mode || vendor.delivery_mode))}</strong></span><span>API keys<strong>${number(vendor.api_key_count)}</strong></span></div>${actionButton('policy', vendor.id, canManageVendors)}</article>`;
     }).join('');
   }
 
@@ -179,8 +183,14 @@
     $('#surveyAllocationCards').innerHTML = state.surveyAllocations.map((row) => `<article class="vendor-card"><div class="vendor-card-head"><div><strong>${escapeHtml(row.survey_local_id)}</strong><br><small>${escapeHtml(row.vendor_name)} · ${escapeHtml(row.client_name)}</small></div>${stateBadge(row.is_active)}</div><div class="vendor-card-grid"><span>Survey ID<strong>${escapeHtml(row.survey_source_id)}</strong></span><span>CPI cut<strong>${escapeHtml(row.effective_cpi_cut_percent)}%</strong></span><span>Available<strong>${number(row.remaining_quantity)}</strong></span><span>Limit<strong>${number(row.quantity_limit)}</strong></span></div>${actionButton('survey', row.id, canManageAllocations)}</article>`).join('');
   }
 
+  function renderApiKeys() {
+    if (!$('#apiKeyRows')) return;
+    $('#apiKeyRows').innerHTML = state.apiKeys.map((key) => `<tr><td><strong>${escapeHtml(key.vendor_name)}</strong><br>${typeBadge(key.account_type)}</td><td><div class="vendor-money"><strong>${escapeHtml(key.name)}</strong><small>${escapeHtml(key.masked_key)}</small></div></td><td>${dateTime(key.created_at)}</td><td>${key.last_used_at ? dateTime(key.last_used_at) : 'Never'}</td><td>${key.expires_at ? dateTime(key.expires_at) : 'No expiry'}</td><td>${key.is_active ? `<button class="vendor-action danger" type="button" data-revoke-api-key="${key.id}">Revoke</button>` : stateBadge(false)}</td></tr>`).join('') || emptyRow(6, 'No API keys issued yet.');
+    $('#apiKeyCards').innerHTML = state.apiKeys.map((key) => `<article class="vendor-card"><div class="vendor-card-head"><div><strong>${escapeHtml(key.name)}</strong><br><small>${escapeHtml(key.vendor_name)}</small></div>${key.is_active ? stateBadge(true) : stateBadge(false)}</div><div class="vendor-card-grid"><span>Key<strong>${escapeHtml(key.masked_key)}</strong></span><span>Last used<strong>${key.last_used_at ? dateTime(key.last_used_at) : 'Never'}</strong></span><span>Created<strong>${dateTime(key.created_at)}</strong></span><span>Expires<strong>${key.expires_at ? dateTime(key.expires_at) : 'Never'}</strong></span></div>${key.is_active ? `<button class="vendor-action danger" type="button" data-revoke-api-key="${key.id}">Revoke key</button>` : ''}</article>`).join('');
+  }
+
   function render() {
-    renderOverview(); renderVendors(); renderClientAllocations(); renderSurveyAllocations();
+    renderOverview(); renderVendors(); renderClientAllocations(); renderSurveyAllocations(); renderApiKeys();
   }
 
   function option(value, label, selected = false) {
@@ -193,6 +203,10 @@
     field('client_vendor').innerHTML = `<option value="">Select vendor</option>${vendorOptions}`;
     field('client').innerHTML = `<option value="">Select client</option>${state.clients.map((client) => option(client.id, client.name)).join('')}`;
     field('client_allocation').innerHTML = `<option value="">Select vendor and client</option>${state.clientAllocations.map((row) => option(row.id, `${row.vendor_name} — ${row.client_name}`)).join('')}`;
+    field('api_vendor').innerHTML = `<option value="">Select API-enabled external vendor</option>${state.vendors.filter((vendor) => {
+      const profile = state.profiles.find((item) => Number(item.vendor) === Number(vendor.id));
+      return vendor.account_type === 'external_vendor' && ['api', 'both'].includes(profile?.delivery_mode || vendor.delivery_mode);
+    }).map((vendor) => option(vendor.id, vendor.full_name)).join('')}`;
   }
 
   function updatePolicyRule() {
@@ -200,6 +214,8 @@
     const internal = vendor?.account_type === 'internal_vendor';
     field('default_cpi_cut_percent').disabled = internal;
     if (internal) field('default_cpi_cut_percent').value = '0.00';
+    field('delivery_mode').disabled = internal;
+    if (internal) field('delivery_mode').value = 'panel';
     $('#policyRuleNote').textContent = internal ? 'Internal vendors always receive the full source CPI.' : 'External vendor payable CPI = source CPI minus this percentage.';
   }
 
@@ -227,7 +243,16 @@
     state.selectedSurvey = null;
     errorBox.hidden = true;
     $('#surveySearchResults').hidden = true;
-    $$('[data-form-section]', form).forEach((section) => { section.hidden = section.dataset.formSection !== mode; });
+    $('#issuedKeyPanel').hidden = true;
+    $('#issuedKeyValue').value = '';
+    $('#vendorActiveToggle').hidden = mode === 'api_key';
+    $('#vendorSubmitButton').hidden = false;
+    $('#vendorSubmitButton').disabled = false;
+    $$('[data-form-section]', form).forEach((section) => {
+      const active = section.dataset.formSection === mode;
+      section.hidden = !active;
+      $$('input,select', section).forEach((control) => { control.disabled = !active; });
+    });
   }
 
   function showModal() {
@@ -252,11 +277,20 @@
     field('policy_vendor').disabled = Boolean(profile);
     field('default_cpi_cut_percent').value = profile?.default_cpi_cut_percent || '0.00';
     field('currency').value = profile?.currency || 'USD';
+    field('delivery_mode').value = profile?.delivery_mode || vendor?.delivery_mode || 'panel';
     field('is_active').checked = profile?.is_active ?? true;
     $('#vendorModalEyebrow').textContent = accountLabel(vendor?.account_type);
     $('#vendorModalTitle').textContent = profile ? 'Edit commercial policy' : 'Create commercial policy';
     $('#vendorSubmitButton').textContent = profile ? 'Save policy' : 'Create policy';
     updatePolicyRule(); showModal();
+  }
+
+  function openApiKey() {
+    resetForm('api_key');
+    $('#vendorModalEyebrow').textContent = 'External integration';
+    $('#vendorModalTitle').textContent = 'Generate API key';
+    $('#vendorSubmitButton').textContent = 'Generate secure key';
+    showModal();
   }
 
   function openClientAllocation(recordId = null) {
@@ -320,16 +354,17 @@
   }
 
   async function reloadData() {
-    const [options, vendors, profiles, clientAllocations, surveyAllocations] = await Promise.all([
+    const [options, vendors, profiles, clientAllocations, surveyAllocations, apiKeys] = await Promise.all([
       api('/api/v1/vendors/management-options/'),
       canViewVendors ? fetchAll('/api/v1/vendors/directory/') : Promise.resolve(null),
       canViewVendors ? fetchAll('/api/v1/vendors/commercial-profiles/') : Promise.resolve([]),
       canViewAllocations ? fetchAll('/api/v1/vendors/client-allocations/') : Promise.resolve([]),
       canViewAllocations ? fetchAll('/api/v1/vendors/survey-allocations/') : Promise.resolve([]),
+      canManageVendors ? fetchAll('/api/v1/vendors/api-keys/') : Promise.resolve([]),
     ]);
     Object.assign(state, {
       vendors: vendors || options.vendors || [], profiles, clients: options.clients || [],
-      clientAllocations, surveyAllocations,
+      clientAllocations, surveyAllocations, apiKeys,
     });
     hydrateSelects(); render();
   }
@@ -349,9 +384,16 @@
     if (policy) openPolicy(policy.dataset.editPolicy);
     if (client) openClientAllocation(client.dataset.editClient);
     if (survey) openSurveyAllocation(survey.dataset.editSurvey);
+    const revokeKey = event.target.closest('[data-revoke-api-key]');
+    if (revokeKey && confirm('Revoke this API key permanently?')) {
+      api(`/api/v1/vendors/api-keys/${revokeKey.dataset.revokeApiKey}/`, { method: 'DELETE' })
+        .then(() => { toast('API key revoked.'); return reloadData(); })
+        .catch((error) => toast(error.message, true));
+    }
   });
   $('[data-create-allocation="client"]')?.addEventListener('click', () => openClientAllocation());
   $('[data-create-allocation="survey"]')?.addEventListener('click', () => openSurveyAllocation());
+  $('[data-create-api-key]')?.addEventListener('click', openApiKey);
   $$('[data-close-vendor-modal]').forEach((button) => button.addEventListener('click', closeModal));
   backdrop.addEventListener('click', closeModal);
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && !modal.hidden) closeModal(); });
@@ -375,6 +417,10 @@
     state.selectedSurvey = { id: Number(button.dataset.selectSurvey) };
     $('#surveySearchResults').hidden = true;
   });
+  $('#copyIssuedKey').addEventListener('click', async () => {
+    await navigator.clipboard.writeText($('#issuedKeyValue').value);
+    toast('API key copied. Store it securely.');
+  });
 
   form.addEventListener('submit', async (event) => {
     event.preventDefault(); errorBox.hidden = true;
@@ -386,7 +432,8 @@
       payload = {
         vendor: Number(field('policy_vendor').value),
         default_cpi_cut_percent: field('default_cpi_cut_percent').disabled ? '0.00' : field('default_cpi_cut_percent').value,
-        currency: field('currency').value, is_active: field('is_active').checked,
+        currency: field('currency').value, delivery_mode: field('delivery_mode').value,
+        is_active: field('is_active').checked,
       };
     } else if (mode === 'client') {
       url = `/api/v1/vendors/client-allocations/${id ? `${id}/` : ''}`;
@@ -397,7 +444,7 @@
         starts_at: toApiDateTime(field('client_starts_at').value), ends_at: toApiDateTime(field('client_ends_at').value),
         is_active: field('is_active').checked,
       };
-    } else {
+    } else if (mode === 'survey') {
       if (!field('survey').value) { errorBox.textContent = 'Select a survey from the search results.'; errorBox.hidden = false; return; }
       url = `/api/v1/vendors/survey-allocations/${id ? `${id}/` : ''}`;
       payload = {
@@ -407,11 +454,26 @@
         starts_at: toApiDateTime(field('survey_starts_at').value), ends_at: toApiDateTime(field('survey_ends_at').value),
         is_active: field('is_active').checked,
       };
+    } else {
+      url = '/api/v1/vendors/api-keys/';
+      payload = {
+        vendor: Number(field('api_vendor').value), name: field('api_key_name').value.trim(),
+        expires_at: toApiDateTime(field('api_key_expires_at').value),
+      };
     }
     try {
       $('#vendorSubmitButton').disabled = true;
-      await api(url, { method: id ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
-      closeModal(); toast(id ? 'Changes saved.' : 'Allocation created.'); await reloadData();
+      const result = await api(url, { method: id ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
+      if (mode === 'api_key') {
+        $('#issuedKeyValue').value = result.api_key;
+        $('#issuedKeyPanel').hidden = false;
+        $$('[data-form-section="api_key"] input,[data-form-section="api_key"] select').forEach((control) => { control.disabled = true; });
+        $('#vendorSubmitButton').hidden = true;
+        toast('API key generated. Copy it now.');
+        await reloadData();
+      } else {
+        closeModal(); toast(id ? 'Changes saved.' : 'Configuration created.'); await reloadData();
+      }
     } catch (error) { errorBox.textContent = error.message; errorBox.hidden = false; }
     finally { $('#vendorSubmitButton').disabled = false; }
   });

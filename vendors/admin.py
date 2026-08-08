@@ -6,6 +6,7 @@ from .models import (
     ClientIntegration,
     VendorClientAllocation,
     VendorCommercialProfile,
+    VendorAPIKey,
     VendorSurveyAllocation,
 )
 
@@ -25,9 +26,17 @@ class ClientAdmin(admin.ModelAdmin):
 
 @admin.register(VendorCommercialProfile)
 class VendorCommercialProfileAdmin(admin.ModelAdmin):
-    list_display = ["vendor", "default_cpi_cut_percent", "currency", "is_active", "updated_at"]
+    list_display = ["vendor", "default_cpi_cut_percent", "currency", "delivery_mode", "is_active", "updated_at"]
     search_fields = ["vendor__username", "vendor__first_name", "vendor__last_name", "vendor__email"]
     list_filter = ["is_active", "currency"]
+
+
+@admin.register(VendorAPIKey)
+class VendorAPIKeyAdmin(admin.ModelAdmin):
+    list_display = ["vendor", "name", "masked_key", "is_active", "expires_at", "last_used_at", "created_at"]
+    search_fields = ["vendor__username", "vendor__email", "name", "prefix"]
+    list_filter = ["is_active", "created_at", "expires_at"]
+    readonly_fields = ["prefix", "last_four", "key_hash", "last_used_at", "revoked_at", "created_at", "updated_at"]
 
 
 @admin.register(VendorClientAllocation)

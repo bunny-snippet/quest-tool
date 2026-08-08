@@ -10,6 +10,7 @@ from .views import (
     VendorSurveyAllocationViewSet,
     VendorDirectoryViewSet,
     VendorManagementOptionsView,
+    VendorAPIKeyViewSet,
 )
 
 
@@ -18,6 +19,7 @@ router.register("directory", VendorDirectoryViewSet, basename="vendor-directory"
 router.register("clients", ClientViewSet, basename="vendor-client")
 router.register("integrations", ClientIntegrationViewSet, basename="client-integration")
 router.register("commercial-profiles", VendorCommercialProfileViewSet, basename="vendor-commercial-profile")
+router.register("api-keys", VendorAPIKeyViewSet, basename="vendor-api-key")
 router.register("client-allocations", VendorClientAllocationViewSet, basename="vendor-client-allocation")
 router.register("survey-allocations", VendorSurveyAllocationViewSet, basename="vendor-survey-allocation")
 router.register("reservations", AllocationReservationViewSet, basename="allocation-reservation")

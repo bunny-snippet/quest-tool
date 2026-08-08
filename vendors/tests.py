@@ -11,7 +11,14 @@ from rest_framework.test import APIClient
 from accounts.models import AccessFunction, EmployeeProfile, UserFunctionOverride
 from surveys.models import Survey, SurveyAttempt
 
-from .models import AllocationReservation, Client, VendorClientAllocation, VendorCommercialProfile, VendorSurveyAllocation
+from .models import (
+    AllocationReservation,
+    Client,
+    VendorAPIKey,
+    VendorClientAllocation,
+    VendorCommercialProfile,
+    VendorSurveyAllocation,
+)
 from .services import AllocationUnavailable, finalize_attempt_capacity, payable_cpi, reserve_attempt_capacity
 from .tasks import expire_allocation_reservations_task
 
@@ -108,6 +115,14 @@ class VendorFoundationTests(TestCase):
         self.assertEqual(self.external_client_allocation.consumed_quantity, 1)
         self.assertEqual(self.external_survey_allocation.consumed_quantity, 1)
         self.assertEqual(finalize_attempt_capacity(attempt).status, AllocationReservation.Status.CONSUMED)
+
+        new_attempt = self.attempt("Ua9Mm8Nn7P")
+        reserve_attempt_capacity(new_attempt, self.external_survey_allocation)
+        new_attempt.refresh_from_db()
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.payable_cpi_snapshot, Decimal("7.00"))
+        self.assertEqual(new_attempt.source_cpi_snapshot, Decimal("6.00"))
+        self.assertEqual(new_attempt.payable_cpi_snapshot, Decimal("4.20"))
 
     def test_non_complete_releases_and_exhausted_survey_rejects(self):
         attempt = self.attempt("Ua4Ee5Ff6G")
@@ -295,3 +310,121 @@ class VendorFoundationTests(TestCase):
         self.assertEqual(options.status_code, 200)
         self.assertEqual(len(options.json()["vendors"]), 2)
         self.assertIn(self.client_record.pk, {item["id"] for item in options.json()["clients"]})
+
+    def test_api_key_inherits_live_client_scope_and_different_client_cuts(self):
+        self.external_policy.delivery_mode = VendorCommercialProfile.DeliveryMode.BOTH
+        self.external_policy.save(update_fields=["delivery_mode", "updated_at"])
+        second_client = Client.objects.create(
+            code="second-cut-client", name="Second Cut Client", provider_code="custom", created_by=self.owner,
+        )
+        second_survey = Survey.objects.create(
+            client=second_client,
+            source_id=88005,
+            name="Fifty percent survey",
+            status=Survey.Status.LIVE,
+            remaining=9,
+            cpi=Decimal("10.00"),
+        )
+        VendorClientAllocation.objects.create(
+            vendor=self.external,
+            client=second_client,
+            quantity_limit=4,
+            cpi_cut_override_percent=Decimal("50.00"),
+            created_by=self.owner,
+        )
+        hidden_client = Client.objects.create(code="api-hidden", name="API Hidden", created_by=self.owner)
+        Survey.objects.create(
+            client=hidden_client,
+            source_id=88006,
+            name="Not allocated",
+            status=Survey.Status.LIVE,
+            remaining=5,
+            cpi=Decimal("99.00"),
+        )
+
+        owner_api = APIClient()
+        owner_api.force_authenticate(self.owner)
+        issued = owner_api.post(reverse("vendor-api-key-list"), {
+            "vendor": self.external.pk,
+            "name": "UAT integration",
+        }, format="json")
+        self.assertEqual(issued.status_code, 201)
+        raw_key = issued.data["api_key"]
+        self.assertTrue(raw_key.startswith("exh_"))
+        self.assertFalse(VendorAPIKey.objects.get(pk=issued.data["id"]).key_hash == raw_key)
+
+        vendor_api = APIClient()
+        listing = vendor_api.get(reverse("survey-list"), HTTP_X_API_KEY=raw_key)
+        self.assertEqual(listing.status_code, 200)
+        rows = {item["source_id"]: item for item in listing.data["results"]}
+        self.assertEqual(set(rows), {self.survey.source_id, second_survey.source_id})
+        self.assertEqual(Decimal(rows[self.survey.source_id]["cpi"]), Decimal("7.00"))
+        self.assertEqual(Decimal(rows[self.survey.source_id]["cpi_cut_percent"]), Decimal("30.00"))
+        self.assertEqual(Decimal(rows[second_survey.source_id]["cpi"]), Decimal("5.00"))
+        self.assertEqual(Decimal(rows[second_survey.source_id]["cpi_cut_percent"]), Decimal("50.00"))
+        self.assertEqual(rows[second_survey.source_id]["display_company_name"], second_client.name)
+
+        filtered = vendor_api.get(reverse("survey-list"), {"client_name": second_client.name}, HTTP_X_API_KEY=raw_key)
+        self.assertEqual([row["source_id"] for row in filtered.data["results"]], [second_survey.source_id])
+        key_record = VendorAPIKey.objects.get(pk=issued.data["id"])
+        self.assertIsNotNone(key_record.last_used_at)
+
+        key_list = owner_api.get(reverse("vendor-api-key-list"))
+        self.assertEqual(key_list.status_code, 200)
+        self.assertNotIn("api_key", key_list.data["results"][0])
+        self.assertEqual(
+            owner_api.delete(reverse("vendor-api-key-detail", kwargs={"pk": key_record.pk})).status_code,
+            204,
+        )
+        self.assertIn(
+            vendor_api.get(reverse("survey-list"), HTTP_X_API_KEY=raw_key).status_code,
+            {401, 403},
+        )
+
+    def test_delivery_mode_blocks_wrong_channel(self):
+        owner_api = APIClient()
+        owner_api.force_authenticate(self.owner)
+        panel_only_key = owner_api.post(reverse("vendor-api-key-list"), {
+            "vendor": self.external.pk,
+            "name": "Blocked panel-only key",
+        }, format="json")
+        self.assertEqual(panel_only_key.status_code, 400)
+
+        self.external_policy.delivery_mode = VendorCommercialProfile.DeliveryMode.API
+        self.external_policy.save(update_fields=["delivery_mode", "updated_at"])
+        self.external.set_password("password-123")
+        self.external.save(update_fields=["password"])
+        login = self.client.post(reverse("login"), {
+            "username": self.external.username,
+            "password": "password-123",
+        })
+        self.assertEqual(login.status_code, 200)
+        self.assertNotIn("_auth_user_id", self.client.session)
+        self.assertContains(login, "Username or password is incorrect")
+
+        issued = owner_api.post(reverse("vendor-api-key-list"), {
+            "vendor": self.external.pk,
+            "name": "API-only integration",
+        }, format="json")
+        self.assertEqual(issued.status_code, 201)
+        self.assertEqual(
+            APIClient().get(reverse("survey-list"), HTTP_X_API_KEY=issued.data["api_key"]).status_code,
+            200,
+        )
+
+    def test_vendor_scoped_admin_cannot_manage_owner_api_keys(self):
+        UserFunctionOverride.objects.create(
+            user=self.internal,
+            function=AccessFunction.objects.get(code="vendors.manage"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        internal_api = APIClient()
+        internal_api.force_authenticate(self.internal)
+        listing = internal_api.get(reverse("vendor-api-key-list"))
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(listing.data["count"], 0)
+        response = internal_api.post(reverse("vendor-api-key-list"), {
+            "vendor": self.external.pk,
+            "name": "Forbidden delegated key",
+        }, format="json")
+        self.assertEqual(response.status_code, 403)

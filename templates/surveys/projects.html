@@ -29,9 +29,9 @@
     </div>
   </div>
   <div class="field multi-field">
-    <label id="companyLabel">Company</label>
-    <div class="multi-select" data-multi-filter="company">
-      <button class="multi-trigger" type="button" aria-labelledby="companyLabel" aria-expanded="false"><span>All companies</span><i>⌄</i></button>
+    <label id="companyLabel">{{ company_filter_label }}</label>
+    <div class="multi-select" data-multi-filter="{{ company_filter_param }}" data-default-label="{{ company_filter_default }}">
+      <button class="multi-trigger" type="button" aria-labelledby="companyLabel" aria-expanded="false"><span>{{ company_filter_default }}</span><i>⌄</i></button>
       <div class="multi-menu" hidden>{% for company in companies %}<label><input type="checkbox" value="{{ company }}"><span>{{ company }}</span></label>{% empty %}<label><input type="checkbox" value="InnovateMR"><span>InnovateMR</span></label>{% endfor %}</div>
     </div>
   </div>

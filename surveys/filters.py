@@ -9,6 +9,7 @@ class CharInFilter(django_filters.BaseInFilter, django_filters.CharFilter):
 
 class SurveyFilter(django_filters.FilterSet):
     client = django_filters.NumberFilter(field_name="client_id", help_text="Internal client record ID")
+    client_name = CharInFilter(field_name="client__name", lookup_expr="in", help_text="Comma-separated allocated client names")
     country = CharInFilter(field_name="country_code", lookup_expr="in", help_text="Comma-separated country codes, e.g. US,IN")
     language = CharInFilter(field_name="language_code", lookup_expr="in", help_text="Comma-separated language codes, e.g. EN,HI")
     status = CharInFilter(field_name="status", lookup_expr="in", help_text="Comma-separated statuses: live,closed")
@@ -22,7 +23,7 @@ class SurveyFilter(django_filters.FilterSet):
 
     class Meta:
         model = Survey
-        fields = ["client", "country", "language", "status", "company", "created_from", "created_to", "modified_from", "modified_to", "min_cpi", "max_cpi"]
+        fields = ["client", "client_name", "country", "language", "status", "company", "created_from", "created_to", "modified_from", "modified_to", "min_cpi", "max_cpi"]
 
 
 class SurveyAttemptFilter(django_filters.FilterSet):

@@ -2,7 +2,13 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from rest_framework import serializers
 
-from .access import assignable_functions, assignable_roles, effective_permission_codes, has_function_access
+from .access import (
+    EXTERNAL_VENDOR_FORBIDDEN_CODES,
+    assignable_functions,
+    assignable_roles,
+    effective_permission_codes,
+    has_function_access,
+)
 from .models import AccessFunction, EmployeeProfile, Role, RoleFunctionPermission, UserFunctionOverride
 
 
@@ -120,14 +126,22 @@ class UserAccessSerializer(serializers.ModelSerializer):
 
     def validate(self, attrs):
         attrs = super().validate(attrs)
-        if self.instance is not None:
-            return attrs
         request = self.context.get("request")
         if not request:
             return attrs
+        requested_type = attrs.get(
+            "account_type",
+            getattr(getattr(self.instance, "employee_profile", None), "account_type", EmployeeProfile.AccountType.EMPLOYEE),
+        )
+        forbidden_allows = sorted(set(attrs.get("allow_codes", [])) & EXTERNAL_VENDOR_FORBIDDEN_CODES)
+        if requested_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR and forbidden_allows:
+            raise serializers.ValidationError({
+                "allow_codes": f"External vendors cannot receive management functions: {', '.join(forbidden_allows)}"
+            })
+        if self.instance is not None:
+            return attrs
         creator_profile = getattr(request.user, "employee_profile", None)
         creator_type = getattr(creator_profile, "account_type", EmployeeProfile.AccountType.EMPLOYEE)
-        requested_type = attrs.get("account_type", EmployeeProfile.AccountType.EMPLOYEE)
         if creator_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
             raise serializers.ValidationError("External vendors cannot create subordinate accounts.")
         if creator_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
@@ -141,6 +155,39 @@ class UserAccessSerializer(serializers.ModelSerializer):
         } and not has_function_access(request.user, "vendors.manage"):
             raise serializers.ValidationError({"account_type": "Vendor accounts require Manage vendor policies access."})
         return attrs
+
+    @staticmethod
+    def _forced_role(account_type, requested_role):
+        if account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
+            return "admin"
+        if account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+            return "external-vendor"
+        return requested_role
+
+    @staticmethod
+    def _ensure_vendor_policy(user, account_type, created_by):
+        if account_type not in {
+            EmployeeProfile.AccountType.INTERNAL_VENDOR,
+            EmployeeProfile.AccountType.EXTERNAL_VENDOR,
+        }:
+            return
+        from vendors.models import VendorCommercialProfile
+
+        commercial, _ = VendorCommercialProfile.objects.get_or_create(
+            vendor=user,
+            defaults={"created_by": created_by},
+        )
+        changed = []
+        if account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
+            if commercial.default_cpi_cut_percent:
+                commercial.default_cpi_cut_percent = 0
+                changed.append("default_cpi_cut_percent")
+            if commercial.delivery_mode != VendorCommercialProfile.DeliveryMode.PANEL:
+                commercial.delivery_mode = VendorCommercialProfile.DeliveryMode.PANEL
+                changed.append("delivery_mode")
+        if changed:
+            changed.append("updated_at")
+            commercial.save(update_fields=changed)
 
     def validate_role(self, slug):
         request = self.context.get("request")
@@ -191,6 +238,8 @@ class UserAccessSerializer(serializers.ModelSerializer):
             profile.department = department
         profile.save()
         user.employee_profile = profile
+        if profile.account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+            user.function_overrides.filter(function__code__in=EXTERNAL_VENDOR_FORBIDDEN_CODES).delete()
         if allow_codes is serializers.empty and deny_codes is serializers.empty:
             return
         allow_codes = [] if allow_codes is serializers.empty else allow_codes
@@ -204,11 +253,12 @@ class UserAccessSerializer(serializers.ModelSerializer):
 
     @transaction.atomic
     def create(self, validated_data):
-        role_slug = validated_data.pop("role", "employee")
+        requested_role = validated_data.pop("role", "employee")
         allow_codes = validated_data.pop("allow_codes", [])
         deny_codes = validated_data.pop("deny_codes", [])
         password = validated_data.pop("password", None)
         account_type = validated_data.pop("account_type", EmployeeProfile.AccountType.EMPLOYEE)
+        role_slug = self._forced_role(account_type, requested_role)
         company_name = validated_data.pop("company_name", "")
         department = validated_data.pop("department", "")
         if account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
@@ -229,11 +279,12 @@ class UserAccessSerializer(serializers.ModelSerializer):
         profile.created_by = request.user if request else None
         profile.save(update_fields=["created_by", "updated_at"])
         self._update_access(user, role_slug, allow_codes, deny_codes, account_type, company_name, department)
+        self._ensure_vendor_policy(user, account_type, request.user if request else None)
         return user
 
     @transaction.atomic
     def update(self, instance, validated_data):
-        role_slug = validated_data.pop("role", serializers.empty)
+        requested_role = validated_data.pop("role", serializers.empty)
         allow_codes = validated_data.pop("allow_codes", serializers.empty)
         deny_codes = validated_data.pop("deny_codes", serializers.empty)
         password = validated_data.pop("password", None)
@@ -245,6 +296,7 @@ class UserAccessSerializer(serializers.ModelSerializer):
             if account_type is not serializers.empty
             else instance.employee_profile.account_type
         )
+        role_slug = self._forced_role(final_account_type, requested_role)
         if final_account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
             company_name = ""
             department = ""
@@ -257,4 +309,6 @@ class UserAccessSerializer(serializers.ModelSerializer):
             instance.set_password(password)
         instance.save()
         self._update_access(instance, role_slug, allow_codes, deny_codes, account_type, company_name, department)
+        request = self.context.get("request")
+        self._ensure_vendor_policy(instance, final_account_type, request.user if request else None)
         return instance

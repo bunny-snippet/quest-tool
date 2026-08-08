@@ -10,7 +10,7 @@ from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import filters, viewsets
 
 from .access import (
-    HasFunctionPermission, any_function_permission_required, assignable_functions, assignable_roles,
+    EXTERNAL_VENDOR_FORBIDDEN_CODES, HasFunctionPermission, any_function_permission_required, assignable_functions, assignable_roles,
     can_manage_role, has_function_access, subordinate_user_ids,
 )
 from .forms import FirstAdminSetupForm, WorkspaceAuthenticationForm
@@ -68,16 +68,18 @@ def access_control_page(request):
     else:
         users = get_user_model().objects.filter(id__in=user_ids)
     users = users.select_related("employee_profile__role", "employee_profile__created_by").prefetch_related("function_overrides__function")
+    requester_type = getattr(getattr(request.user, "employee_profile", None), "account_type", "")
     return render(request, "accounts/access_control_v2.html", {
         "active_page": "access-control", "roles": roles, "functions": functions, "employees": users,
         "can_create_users": any(
             has_function_access(request.user, code) for code in ("users.create", "respondents.create")
         ),
         "can_create_vendor_accounts": has_function_access(request.user, "vendors.manage"),
+        "is_internal_vendor": requester_type == EmployeeProfile.AccountType.INTERNAL_VENDOR,
+        "external_vendor_forbidden_codes": sorted(EXTERNAL_VENDOR_FORBIDDEN_CODES),
         "create_user_label": (
             "Add respondent"
-            if getattr(getattr(request.user, "employee_profile", None), "account_type", "")
-            == EmployeeProfile.AccountType.INTERNAL_VENDOR
+            if requester_type == EmployeeProfile.AccountType.INTERNAL_VENDOR
             else "Add user"
         ),
         "can_create_roles": has_function_access(request.user, "roles.create"),

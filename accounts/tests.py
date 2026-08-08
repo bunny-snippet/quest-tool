@@ -144,10 +144,54 @@ class DelegatedVendorTests(TestCase):
     def test_external_vendor_cannot_create_subordinates_even_with_permission_override(self):
         self.vendor.employee_profile.account_type = EmployeeProfile.AccountType.EXTERNAL_VENDOR
         self.vendor.employee_profile.save(update_fields=["account_type", "updated_at"])
+        self.vendor.employee_profile.role = Role.objects.get(slug="admin")
+        self.vendor.employee_profile.save(update_fields=["role", "updated_at"])
+        self.assertFalse(has_function_access(self.vendor, "users.create"))
+        self.assertFalse(has_function_access(self.vendor, "roles.create"))
+        self.client.force_login(self.vendor)
+        self.assertIn(self.client.get(reverse("access-control")).status_code, {302, 403})
         response = self.api.post(reverse("access-user-list"), {
             "first_name": "Blocked", "last_name": "Respondent", "email": "blocked@example.test",
             "password": "password-123", "role": "employee", "account_type": "employee",
             "allow_codes": [], "deny_codes": [],
         }, format="json")
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(self.api.post(reverse("access-role-list"), {
+            "name": "Blocked role", "slug": "blocked-role", "rank": 10,
+            "permission_codes": ["projects.view"],
+        }, format="json").status_code, 403)
+
+    def test_owner_created_vendor_types_receive_forced_safe_roles_and_policy(self):
+        api = APIClient()
+        api.force_authenticate(self.owner)
+        internal_response = api.post(reverse("access-user-list"), {
+            "first_name": "Internal", "last_name": "Partner", "email": "internal@example.test",
+            "password": "password-123", "role": "employee", "account_type": "internal_vendor",
+            "allow_codes": [], "deny_codes": [],
+        }, format="json")
+        external_response = api.post(reverse("access-user-list"), {
+            "first_name": "External", "last_name": "Partner", "email": "external@example.test",
+            "password": "password-123", "role": "admin", "account_type": "external_vendor",
+            "allow_codes": [], "deny_codes": [],
+        }, format="json")
+        self.assertEqual(internal_response.status_code, 201)
+        self.assertEqual(external_response.status_code, 201)
+        internal = get_user_model().objects.get(email="internal@example.test")
+        external = get_user_model().objects.get(email="external@example.test")
+        self.assertEqual(internal.employee_profile.role.slug, "admin")
+        self.assertEqual(external.employee_profile.role.slug, "external-vendor")
+        self.assertEqual(internal.vendor_commercial_profile.delivery_mode, "panel")
+        self.assertEqual(internal.vendor_commercial_profile.default_cpi_cut_percent, 0)
+        self.assertEqual(external.vendor_commercial_profile.delivery_mode, "panel")
+        self.assertFalse(has_function_access(external, "users.create"))
+
+    def test_external_vendor_rejects_forbidden_explicit_override(self):
+        api = APIClient()
+        api.force_authenticate(self.owner)
+        response = api.post(reverse("access-user-list"), {
+            "first_name": "External", "last_name": "Blocked", "email": "external-blocked@example.test",
+            "password": "password-123", "role": "admin", "account_type": "external_vendor",
+            "allow_codes": ["users.create"], "deny_codes": [],
+        }, format="json")
         self.assertEqual(response.status_code, 400)
-        self.assertIn("cannot create subordinate", str(response.data).lower())
+        self.assertIn("external vendors cannot receive", str(response.data).lower())

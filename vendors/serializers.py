@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.utils import timezone
 from rest_framework import serializers
 
 from accounts.models import EmployeeProfile
@@ -11,6 +12,7 @@ from .models import (
     ClientIntegration,
     VendorClientAllocation,
     VendorCommercialProfile,
+    VendorAPIKey,
     VendorSurveyAllocation,
 )
 
@@ -29,13 +31,16 @@ class VendorDirectorySerializer(serializers.ModelSerializer):
         allow_null=True,
     )
     currency = serializers.CharField(source="vendor_commercial_profile.currency", read_only=True, allow_null=True)
+    delivery_mode = serializers.CharField(source="vendor_commercial_profile.delivery_mode", read_only=True, allow_null=True)
+    api_key_count = serializers.IntegerField(read_only=True)
     allocation_count = serializers.IntegerField(read_only=True)
 
     class Meta:
         model = get_user_model()
         fields = [
             "id", "username", "full_name", "email", "account_type", "role_name", "created_by",
-            "commercial_profile_id", "default_cpi_cut_percent", "currency", "allocation_count",
+            "commercial_profile_id", "default_cpi_cut_percent", "currency", "delivery_mode",
+            "allocation_count", "api_key_count",
             "is_active", "date_joined",
         ]
         read_only_fields = fields
@@ -97,7 +102,7 @@ class VendorCommercialProfileSerializer(serializers.ModelSerializer):
         model = VendorCommercialProfile
         fields = [
             "id", "vendor", "vendor_name", "account_type", "default_cpi_cut_percent", "currency",
-            "is_active", "created_by", "created_at", "updated_at",
+            "delivery_mode", "is_active", "created_by", "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
 
@@ -116,7 +121,63 @@ class VendorCommercialProfileSerializer(serializers.ModelSerializer):
             raise serializers.ValidationError({"vendor": "Select an internal or external vendor account."})
         if profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR and cut != Decimal("0.00"):
             raise serializers.ValidationError({"default_cpi_cut_percent": "Internal vendor cut must be zero."})
+        delivery_mode = attrs.get("delivery_mode", getattr(self.instance, "delivery_mode", VendorCommercialProfile.DeliveryMode.PANEL))
+        if profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR and delivery_mode != VendorCommercialProfile.DeliveryMode.PANEL:
+            raise serializers.ValidationError({"delivery_mode": "Internal vendors use panel-only delivery."})
         return attrs
+
+
+class VendorAPIKeySerializer(serializers.ModelSerializer):
+    vendor_name = serializers.SerializerMethodField()
+    account_type = serializers.CharField(source="vendor.employee_profile.account_type", read_only=True)
+    masked_key = serializers.CharField(read_only=True)
+    api_key = serializers.CharField(read_only=True, required=False)
+    created_by = serializers.CharField(source="created_by.username", read_only=True, allow_null=True)
+
+    class Meta:
+        model = VendorAPIKey
+        fields = [
+            "id", "vendor", "vendor_name", "account_type", "name", "prefix", "last_four", "masked_key",
+            "api_key", "is_active", "expires_at", "last_used_at", "revoked_at", "created_by",
+            "created_at", "updated_at",
+        ]
+        read_only_fields = [
+            "prefix", "last_four", "is_active", "last_used_at", "revoked_at", "created_at", "updated_at",
+        ]
+
+    def get_vendor_name(self, obj) -> str:
+        return obj.vendor.get_full_name() or obj.vendor.username
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        vendor = attrs.get("vendor", getattr(self.instance, "vendor", None))
+        if self.instance and "vendor" in attrs and attrs["vendor"] != self.instance.vendor:
+            raise serializers.ValidationError({"vendor": "An issued API key cannot be transferred to another vendor."})
+        profile = getattr(vendor, "employee_profile", None) if vendor else None
+        if not profile or profile.account_type != EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+            raise serializers.ValidationError({"vendor": "API keys can only be issued to external vendors."})
+        commercial = getattr(vendor, "vendor_commercial_profile", None)
+        if not commercial or not commercial.is_active or not commercial.api_access_enabled:
+            raise serializers.ValidationError({"vendor": "Enable API or Panel + API delivery before issuing a key."})
+        expires_at = attrs.get("expires_at", getattr(self.instance, "expires_at", None))
+        if expires_at and expires_at <= timezone.now():
+            raise serializers.ValidationError({"expires_at": "Expiration must be in the future."})
+        return attrs
+
+    def create(self, validated_data):
+        from .security import generate_api_key
+
+        raw_key, prefix, last_four, key_hash = generate_api_key()
+        request = self.context.get("request")
+        instance = VendorAPIKey.objects.create(
+            **validated_data,
+            prefix=prefix,
+            last_four=last_four,
+            key_hash=key_hash,
+            created_by=request.user if request else None,
+        )
+        instance.api_key = raw_key
+        return instance
 
 
 class VendorClientAllocationSerializer(serializers.ModelSerializer):

@@ -6,15 +6,16 @@ This feature is additive and isolated on the UAT branch. Vendor allocation is en
 
 - `EmployeeProfile.account_type` remains the source of truth for employee, internal-vendor and external-vendor identity.
 - Only an account with `vendors.manage` may create vendor accounts.
-- An internal vendor with `respondents.create` may create employee/respondent children only.
-- An external vendor is always terminal and cannot create children, even if a permission is accidentally allowed.
+- Every internal vendor is assigned the system `Admin` role automatically. With `respondents.create` it may create employee/respondent children only.
+- Every external vendor is assigned the safe system `External Vendor` role automatically. It can receive individual allow/deny overrides for permitted business functions.
+- An external vendor is always terminal and cannot create users or roles, even if an Admin role or management allow-override is assigned accidentally. Identity, role, client, allocation and synchronization management functions are removed at permission evaluation time as a second line of defense.
 - Branch/company and sub-branch/department apply to the internal hierarchy. External vendors store neither value and User Hits reports branch as not applicable.
 
 ## Data hierarchy
 
 1. `Client` identifies a buyer/source account.
 2. `ClientIntegration` stores non-secret upstream connection metadata. It stores the environment-variable name for a credential, never the token.
-3. `VendorCommercialProfile` stores a vendor's default CPI cut and currency.
+3. `VendorCommercialProfile` stores a vendor's default CPI cut, currency and delivery mode (`panel`, `api` or `both`). Internal vendors are always panel-only with zero cut.
 4. `VendorClientAllocation` grants client visibility and limits total quantity across that client's surveys.
 5. `VendorSurveyAllocation` is an optional survey-specific block/limit inside the parent client allocation and may override CPI cut. If it is absent, the client grant applies to every available survey for that client.
 6. `AllocationReservation` records the reserved, consumed, released or expired quantity associated with one survey attempt.
@@ -31,6 +32,26 @@ For external vendors, cut precedence is survey override, client override, then v
 - currency.
 
 Changing the live survey CPI later cannot change an existing attempt snapshot.
+
+Each new attempt resolves the current source CPI and current survey/client/vendor cut again. Consequently, a completed attempt at CPI 3 remains CPI 3 after an update, while later attempts use the newly published CPI and current configured cut.
+
+## External delivery channels
+
+An external vendor can be configured as Panel only, API only, or Panel + API. API-only vendors cannot establish or retain a browser session. Panel-only vendors cannot receive or use API keys.
+
+Owner workspace users issue revocable keys from Vendor Management. A plaintext key is displayed exactly once; the database stores only an HMAC-SHA256 digest plus a masked prefix/suffix. Send the key as either:
+
+```http
+X-API-Key: exh_...
+```
+
+or:
+
+```http
+Authorization: Api-Key exh_...
+```
+
+The key authenticates as its external vendor. It does not carry a copied client list or copied CPI: every request applies that vendor's current function permissions, active client grants, optional survey overrides, quantities and per-client CPI cut. The same external vendor can therefore receive Client ABC at 30% cut and Client BCZ at 50% cut in both panel and API responses. `/api/v1/surveys/?client_name=ABC` filters the allocated client label.
 
 ## Quantity lifecycle
 
@@ -50,6 +71,7 @@ All endpoints require function permissions and are documented in Swagger:
 - `/api/v1/vendors/clients/`
 - `/api/v1/vendors/integrations/`
 - `/api/v1/vendors/commercial-profiles/`
+- `/api/v1/vendors/api-keys/` (issue, list masked metadata, update label/expiry and revoke)
 - `/api/v1/vendors/client-allocations/`
 - `/api/v1/vendors/survey-allocations/`
 - `/api/v1/vendors/reservations/` (read-only audit)
@@ -58,6 +80,6 @@ All endpoints require function permissions and are documented in Swagger:
 
 The responsive `/vendors/` workspace uses these APIs for commercial policies, client visibility/quantity grants and optional survey overrides. User creation stays in the Access Control modal so account type, role and function-level allow/deny overrides have one source of truth.
 
-Super admins and non-vendor management accounts see the full authorized dataset. Vendor accounts and respondents below an internal vendor are restricted to that vendor's allocations. Commercial policies and quantities remain owner-controlled and read-only for vendor-scoped accounts, even if a manage permission is assigned accidentally.
+Super admins and non-vendor management accounts see the full authorized dataset. Vendor accounts and respondents below an internal vendor are restricted to that vendor's allocations. Commercial policies, quantities and API keys remain owner-controlled and read-only for vendor-scoped accounts, even if a manage permission is assigned accidentally.
 
 The first migrations map existing `company_name=InnovateMR` surveys to a seeded InnovateMR client without changing survey IDs, source CPI or respondent flow. Every later InnovateMR inventory sync applies the same client mapping, and its closed-survey pass cannot close inventory belonging to a future provider.
