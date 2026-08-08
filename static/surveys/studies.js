@@ -114,7 +114,7 @@
   function deviceBadge(attempt) {
     const label = attempt.entry_device || 'Unknown';
     const type = deviceType(label);
-    return `<span class="study-device ${type}" title="${escapeHtml(label)}"><i>${deviceIcons[type]}</i><b>${escapeHtml(label)}</b></span>`;
+    return `<span class="study-device ${type}" title="${escapeHtml(label)}"><i>${deviceIcons[type]}</i></span>`;
   }
 
   function ipPair(attempt) {
