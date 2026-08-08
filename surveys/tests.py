@@ -8,7 +8,7 @@ from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
 
-from accounts.models import AccessFunction, EmployeeProfile, UserFunctionOverride
+from accounts.models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
@@ -190,6 +190,16 @@ class SurveyAPITests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 2)
 
+    def test_cpi_range_and_sort_are_applied_server_side(self):
+        self.survey.cpi = "2.50"
+        self.survey.save(update_fields=["cpi"])
+        higher = Survey.objects.create(source_id=9878, name="Higher CPI", cpi="7.25")
+        response = self.api.get(reverse("survey-list"), {
+            "min_cpi": "3.00", "max_cpi": "8.00", "ordering": "-cpi",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item["local_id"] for item in response.data["results"]], [higher.local_id])
+
     def test_detail_actions_return_cached_data(self):
         quota = self.api.get(reverse("survey-quotas", kwargs={"local_id": self.survey.local_id}))
         targeting = self.api.get(reverse("survey-targeting", kwargs={"local_id": self.survey.local_id}))
@@ -215,8 +225,20 @@ class SurveyAPITests(TestCase):
         self.assertContains(projects, "Pre-screening questions")
         self.assertContains(projects, 'id="fromTime"')
         self.assertContains(projects, 'id="toTime"')
+        self.assertContains(projects, 'placeholder="Search country')
+        self.assertContains(projects, 'placeholder="Search client')
+        self.assertContains(projects, 'id="companyLabel">Client')
+        self.assertNotContains(projects, 'id="cpiMinRange"')
         self.assertNotContains(projects, "Quest")
         self.assertContains(self.client.get(reverse("dashboard")), "dashboard is ready")
+
+        profile = self.user.employee_profile
+        profile.role = Role.objects.get(slug="admin")
+        profile.save(update_fields=["role"])
+        admin_projects = self.client.get(reverse("projects"))
+        self.assertContains(admin_projects, 'id="cpiMinRange"')
+        self.assertContains(admin_projects, 'id="cpiMaxRange"')
+        self.assertContains(admin_projects, 'id="projectOrdering"')
 
 
 class SurveyFlowTests(TestCase):

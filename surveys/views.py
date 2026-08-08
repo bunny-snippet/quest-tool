@@ -5,6 +5,7 @@ from urllib.parse import quote
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
+from django.db.models import Max, Min
 from django.http import HttpResponseRedirect, StreamingHttpResponse
 from django.shortcuts import render
 from django.urls import reverse
@@ -67,8 +68,9 @@ def dashboard_page(request):
 
 @function_permission_required("projects.view")
 def projects_page(request):
-    countries = Survey.objects.exclude(country_code="").values_list("country_code", "country").distinct().order_by("country_code")
-    companies = Survey.objects.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
+    visible_surveys = Survey.objects.all()
+    countries = visible_surveys.exclude(country_code="").values_list("country_code", "country").distinct().order_by("country_code")
+    companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
     column_permissions = {
         "project_id": "projects.column.project_id", "survey": "projects.column.survey",
         "market": "projects.column.market", "completes": "projects.column.completes",
@@ -82,10 +84,19 @@ def projects_page(request):
         project_columns.remove("entry_link")
     if "actions" in project_columns and "survey_details.view" not in codes:
         project_columns.remove("actions")
+    profile = getattr(request.user, "employee_profile", None)
+    role_slug = profile.role.slug if profile and profile.role else ""
+    can_filter_cpi = request.user.is_superuser or role_slug in {"super-admin", "admin"}
+    cpi_bounds = visible_surveys.aggregate(minimum=Min("cpi"), maximum=Max("cpi"))
+    cpi_min = cpi_bounds["minimum"] or 0
+    cpi_max = cpi_bounds["maximum"] or 100
+    if cpi_max <= cpi_min:
+        cpi_max = cpi_min + 1
     return render(request, "surveys/projects.html", {
         "active_page": "projects", "countries": countries, "companies": companies,
         "project_columns": project_columns, "project_column_count": max(1, len(project_columns)),
         "can_sync": has_function_access(request.user, "sync.run"),
+        "can_filter_cpi": can_filter_cpi, "cpi_min_bound": cpi_min, "cpi_max_bound": cpi_max,
     })
 
 
