@@ -239,14 +239,14 @@ def reconcile_attempt_status(client: InnovateMRClient, attempt: SurveyAttempt) -
             completed_at = parse_upstream_datetime(
                 upstream.get("completeDateTime") or upstream.get("st_date_time")
             ) or checked_at
-            if completed_at < locked.initiated_at:
+            if completed_at < locked.loi_started_at:
                 completed_at = checked_at
             locked.status = terminal_status
             locked.status_source = "innovatemr_transaction"
             locked.callback_at = completed_at
             locked.last_callback_at = completed_at
             locked.callback_ip = upstream_ip
-            locked.loi_seconds = max(0, int((completed_at - locked.initiated_at).total_seconds()))
+            locked.loi_seconds = locked.calculate_loi_seconds(completed_at)
             locked.is_verified = str(upstream.get("verifyToken") or "").lower() == "valid"
             update_fields.extend([
                 "status", "status_source", "callback_at", "last_callback_at", "callback_ip", "loi_seconds",

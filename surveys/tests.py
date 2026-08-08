@@ -359,6 +359,26 @@ class SurveyFlowTests(TestCase):
         self.assertEqual(response.status_code, 404)
         self.assertContains(response, "could not be attached", status_code=404)
 
+    def test_loi_starts_at_supplier_redirect_not_prescreener_entry(self):
+        now = timezone.now()
+        attempt = SurveyAttempt.objects.create(
+            rid="Aa1Bb2Cc3D",
+            survey=self.survey,
+            platform_user=self.platform_user,
+            user_id=str(self.platform_user.pk),
+            status=SurveyAttempt.Status.REDIRECTED,
+            initiated_at=now - timedelta(minutes=65),
+            submitted_at=now - timedelta(minutes=5),
+            redirected_at=now - timedelta(minutes=5),
+        )
+
+        response = self.client.get(reverse("survey-status"), {"status": "1", "rid": attempt.rid})
+
+        self.assertEqual(response.status_code, 200)
+        attempt.refresh_from_db()
+        self.assertGreaterEqual(attempt.loi_seconds, 300)
+        self.assertLess(attempt.loi_seconds, 310)
+
     @override_settings(TRUST_X_FORWARDED_FOR=True)
     def test_trusted_proxy_records_public_entry_and_exit_ips(self):
         start = self.client.get(reverse("survey-start"), {
@@ -576,10 +596,13 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(scoped_api.get(reverse("survey-attempt-list"), {"status": "1"}).status_code, 403)
 
     def test_upstream_transaction_reconciles_legacy_redirect_status_ip_and_loi(self):
+        initiated_at = timezone.now() - timedelta(minutes=63)
+        redirected_at = timezone.now() - timedelta(minutes=3)
         attempt = SurveyAttempt.objects.create(
             rid="Mm1Nn2Oo3P", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
             status=SurveyAttempt.Status.REDIRECTED,
-            initiated_at=timezone.now() - timedelta(minutes=3),
+            initiated_at=initiated_at,
+            redirected_at=redirected_at,
             initiation_ip="127.0.0.1",
         )
         upstream_time = timezone.now()
@@ -599,6 +622,7 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(attempt.initiation_ip, "8.8.4.4")
         self.assertEqual(attempt.callback_ip, "8.8.4.4")
         self.assertGreaterEqual(attempt.loi_seconds, 179)
+        self.assertLess(attempt.loi_seconds, 190)
         self.assertTrue(attempt.is_verified)
         self.assertEqual(attempt.upstream_transaction_data["trackId"], attempt.rid)
 

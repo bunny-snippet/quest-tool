@@ -450,7 +450,7 @@ def survey_status(request):
             if attempt.callback_at is None:
                 attempt.callback_at = now
                 attempt.callback_ip = ip_address
-                attempt.loi_seconds = max(0, int((now - attempt.initiated_at).total_seconds()))
+                attempt.loi_seconds = attempt.calculate_loi_seconds(now)
                 attempt.status = status_code
                 attempt.exit_user_agent = exit_client_data.get("user_agent", "")
                 attempt.exit_browser = exit_client_data.get("browser", "")
