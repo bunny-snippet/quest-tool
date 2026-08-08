@@ -61,6 +61,8 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
             profile = profiles.get(current_id)
             if not profile:
                 break
+            if profile.account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+                return ""
             if profile.company_name.strip():
                 return profile.company_name.strip()
             current_id = profile.created_by_id
@@ -70,7 +72,7 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
     for platform_user in users:
         profile = profiles.get(platform_user.pk)
         branch = inherited_branch(platform_user.pk)
-        sub_branch = (profile.department.strip() if profile and profile.department else "") or branch
+        sub_branch = (profile.department.strip() if profile and profile.department and branch else "") or branch
         metadata[platform_user.pk] = {
             "user_id": platform_user.pk,
             "user_name": platform_user.get_full_name() or platform_user.username,
@@ -94,8 +96,8 @@ def user_hit_filter_options(user) -> dict:
     tracked.sort(key=lambda item: (item["user_name"].casefold(), item["user_id"]))
     return {
         "users": tracked,
-        "branches": sorted({item["branch"] for item in tracked}, key=str.casefold),
-        "sub_branches": sorted({item["sub_branch"] for item in tracked}, key=str.casefold),
+        "branches": sorted({item["branch"] for item in tracked if item["branch"]}, key=str.casefold),
+        "sub_branches": sorted({item["sub_branch"] for item in tracked if item["sub_branch"]}, key=str.casefold),
     }
 
 

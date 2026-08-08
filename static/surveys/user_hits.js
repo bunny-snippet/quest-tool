@@ -102,8 +102,8 @@
 
   function rowTemplate(row) {
     return `<tr>
-      <td><strong class="hit-branch">${escapeHtml(row.branch)}</strong></td>
-      <td><span class="hit-sub-branch">${escapeHtml(row.sub_branch)}</span></td>
+      <td><strong class="hit-branch">${escapeHtml(row.branch || '—')}</strong></td>
+      <td><span class="hit-sub-branch">${escapeHtml(row.sub_branch || '—')}</span></td>
       <td><div class="hit-user"><span>${escapeHtml(String(row.user_name || '?').charAt(0).toUpperCase())}</span><div><strong>${escapeHtml(row.user_name)}</strong><small>${escapeHtml(row.user_email || row.username)}</small></div></div></td>
       <td><time class="hit-date" datetime="${escapeHtml(row.date)}"><strong>${formatDate(row.date)}</strong><span>IST calendar day</span></time></td>
       <td>${deviceBreakdown(row.hits)}</td>
@@ -114,7 +114,7 @@
   function cardTemplate(row) {
     return `<article class="survey-card user-hit-card">
       <div class="user-hit-card-head"><div class="hit-user"><span>${escapeHtml(String(row.user_name || '?').charAt(0).toUpperCase())}</span><div><strong>${escapeHtml(row.user_name)}</strong><small>${escapeHtml(row.user_email || row.username)}</small></div></div><time>${formatDate(row.date)}</time></div>
-      <div class="hit-location"><span>${escapeHtml(row.branch)}</span><i>→</i><span>${escapeHtml(row.sub_branch)}</span></div>
+      ${row.branch ? `<div class="hit-location"><span>${escapeHtml(row.branch)}</span><i>→</i><span>${escapeHtml(row.sub_branch || row.branch)}</span></div>` : '<div class="hit-location"><span>External vendor · branch not applicable</span></div>'}
       <div class="hit-card-metrics"><section><label>Hits</label>${deviceBreakdown(row.hits)}</section><section><label>Completes</label>${deviceBreakdown(row.completes)}</section></div>
     </article>`;
   }

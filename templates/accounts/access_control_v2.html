@@ -9,7 +9,7 @@
   <div><p class="eyebrow">People, roles & permissions</p><h1>Access control</h1><p>Create internal or external vendors, build role defaults and add individual permission overrides without leaving this page.</p></div>
   <div class="access-actions">
     {% if can_create_roles %}<button class="secondary-action" type="button" data-open-role>Create role</button>{% endif %}
-    {% if can_create_users %}<button class="primary-button" type="button" data-open-user>Add user <span>+</span></button>{% endif %}
+    {% if can_create_users %}<button class="primary-button" type="button" data-open-user>{{ create_user_label }} <span>+</span></button>{% endif %}
   </div>
 </section>
 
@@ -34,7 +34,7 @@
 </section>
 
 <section class="access-panel employee-panel">
-  <div class="access-panel-head"><div><h2>Users & vendors</h2><p>Each account can be an employee, internal vendor or external vendor and can own a subordinate tree.</p></div>{% if can_create_users %}<button type="button" class="text-action" data-open-user>Add user</button>{% endif %}</div>
+  <div class="access-panel-head"><div><h2>Users & vendors</h2><p>Internal vendors may own respondent employees. External vendors are terminal accounts and cannot create subordinates.</p></div>{% if can_create_users %}<button type="button" class="text-action" data-open-user>{{ create_user_label }}</button>{% endif %}</div>
   <div class="employee-table-wrap"><table class="employee-table"><thead><tr><th>User</th><th>Type</th><th>Role</th><th>Overrides</th><th>Status</th><th></th></tr></thead><tbody>
     {% for employee in employees %}
     <tr>
@@ -59,7 +59,7 @@
         <label><span>Last name</span><input name="last_name" autocomplete="family-name"></label>
         <label class="wide"><span>Email / login</span><input name="email" type="email" required autocomplete="email"></label>
         <label class="wide"><span>Password</span><input name="password" type="password" minlength="8" autocomplete="new-password"><small data-password-note>Required for a new user, minimum 8 characters.</small></label>
-        <label><span>Account type</span><select name="account_type"><option value="employee">Employee</option><option value="internal_vendor">Internal vendor</option><option value="external_vendor">External vendor</option></select></label>
+        <label><span>Account type</span><select name="account_type"><option value="employee">Employee / respondent</option>{% if can_create_vendor_accounts %}<option value="internal_vendor">Internal vendor</option><option value="external_vendor">External vendor</option>{% endif %}</select></label>
         <label><span>Default role</span><select name="role" required>{% for role in roles %}<option value="{{ role.slug }}">{{ role.name }}</option>{% endfor %}</select></label>
         <label><span>Branch / company</span><input name="company_name" placeholder="e.g. Gurgaon"></label>
         <label><span>Sub-branch / department</span><input name="department" placeholder="e.g. Operations"></label>

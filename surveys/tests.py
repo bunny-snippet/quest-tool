@@ -9,6 +9,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import AccessFunction, EmployeeProfile, UserFunctionOverride
+from vendors.models import Client
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
@@ -85,6 +86,7 @@ class SurveySyncTests(TestCase):
         survey = Survey.objects.get(source_id=12632)
         self.assertEqual(summary.created, 1)
         self.assertEqual(survey.name, "Newest")
+        self.assertEqual(survey.client, Client.objects.get(code="innovatemr"))
         self.assertEqual(len(survey.local_id), 14)
         self.assertTrue(survey.local_id.isdigit())
         self.assertEqual(survey.local_id[:6], timezone.localdate().strftime("%Y%m"))
@@ -478,6 +480,7 @@ class StudiesTrackingTests(TestCase):
         self.assertIn("Entry user agent", content)
         self.assertIn("Pre-screener answers", content)
         self.assertIn("Outbound supplier URL", content)
+        self.assertIn("Payable CPI snapshot", content)
         self.assertIn("Kanik Sharma", content)
         self.assertIn(self.complete.rid, content)
         self.assertNotIn("Ee4Ff5Gg6H", content)

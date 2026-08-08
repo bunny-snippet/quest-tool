@@ -417,7 +417,7 @@ def survey_status(request):
     ),
 )
 class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Survey.objects.all().prefetch_related("quotas", "targeting_questions")
+    queryset = Survey.objects.select_related("client").all().prefetch_related("quotas", "targeting_questions")
     lookup_field = "local_id"
     filterset_class = SurveyFilter
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -553,7 +553,8 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = SurveyAttempt.objects.select_related(
-            "survey", "platform_user", "platform_user__employee_profile", "platform_user__employee_profile__role"
+            "survey", "platform_user", "platform_user__employee_profile", "platform_user__employee_profile__role",
+            "vendor", "vendor__employee_profile", "client", "client_allocation", "survey_allocation",
         ).all()
         if self.request.user.is_superuser:
             return queryset
@@ -655,8 +656,11 @@ def _csv_safe(value):
 def _attempt_csv_rows(queryset):
     headers = [
         "Respondent ID (RID)", "Status code", "Status", "Status source", "Platform user ID", "Username", "Employee name",
-        "Email", "Employee ID", "Account type", "Role", "Internal project ID", "Survey ID", "Survey name",
-        "Company", "Country", "Language", "Supplier code", "Survey CPI", "Expected LOI (minutes)",
+        "Email", "Employee ID", "Account type", "Role", "Vendor ID", "Vendor name", "Vendor account type",
+        "Client ID", "Client name", "Client allocation ID", "Survey allocation ID",
+        "Internal project ID", "Survey ID", "Survey name", "Company", "Country", "Language", "Supplier code",
+        "Current survey CPI", "Source CPI snapshot", "CPI cut snapshot (%)", "Payable CPI snapshot",
+        "CPI currency snapshot", "Expected LOI (minutes)",
         "Actual LOI (seconds)", "Entry IP", "Exit IP", "Entry browser", "Exit browser", "Entry device",
         "Exit device", "Entry OS", "Exit OS", "Entry user agent", "Exit user agent", "Entry referrer",
         "Entry accept language", "Initiated at (IST)", "Pre-screener submitted at (IST)",
@@ -671,6 +675,8 @@ def _attempt_csv_rows(queryset):
         user = attempt.platform_user
         profile = getattr(user, "employee_profile", None) if user else None
         role = getattr(profile, "role", None) if profile else None
+        vendor = attempt.vendor
+        vendor_profile = getattr(vendor, "employee_profile", None) if vendor else None
         survey = attempt.survey
         values = [
             attempt.rid, attempt.status,
@@ -679,8 +685,14 @@ def _attempt_csv_rows(queryset):
             user.username if user else "", (user.get_full_name() or user.username) if user else "Deleted user",
             user.email if user else "", getattr(profile, "employee_id", ""),
             profile.get_account_type_display() if profile else "", role.name if role else "",
+            vendor.pk if vendor else "", (vendor.get_full_name() or vendor.username) if vendor else "",
+            vendor_profile.get_account_type_display() if vendor_profile else "",
+            attempt.client_id, attempt.client.name if attempt.client else "", attempt.client_allocation_id,
+            attempt.survey_allocation_id,
             survey.local_id, survey.source_id, survey.name, survey.company_name, survey.country_code,
-            survey.language_code, attempt.supplier_code, survey.cpi, survey.loi, attempt.loi_seconds,
+            survey.language_code, attempt.supplier_code, survey.cpi, attempt.source_cpi_snapshot,
+            attempt.cpi_cut_percent_snapshot, attempt.payable_cpi_snapshot, attempt.cpi_currency_snapshot,
+            survey.loi, attempt.loi_seconds,
             attempt.initiation_ip, attempt.callback_ip, attempt.entry_browser, attempt.exit_browser,
             attempt.entry_device, attempt.exit_device, attempt.entry_os, attempt.exit_os,
             attempt.entry_user_agent, attempt.exit_user_agent, attempt.entry_referrer,

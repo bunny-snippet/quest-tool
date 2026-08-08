@@ -26,6 +26,7 @@ INSTALLED_APPS = [
     "drf_spectacular",
     "django_filters",
     "accounts.apps.AccountsConfig",
+    "vendors.apps.VendorsConfig",
     "surveys",
 ]
 
@@ -127,6 +128,7 @@ SPECTACULAR_SETTINGS = {
         {"name": "User hits", "description": "Date-wise user hits and completes aggregated by respondent device."},
         {"name": "Synchronization", "description": "Trigger and audit upstream inventory synchronization."},
         {"name": "Access control", "description": "Dynamic roles, function assignments and per-user access overrides."},
+        {"name": "Vendors & allocations", "description": "UAT client scope, vendor commercial policy and quantity allocation APIs."},
     ],
     "ENUM_NAME_OVERRIDES": {
         "SurveyStatusEnum": "surveys.models.Survey.Status",
@@ -159,6 +161,7 @@ CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", "redis://localhost:6379/1")
 CELERY_TASK_TRACK_STARTED = True
 CELERY_TASK_TIME_LIMIT = 300
+ENABLE_SCHEDULED_JOBS = env_bool("ENABLE_SCHEDULED_JOBS", True)
 INNOVATEMR_INVENTORY_SYNC_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_INVENTORY_SYNC_INTERVAL_SECONDS", "60"))
 INNOVATEMR_DETAIL_SYNC_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_DETAIL_SYNC_INTERVAL_SECONDS", "60"))
 INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS", "60"))
@@ -177,4 +180,4 @@ CELERY_BEAT_SCHEDULE = {
         "task": "surveys.reconcile_pending_attempts",
         "schedule": float(INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS),
     },
-}
+} if ENABLE_SCHEDULED_JOBS else {}

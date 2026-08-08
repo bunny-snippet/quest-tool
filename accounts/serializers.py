@@ -2,7 +2,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from rest_framework import serializers
 
-from .access import assignable_functions, assignable_roles, effective_permission_codes
+from .access import assignable_functions, assignable_roles, effective_permission_codes, has_function_access
 from .models import AccessFunction, EmployeeProfile, Role, RoleFunctionPermission, UserFunctionOverride
 
 
@@ -118,6 +118,30 @@ class UserAccessSerializer(serializers.ModelSerializer):
     def get_effective_permissions(self, obj) -> list[str]:
         return sorted(effective_permission_codes(obj))
 
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        if self.instance is not None:
+            return attrs
+        request = self.context.get("request")
+        if not request:
+            return attrs
+        creator_profile = getattr(request.user, "employee_profile", None)
+        creator_type = getattr(creator_profile, "account_type", EmployeeProfile.AccountType.EMPLOYEE)
+        requested_type = attrs.get("account_type", EmployeeProfile.AccountType.EMPLOYEE)
+        if creator_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+            raise serializers.ValidationError("External vendors cannot create subordinate accounts.")
+        if creator_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
+            if not has_function_access(request.user, "respondents.create"):
+                raise serializers.ValidationError("This internal vendor cannot create respondents.")
+            if requested_type != EmployeeProfile.AccountType.EMPLOYEE:
+                raise serializers.ValidationError({"account_type": "Internal vendors can only create respondent employees."})
+        elif requested_type in {
+            EmployeeProfile.AccountType.INTERNAL_VENDOR,
+            EmployeeProfile.AccountType.EXTERNAL_VENDOR,
+        } and not has_function_access(request.user, "vendors.manage"):
+            raise serializers.ValidationError({"account_type": "Vendor accounts require Manage vendor policies access."})
+        return attrs
+
     def validate_role(self, slug):
         request = self.context.get("request")
         queryset = assignable_roles(request.user) if request else Role.objects.filter(is_active=True)
@@ -187,6 +211,9 @@ class UserAccessSerializer(serializers.ModelSerializer):
         account_type = validated_data.pop("account_type", EmployeeProfile.AccountType.EMPLOYEE)
         company_name = validated_data.pop("company_name", "")
         department = validated_data.pop("department", "")
+        if account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+            company_name = ""
+            department = ""
         if not password:
             raise serializers.ValidationError({"password": "Password is required when creating a user."})
         if not validated_data.get("email"):
@@ -213,6 +240,14 @@ class UserAccessSerializer(serializers.ModelSerializer):
         account_type = validated_data.pop("account_type", serializers.empty)
         company_name = validated_data.pop("company_name", serializers.empty)
         department = validated_data.pop("department", serializers.empty)
+        final_account_type = (
+            account_type
+            if account_type is not serializers.empty
+            else instance.employee_profile.account_type
+        )
+        if final_account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
+            company_name = ""
+            department = ""
         previous_email = instance.email
         for field, value in validated_data.items():
             setattr(instance, field, value)

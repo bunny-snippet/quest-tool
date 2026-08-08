@@ -22,6 +22,7 @@ class TargetingQuestionSerializer(serializers.ModelSerializer):
 
 
 class SurveyListSerializer(serializers.ModelSerializer):
+    client_name = serializers.CharField(source="client.name", read_only=True, allow_null=True)
     country_label = serializers.SerializerMethodField()
     progress_percent = serializers.SerializerMethodField()
     source_created_display = serializers.SerializerMethodField()
@@ -31,7 +32,7 @@ class SurveyListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Survey
         fields = [
-            "local_id", "source_id", "company_name", "name", "status", "sample_size", "completes", "remaining",
+            "local_id", "client", "client_name", "source_id", "company_name", "name", "status", "sample_size", "completes", "remaining",
             "starts", "cpi", "loi", "incidence_rate", "country", "country_code", "country_label",
             "language", "language_code", "group_type", "device_type", "entry_link", "start_link", "has_quota",
             "source_created_at", "source_modified_at", "source_created_display", "source_modified_display",
@@ -115,8 +116,8 @@ class UserHitRowSerializer(serializers.Serializer):
     user_name = serializers.CharField()
     username = serializers.CharField()
     user_email = serializers.EmailField(allow_blank=True)
-    branch = serializers.CharField()
-    sub_branch = serializers.CharField()
+    branch = serializers.CharField(allow_blank=True)
+    sub_branch = serializers.CharField(allow_blank=True)
     date = serializers.DateField()
     hits = UserHitDeviceCountsSerializer()
     completes = UserHitDeviceCountsSerializer()
@@ -151,12 +152,16 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     status_label = serializers.SerializerMethodField()
     entry_ip = serializers.IPAddressField(source="initiation_ip", read_only=True, allow_null=True)
     exit_ip = serializers.IPAddressField(source="callback_ip", read_only=True, allow_null=True)
+    client_name = serializers.CharField(source="client.name", read_only=True, allow_null=True)
+    vendor_name = serializers.SerializerMethodField()
 
     class Meta:
         model = SurveyAttempt
         fields = [
             "rid", "survey_local_id", "survey_source_id", "survey_name", "company_name", "country_code",
-            "language_code", "platform_user", "user_id", "user_name", "username", "user_email", "supplier_code",
+            "language_code", "platform_user", "user_id", "user_name", "username", "user_email", "vendor",
+            "vendor_name", "client", "client_name", "client_allocation", "survey_allocation", "supplier_code",
+            "source_cpi_snapshot", "cpi_cut_percent_snapshot", "payable_cpi_snapshot", "cpi_currency_snapshot",
             "status_label",
             "status", "initiated_at", "submitted_at", "redirected_at", "callback_at", "last_callback_at",
             "loi_seconds", "entry_ip", "exit_ip", "initiation_ip", "callback_ip", "entry_user_agent",
@@ -170,6 +175,11 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
         if not obj.platform_user:
             return "Deleted user"
         return obj.platform_user.get_full_name() or obj.platform_user.username
+
+    def get_vendor_name(self, obj) -> str | None:
+        if not obj.vendor:
+            return None
+        return obj.vendor.get_full_name() or obj.vendor.username
 
     def get_status_label(self, obj) -> str:
         if obj.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED}:

@@ -89,9 +89,9 @@ class DelegatedVendorTests(TestCase):
         self.owner = get_user_model().objects.create_superuser(username="owner", email="owner@example.test", password="password-123")
         self.vendor = get_user_model().objects.create_user(username="vendor@example.test", email="vendor@example.test", password="password-123")
         self.vendor.employee_profile.created_by = self.owner
-        self.vendor.employee_profile.account_type = EmployeeProfile.AccountType.EXTERNAL_VENDOR
+        self.vendor.employee_profile.account_type = EmployeeProfile.AccountType.INTERNAL_VENDOR
         self.vendor.employee_profile.save()
-        for code in ["permissions.view", "roles.view", "roles.create", "roles.update", "roles.delete", "users.view", "users.create", "users.update", "users.delete"]:
+        for code in ["permissions.view", "roles.view", "roles.create", "roles.update", "roles.delete", "users.view", "respondents.create", "users.update", "users.delete"]:
             UserFunctionOverride.objects.create(
                 user=self.vendor, function=AccessFunction.objects.get(code=code), effect=UserFunctionOverride.Effect.ALLOW
             )
@@ -99,6 +99,11 @@ class DelegatedVendorTests(TestCase):
         self.api.force_authenticate(self.vendor)
 
     def test_vendor_can_create_scoped_role_and_subordinate_user(self):
+        self.client.force_login(self.vendor)
+        page = self.client.get(reverse("access-control"))
+        self.assertContains(page, "Add respondent")
+        self.assertContains(page, reverse("access-control"))
+
         role_response = self.api.post(reverse("access-role-list"), {
             "name": "Vendor operator", "slug": "vendor-operator", "rank": 12,
             "permission_codes": ["projects.view", "survey_details.view"],
@@ -108,14 +113,14 @@ class DelegatedVendorTests(TestCase):
 
         user_response = self.api.post(reverse("access-user-list"), {
             "first_name": "Nested", "last_name": "Employee", "email": "nested@example.test",
-            "password": "password-123", "role": "vendor-operator", "account_type": "internal_vendor",
-            "company_name": "Nested Vendor", "department": "Operations", "allow_codes": [], "deny_codes": [],
+            "password": "password-123", "role": "employee", "account_type": "employee",
+            "company_name": "Nested Respondent", "department": "Operations", "allow_codes": [], "deny_codes": [],
         }, format="json")
         self.assertEqual(user_response.status_code, 201)
         nested = get_user_model().objects.get(email="nested@example.test")
         self.assertEqual(nested.employee_profile.created_by, self.vendor)
-        self.assertEqual(nested.employee_profile.account_type, EmployeeProfile.AccountType.INTERNAL_VENDOR)
-        self.assertEqual(nested.employee_profile.company_name, "Nested Vendor")
+        self.assertEqual(nested.employee_profile.account_type, EmployeeProfile.AccountType.EMPLOYEE)
+        self.assertEqual(nested.employee_profile.company_name, "Nested Respondent")
         self.assertEqual(nested.employee_profile.department, "Operations")
         self.assertEqual(user_response.data["sub_branch"], "Operations")
 
@@ -135,3 +140,14 @@ class DelegatedVendorTests(TestCase):
         self.assertEqual(response.status_code, 200)
         usernames = {item["username"] for item in response.data["results"]}
         self.assertNotIn("sibling", usernames)
+
+    def test_external_vendor_cannot_create_subordinates_even_with_permission_override(self):
+        self.vendor.employee_profile.account_type = EmployeeProfile.AccountType.EXTERNAL_VENDOR
+        self.vendor.employee_profile.save(update_fields=["account_type", "updated_at"])
+        response = self.api.post(reverse("access-user-list"), {
+            "first_name": "Blocked", "last_name": "Respondent", "email": "blocked@example.test",
+            "password": "password-123", "role": "employee", "account_type": "employee",
+            "allow_codes": [], "deny_codes": [],
+        }, format="json")
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("cannot create subordinate", str(response.data).lower())

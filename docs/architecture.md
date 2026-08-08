@@ -1,5 +1,7 @@
 # Architecture
 
+The UAT vendor/client allocation extension is documented in `vendor-allocation.md`. It adds client ownership, commercial policy, two-level quantity allocation and immutable attempt CPI snapshots without replacing the existing survey synchronization or respondent tracking tables.
+
 ## Boundary and responsibilities
 
 The browser talks only to same-origin Django endpoints. Django owns the InnovateMR token, outbound calls, normalization, merge decisions, IDs, persistence, filtering, and OpenAPI schema. Celery workers reuse the same service layer as the manual management command and internal sync endpoint.

@@ -54,6 +54,13 @@ class Survey(models.Model):
         CLOSED = "closed", "Closed"
 
     local_id = models.CharField(max_length=14, unique=True, editable=False, db_index=True)
+    client = models.ForeignKey(
+        "vendors.Client",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="surveys",
+    )
     source_id = models.PositiveBigIntegerField(unique=True, db_index=True, help_text="InnovateMR surveyId")
     company_name = models.CharField(max_length=160, default="InnovateMR", db_index=True)
     name = models.CharField(max_length=500, blank=True)
@@ -174,8 +181,40 @@ class SurveyAttempt(models.Model):
     platform_user = models.ForeignKey(
         settings.AUTH_USER_MODEL, null=True, blank=True, related_name="survey_attempts", on_delete=models.SET_NULL
     )
+    vendor = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        related_name="vendor_owned_attempts",
+        on_delete=models.SET_NULL,
+    )
+    client = models.ForeignKey(
+        "vendors.Client",
+        null=True,
+        blank=True,
+        related_name="attempts",
+        on_delete=models.PROTECT,
+    )
+    client_allocation = models.ForeignKey(
+        "vendors.VendorClientAllocation",
+        null=True,
+        blank=True,
+        related_name="attempts",
+        on_delete=models.PROTECT,
+    )
+    survey_allocation = models.ForeignKey(
+        "vendors.VendorSurveyAllocation",
+        null=True,
+        blank=True,
+        related_name="attempts",
+        on_delete=models.PROTECT,
+    )
     user_id = models.CharField(max_length=160, db_index=True)
     supplier_code = models.CharField(max_length=40, blank=True)
+    source_cpi_snapshot = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    cpi_cut_percent_snapshot = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
+    payable_cpi_snapshot = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    cpi_currency_snapshot = models.CharField(max_length=3, blank=True)
     status = models.CharField(max_length=20, choices=Status.choices, default=Status.INITIATED, db_index=True)
     initiated_at = models.DateTimeField(default=timezone.now, db_index=True)
     submitted_at = models.DateTimeField(null=True, blank=True)

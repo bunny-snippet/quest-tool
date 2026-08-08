@@ -34,7 +34,7 @@
         {% if 'user_hits.view' in access_codes %}<a class="nav-item {% if active_page == 'user-hits' %}active{% endif %}" href="{% url 'user-hits' %}">
           <span class="nav-icon nav-icon-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 20V10m7 10V4m7 16v-7"/><path d="M3 20h18"/></svg></span><span>User Hits</span>
         </a>{% endif %}
-        {% if 'access.manage' in access_codes or 'users.view' in access_codes or 'users.create' in access_codes or 'roles.view' in access_codes or 'roles.create' in access_codes %}
+        {% if 'access.manage' in access_codes or 'users.view' in access_codes or 'users.create' in access_codes or 'roles.view' in access_codes or 'roles.create' in access_codes or 'respondents.create' in access_codes %}
         <a class="nav-item {% if active_page == 'access-control' %}active{% endif %}" href="{% url 'access-control' %}">
           <span class="nav-icon">âš™</span><span>Access control</span>
         </a>

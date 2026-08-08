@@ -56,7 +56,9 @@ def first_admin_setup(request):
     return render(request, "accounts/setup.html", {"form": form})
 
 
-@any_function_permission_required("access.manage", "users.view", "roles.view", "users.create", "roles.create")
+@any_function_permission_required(
+    "access.manage", "users.view", "roles.view", "users.create", "roles.create", "respondents.create"
+)
 def access_control_page(request):
     roles = assignable_roles(request.user).annotate(employee_count=Count("employees")).prefetch_related("function_assignments__function")
     functions = assignable_functions(request.user)
@@ -68,7 +70,16 @@ def access_control_page(request):
     users = users.select_related("employee_profile__role", "employee_profile__created_by").prefetch_related("function_overrides__function")
     return render(request, "accounts/access_control_v2.html", {
         "active_page": "access-control", "roles": roles, "functions": functions, "employees": users,
-        "can_create_users": has_function_access(request.user, "users.create"),
+        "can_create_users": any(
+            has_function_access(request.user, code) for code in ("users.create", "respondents.create")
+        ),
+        "can_create_vendor_accounts": has_function_access(request.user, "vendors.manage"),
+        "create_user_label": (
+            "Add respondent"
+            if getattr(getattr(request.user, "employee_profile", None), "account_type", "")
+            == EmployeeProfile.AccountType.INTERNAL_VENDOR
+            else "Add user"
+        ),
         "can_create_roles": has_function_access(request.user, "roles.create"),
     })
 
@@ -150,6 +161,13 @@ class UserAccessViewSet(viewsets.ModelViewSet):
     serializer_class = UserAccessSerializer
     permission_classes = [HasFunctionPermission]
     def get_required_function_permission(self):
+        if self.action == "create":
+            profile = getattr(self.request.user, "employee_profile", None)
+            if getattr(profile, "account_type", "") in {
+                EmployeeProfile.AccountType.INTERNAL_VENDOR,
+                EmployeeProfile.AccountType.EXTERNAL_VENDOR,
+            }:
+                return "respondents.create"
         return {
             "list": "users.view", "retrieve": "users.view", "create": "users.create",
             "update": "users.update", "partial_update": "users.update", "destroy": "users.delete",
