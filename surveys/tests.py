@@ -257,8 +257,9 @@ class SurveyAPITests(TestCase):
         projects = self.client.get(reverse("projects"))
         self.assertContains(projects, "Survey inventory")
         self.assertContains(projects, "Pre-screening questions")
-        self.assertContains(projects, 'id="fromTime"')
-        self.assertContains(projects, 'id="toTime"')
+        self.assertContains(projects, 'id="fromDateTime"')
+        self.assertContains(projects, 'id="toDateTime"')
+        self.assertNotContains(projects, 'id="fromTime"')
         self.assertContains(projects, 'id="exportProjects"')
         self.assertContains(projects, 'placeholder="Search country')
         self.assertContains(projects, 'placeholder="Search client')
@@ -509,8 +510,9 @@ class StudiesTrackingTests(TestCase):
         self.client.force_login(self.owner)
         page = self.client.get(reverse("studies"))
         self.assertContains(page, "Respondent activity")
-        self.assertContains(page, 'id="studyFromTime"')
-        self.assertContains(page, 'id="studyToTime"')
+        self.assertContains(page, 'id="studyFromDateTime"')
+        self.assertContains(page, 'id="studyToDateTime"')
+        self.assertNotContains(page, 'id="studyFromTime"')
         self.assertContains(page, "Export full CSV")
         self.assertContains(page, "Kanik Sharma")
         self.assertContains(page, "<th>Device</th>", html=True)
@@ -569,6 +571,9 @@ class StudiesTrackingTests(TestCase):
         page = self.client.get(reverse("studies"))
         self.assertEqual(page.status_code, 200)
         self.assertNotContains(page, "Export full CSV")
+        self.assertNotContains(page, 'id="studySearch"')
+        self.assertNotContains(page, "<th>Status</th>", html=True)
+        self.assertEqual(scoped_api.get(reverse("survey-attempt-list"), {"status": "1"}).status_code, 403)
 
     def test_upstream_transaction_reconciles_legacy_redirect_status_ip_and_loi(self):
         attempt = SurveyAttempt.objects.create(
@@ -663,8 +668,9 @@ class UserHitsTests(TestCase):
         self.assertContains(page, "User activity")
         self.assertContains(page, "Gurgaon")
         self.assertContains(page, "Operations")
-        self.assertContains(page, 'id="hitFromTime"')
-        self.assertContains(page, 'id="hitToTime"')
+        self.assertContains(page, 'id="hitFromDateTime"')
+        self.assertContains(page, 'id="hitToDateTime"')
+        self.assertNotContains(page, 'id="hitFromTime"')
 
         response = self.api.get(reverse("user-hits-api"), {
             "user": self.kanik.pk,
@@ -724,6 +730,11 @@ class UserHitsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["user_id"], viewer.pk)
+        self.assertEqual(scoped_api.get(reverse("user-hits-api"), {"branch": "Gurgaon"}).status_code, 403)
+        self.client.force_login(viewer)
+        viewer_page = self.client.get(reverse("user-hits"))
+        self.assertNotContains(viewer_page, 'id="hitBranchLabel"')
+        self.assertNotContains(viewer_page, "<th>Hits</th>", html=True)
 
         no_access = get_user_model().objects.create_user(username="hits-no-access")
         denied_api = APIClient()

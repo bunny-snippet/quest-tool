@@ -22,7 +22,7 @@
     rows: $('surveyRows'), cards: $('mobileCards'), summary: $('resultSummary'), pageStatus: $('pageStatus'),
     totalPages: $('totalPages'), pageInput: $('pageInput'), first: $('firstPage'), prev: $('prevPage'),
     next: $('nextPage'), last: $('lastPage'), search: $('searchInput'), dateField: $('dateField'),
-    from: $('fromDate'), fromTime: $('fromTime'), to: $('toDate'), toTime: $('toTime'),
+    from: $('fromDateTime'), to: $('toDateTime'),
     pageSize: $('pageSize'), clear: $('clearFilters'), sync: $('syncButton'), export: $('exportProjects'),
     drawer: $('detailDrawer'), backdrop: $('drawerBackdrop'), closeDrawer: $('closeDrawer'),
     drawerSurvey: $('drawerSurvey'), drawerContent: $('drawerContent'), tabs: [...document.querySelectorAll('.drawer-tab')],
@@ -199,20 +199,21 @@
       params.set('page', state.page);
       params.set('page_size', state.pageSize);
     }
-    if (els.search.value.trim()) params.set('search', els.search.value.trim());
+    if (els.search?.value.trim()) params.set('search', els.search.value.trim());
     els.multiSelects.forEach((filter) => {
       const values = selectedValues(filter);
       if (values.length) params.set(filter.dataset.multiFilter, values.join(','));
     });
-    const prefix = els.dateField.value;
-    if (els.from.value) params.set(`${prefix}_from`, dateBoundary(els.from.value, els.fromTime.value));
-    if (els.to.value) params.set(`${prefix}_to`, dateBoundary(els.to.value, els.toTime.value, true));
+    const prefix = els.dateField?.value;
+    if (prefix && els.from?.value) params.set(`${prefix}_from`, dateBoundary(els.from.value));
+    if (prefix && els.to?.value) params.set(`${prefix}_to`, dateBoundary(els.to.value, true));
     if (els.cpiMin && Number(els.cpiMin.value) > Number(els.cpiMin.min)) params.set('min_cpi', els.cpiMin.value);
     if (els.cpiMax && Number(els.cpiMax.value) < Number(els.cpiMax.max)) params.set('max_cpi', els.cpiMax.value);
     return params.toString();
   }
 
-  function dateBoundary(date, selectedTime, endOfMinute = false) {
+  function dateBoundary(dateTime, endOfMinute = false) {
+    const [date, selectedTime = '00:00'] = dateTime.split('T');
     const clock = selectedTime || (endOfMinute ? '23:59' : '00:00');
     const seconds = endOfMinute ? '59.999' : '00';
     return `${date}T${clock}:${seconds}+05:30`;
@@ -250,12 +251,11 @@
       els.rows.innerHTML = state.results.map(rowTemplate).join('');
       els.cards.innerHTML = state.results.map(cardTemplate).join('');
     }
-    els.pageInput.value = state.page;
-    els.pageInput.max = state.pages;
-    els.totalPages.textContent = `of ${state.pages.toLocaleString()}`;
+    if (els.pageInput) { els.pageInput.value = state.page; els.pageInput.max = state.pages; }
+    if (els.totalPages) els.totalPages.textContent = `of ${state.pages.toLocaleString()}`;
     els.pageStatus.textContent = `Page ${state.page.toLocaleString()} of ${state.pages.toLocaleString()}`;
-    els.first.disabled = els.prev.disabled = state.page <= 1;
-    els.next.disabled = els.last.disabled = state.page >= state.pages;
+    if (els.first && els.prev) els.first.disabled = els.prev.disabled = state.page <= 1;
+    if (els.next && els.last) els.next.disabled = els.last.disabled = state.page >= state.pages;
   }
 
   function rowTemplate(survey) {
@@ -290,12 +290,14 @@
     state.timer = setTimeout(() => { state.page = 1; loadSurveys(); }, 280);
   }
 
-  [els.search, els.from, els.fromTime, els.to, els.toTime].forEach((element) => element.addEventListener('input', scheduleLoad));
-  els.dateField.addEventListener('change', () => { state.page = 1; loadSurveys(); });
-  els.pageSize.addEventListener('change', () => { state.pageSize = Number(els.pageSize.value); state.page = 1; loadSurveys(); });
-  els.clear.addEventListener('click', () => {
-    els.search.value = ''; els.dateField.value = 'modified';
-    els.from.value = ''; els.fromTime.value = ''; els.to.value = ''; els.toTime.value = '';
+  [els.search, els.from, els.to].filter(Boolean).forEach((element) => element.addEventListener('input', scheduleLoad));
+  els.dateField?.addEventListener('change', () => { state.page = 1; loadSurveys(); });
+  els.pageSize?.addEventListener('change', () => { state.pageSize = Number(els.pageSize.value); state.page = 1; loadSurveys(); });
+  els.clear?.addEventListener('click', () => {
+    if (els.search) els.search.value = '';
+    if (els.dateField) els.dateField.value = 'modified';
+    if (els.from) els.from.value = '';
+    if (els.to) els.to.value = '';
     els.multiSelects.forEach((filter) => {
       filter.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
       const search = filter.querySelector('[data-multi-search]');
@@ -305,11 +307,11 @@
     resetCpiControl();
     closeMultiSelects(); closeCpiFilter(); state.page = 1; loadSurveys();
   });
-  els.first.addEventListener('click', () => go(1));
-  els.prev.addEventListener('click', () => go(state.page - 1));
-  els.next.addEventListener('click', () => go(state.page + 1));
-  els.last.addEventListener('click', () => go(state.pages));
-  els.pageInput.addEventListener('change', () => go(Number(els.pageInput.value)));
+  els.first?.addEventListener('click', () => go(1));
+  els.prev?.addEventListener('click', () => go(state.page - 1));
+  els.next?.addEventListener('click', () => go(state.page + 1));
+  els.last?.addEventListener('click', () => go(state.pages));
+  els.pageInput?.addEventListener('change', () => go(Number(els.pageInput.value)));
 
   function go(page) {
     state.page = Math.min(state.pages, Math.max(1, page || 1));
