@@ -1,4 +1,6 @@
+import csv
 from datetime import datetime, time, timedelta
+from io import StringIO
 from unittest.mock import Mock, patch
 from urllib.parse import parse_qs, urlsplit
 
@@ -202,6 +204,28 @@ class SurveyAPITests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual([item["local_id"] for item in response.data["results"]], [higher.local_id])
 
+    def test_project_export_uses_filters_and_column_permissions(self):
+        self.survey.cpi = "2.50"
+        self.survey.save(update_fields=["cpi"])
+        excluded = Survey.objects.create(source_id=9879, name="Excluded high CPI", cpi="8.00")
+        response = self.api.get(reverse("survey-export"), {"max_cpi": "3.00", "ordering": "-cpi"})
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("projects-", response["Content-Disposition"])
+        rows = list(csv.reader(StringIO(b"".join(response.streaming_content).decode("utf-8-sig"))))
+        self.assertIn("Project ID", rows[0])
+        self.assertIn("CPI", rows[0])
+        self.assertIn(str(self.survey.source_id), rows[1])
+        self.assertNotIn(str(excluded.source_id), str(rows))
+
+        UserFunctionOverride.objects.create(
+            user=self.user,
+            function=AccessFunction.objects.get(code="projects.column.cpi"),
+            effect=UserFunctionOverride.Effect.DENY,
+        )
+        denied_response = self.api.get(reverse("survey-export"), {"max_cpi": "3.00"})
+        denied_rows = list(csv.reader(StringIO(b"".join(denied_response.streaming_content).decode("utf-8-sig"))))
+        self.assertNotIn("CPI", denied_rows[0])
+
     def test_detail_actions_return_cached_data(self):
         quota = self.api.get(reverse("survey-quotas", kwargs={"local_id": self.survey.local_id}))
         targeting = self.api.get(reverse("survey-targeting", kwargs={"local_id": self.survey.local_id}))
@@ -227,6 +251,7 @@ class SurveyAPITests(TestCase):
         self.assertContains(projects, "Pre-screening questions")
         self.assertContains(projects, 'id="fromTime"')
         self.assertContains(projects, 'id="toTime"')
+        self.assertContains(projects, 'id="exportProjects"')
         self.assertContains(projects, 'placeholder="Search country')
         self.assertContains(projects, 'placeholder="Search client')
         self.assertContains(projects, 'id="companyLabel">Client')

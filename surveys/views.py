@@ -69,6 +69,25 @@ class UpstreamUnavailable(APIException):
     default_code = "upstream_unavailable"
 
 
+PROJECT_COLUMN_PERMISSIONS = {
+    "project_id": "projects.column.project_id", "survey": "projects.column.survey",
+    "market": "projects.column.market", "completes": "projects.column.completes",
+    "cpi": "projects.column.cpi", "loi_ir": "projects.column.loi_ir",
+    "entry_link": "projects.column.entry_link", "modified": "projects.column.modified",
+    "actions": "projects.column.actions",
+}
+
+
+def _project_columns_for_user(user):
+    codes = effective_permission_codes(user)
+    columns = [name for name, code in PROJECT_COLUMN_PERMISSIONS.items() if code in codes]
+    if "entry_link" in columns and "survey_links.copy" not in codes:
+        columns.remove("entry_link")
+    if "actions" in columns and "survey_details.view" not in codes:
+        columns.remove("actions")
+    return columns
+
+
 @function_permission_required("dashboard.view")
 def dashboard_page(request):
     return render(request, "surveys/dashboard.html", {"active_page": "dashboard"})
@@ -83,19 +102,7 @@ def projects_page(request):
         companies = visible_surveys.filter(client__isnull=False).values_list("client__name", flat=True).distinct().order_by("client__name")
     else:
         companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
-    column_permissions = {
-        "project_id": "projects.column.project_id", "survey": "projects.column.survey",
-        "market": "projects.column.market", "completes": "projects.column.completes",
-        "cpi": "projects.column.cpi", "loi_ir": "projects.column.loi_ir",
-        "entry_link": "projects.column.entry_link", "modified": "projects.column.modified",
-        "actions": "projects.column.actions",
-    }
-    codes = effective_permission_codes(request.user)
-    project_columns = [name for name, code in column_permissions.items() if code in codes]
-    if "entry_link" in project_columns and "survey_links.copy" not in codes:
-        project_columns.remove("entry_link")
-    if "actions" in project_columns and "survey_details.view" not in codes:
-        project_columns.remove("actions")
+    project_columns = _project_columns_for_user(request.user)
     profile = getattr(request.user, "employee_profile", None)
     role_slug = profile.role.slug if profile and profile.role else ""
     can_sort_cpi = request.user.is_superuser or role_slug in {"super-admin", "admin"}
@@ -482,6 +489,41 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     def get_serializer_class(self):
         return SurveyDetailSerializer if self.action == "retrieve" else SurveyListSerializer
 
+    @extend_schema(
+        tags=["Surveys"],
+        summary="Export all filtered projects",
+        description=(
+            "Downloads every survey matching the current Projects filters and ordering. Pagination is ignored, "
+            "and CSV columns follow the requesting user's project-column and link-copy permissions."
+        ),
+        parameters=[
+            OpenApiParameter("search", OpenApiTypes.STR, description="Search project ID, survey ID, name, country or category."),
+            OpenApiParameter("country", OpenApiTypes.STR, description="Comma-separated country codes."),
+            OpenApiParameter("status", OpenApiTypes.STR, description="Comma-separated survey statuses."),
+            OpenApiParameter("company", OpenApiTypes.STR, description="Comma-separated client/company names."),
+            OpenApiParameter("created_from", OpenApiTypes.DATETIME, description="Source-created timestamp lower bound."),
+            OpenApiParameter("created_to", OpenApiTypes.DATETIME, description="Source-created timestamp upper bound."),
+            OpenApiParameter("modified_from", OpenApiTypes.DATETIME, description="Source-modified timestamp lower bound."),
+            OpenApiParameter("modified_to", OpenApiTypes.DATETIME, description="Source-modified timestamp upper bound."),
+            OpenApiParameter("min_cpi", OpenApiTypes.NUMBER, description="Minimum CPI, inclusive."),
+            OpenApiParameter("max_cpi", OpenApiTypes.NUMBER, description="Maximum CPI, inclusive."),
+            OpenApiParameter("ordering", OpenApiTypes.STR, description="Current Projects ordering, including cpi or -cpi."),
+        ],
+        responses={(200, "text/csv"): OpenApiTypes.BINARY},
+    )
+    @action(detail=False, methods=["get"], url_path="export")
+    def export(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        columns = [column for column in _project_columns_for_user(request.user) if column != "actions"]
+        local_now = timezone.localtime()
+        response = StreamingHttpResponse(
+            _survey_csv_rows(queryset, request, columns),
+            content_type="text/csv; charset=utf-8",
+        )
+        response["Content-Disposition"] = f'attachment; filename="projects-{local_now:%Y%m%d-%H%M%S}-IST.csv"'
+        response["X-Content-Type-Options"] = "nosniff"
+        return response
+
     @staticmethod
     def _refresh_if_stale(survey, detail_type):
         synced_at = survey.quota_synced_at if detail_type == "quotas" else survey.targeting_synced_at
@@ -701,6 +743,44 @@ def _csv_safe(value):
     else:
         value = str(value)
     return f"'{value}" if value.startswith(("=", "+", "-", "@")) else value
+
+
+def _survey_csv_rows(queryset, request, columns):
+    headers_by_column = {
+        "project_id": ["Project ID"],
+        "survey": ["Survey ID", "Survey name", "Client"],
+        "market": ["Country code", "Country", "Language code", "Language"],
+        "completes": ["Sample size", "Completes", "Remaining", "Progress (%)"],
+        "cpi": ["CPI"],
+        "loi_ir": ["LOI (minutes)", "Incidence rate (%)"],
+        "entry_link": ["Entry link"],
+        "modified": ["Status", "Source created at", "Source modified at", "Record created at", "Record updated at"],
+    }
+    export_columns = [column for column in columns if column in headers_by_column]
+    headers = [header for column in export_columns for header in headers_by_column[column]]
+    writer = csv.writer(_CsvEcho())
+    yield "\ufeff" + writer.writerow(headers)
+    serializer_context = {"request": request}
+    for survey in queryset.iterator(chunk_size=500):
+        data = SurveyListSerializer(survey, context=serializer_context).data
+        values_by_column = {
+            "project_id": [data.get("local_id")],
+            "survey": [
+                data.get("source_id"), data.get("name"),
+                data.get("display_company_name") or data.get("client_name") or data.get("company_name"),
+            ],
+            "market": [data.get("country_code"), data.get("country"), data.get("language_code"), data.get("language")],
+            "completes": [data.get("sample_size"), data.get("completes"), data.get("remaining"), data.get("progress_percent")],
+            "cpi": [data.get("cpi")],
+            "loi_ir": [data.get("loi"), data.get("incidence_rate")],
+            "entry_link": [data.get("start_link")],
+            "modified": [
+                data.get("status"), data.get("source_created_at"), data.get("source_modified_at"),
+                data.get("created_at"), data.get("updated_at"),
+            ],
+        }
+        values = [value for column in export_columns for value in values_by_column[column]]
+        yield writer.writerow([_csv_safe(value) for value in values])
 
 
 def _attempt_csv_rows(queryset, requesting_user=None):
