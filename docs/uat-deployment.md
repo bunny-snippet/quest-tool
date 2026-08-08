@@ -10,7 +10,7 @@ UAT runs from the `codex/vendor-allocation-uat` branch and must never share its 
 - Redis broker/result databases: `4` and `5` by default
 - Supervisor socket, PID, logs and Celery beat schedule use UAT-specific names
 - Scheduled upstream jobs are disabled by default with `ENABLE_SCHEDULED_JOBS=false`
-- UAT static destination: `$HOME/htdocs/uat.api.exchange-ip.com/static`
+- UAT static destination: `$HOME/htdocs/asi.exchange-ip.com/static`
 
 ## First deployment
 

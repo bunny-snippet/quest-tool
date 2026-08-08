@@ -17,7 +17,7 @@ grep -Eq '^DB_NAME=.*uat.*$' "$ENV_FILE" || {
 
 export APP_DIR
 export SUPERVISOR_CONFIG_OVERRIDE="$APP_DIR/deploy/supervisord-uat.conf"
-export PUBLIC_STATIC_DIR="${PUBLIC_STATIC_DIR:-$HOME/htdocs/uat.api.exchange-ip.com/static}"
+export PUBLIC_STATIC_DIR="${PUBLIC_STATIC_DIR:-$HOME/htdocs/asi.exchange-ip.com/static}"
 export HEALTH_PORT=8092
 export APP_LABEL="Quest Tool UAT"
 
