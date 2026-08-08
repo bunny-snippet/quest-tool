@@ -18,7 +18,11 @@
     <label id="countryLabel">Country</label>
     <div class="multi-select" data-multi-filter="country">
       <button class="multi-trigger" type="button" aria-labelledby="countryLabel" aria-expanded="false"><span>All countries</span><i>⌄</i></button>
-      <div class="multi-menu" hidden>{% for code, name in countries %}<label><input type="checkbox" value="{{ code }}"><span>{{ code }} · {{ name }}</span></label>{% endfor %}</div>
+      <div class="multi-menu" hidden>
+        <div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search country…" aria-label="Search countries" autocomplete="off"></div>
+        <div class="multi-options">{% for code, name in countries %}<label><input type="checkbox" value="{{ code }}"><span>{{ code }} · {{ name }}</span></label>{% endfor %}</div>
+        <p class="multi-no-results" hidden>No matching country</p>
+      </div>
     </div>
   </div>
   <div class="field multi-field">
@@ -32,9 +36,27 @@
     <label id="companyLabel">{{ company_filter_label }}</label>
     <div class="multi-select" data-multi-filter="{{ company_filter_param }}" data-default-label="{{ company_filter_default }}">
       <button class="multi-trigger" type="button" aria-labelledby="companyLabel" aria-expanded="false"><span>{{ company_filter_default }}</span><i>⌄</i></button>
-      <div class="multi-menu" hidden>{% for company in companies %}<label><input type="checkbox" value="{{ company }}"><span>{{ company }}</span></label>{% empty %}<label><input type="checkbox" value="InnovateMR"><span>InnovateMR</span></label>{% endfor %}</div>
+      <div class="multi-menu" hidden>
+        <div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search client…" aria-label="Search clients" autocomplete="off"></div>
+        <div class="multi-options">{% for company in companies %}<label><input type="checkbox" value="{{ company }}"><span>{{ company }}</span></label>{% empty %}<label><input type="checkbox" value="InnovateMR"><span>InnovateMR</span></label>{% endfor %}</div>
+        <p class="multi-no-results" hidden>No matching client</p>
+      </div>
     </div>
   </div>
+  {% if can_filter_cpi %}
+  <div class="field cpi-range-field" data-cpi-min="{{ cpi_min_bound }}" data-cpi-max="{{ cpi_max_bound }}">
+    <label>CPI range <output id="cpiRangeValue"></output></label>
+    <div class="cpi-range-control">
+      <div class="cpi-range-track"><i id="cpiRangeFill"></i></div>
+      <input id="cpiMinRange" type="range" min="{{ cpi_min_bound }}" max="{{ cpi_max_bound }}" value="{{ cpi_min_bound }}" step="0.01" aria-label="Minimum CPI">
+      <input id="cpiMaxRange" type="range" min="{{ cpi_min_bound }}" max="{{ cpi_max_bound }}" value="{{ cpi_max_bound }}" step="0.01" aria-label="Maximum CPI">
+    </div>
+  </div>
+  <div class="field">
+    <label for="projectOrdering">Sort surveys</label>
+    <select id="projectOrdering"><option value="-source_modified_at">Recently updated</option><option value="-cpi">CPI: highest to lowest</option><option value="cpi">CPI: lowest to highest</option></select>
+  </div>
+  {% endif %}
   <div class="field">
     <label for="dateField">Date column</label>
     <select id="dateField"><option value="modified">Last modified</option><option value="created">Created</option></select>
@@ -105,4 +127,4 @@
   <div class="drawer-content" id="drawerContent"></div>
 </aside>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=8" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=9" defer></script>{% endblock %}
