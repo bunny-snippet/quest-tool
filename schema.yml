@@ -3307,6 +3307,26 @@ paths:
       summary: Receive a verified Research For Good result callback
       parameters:
       - in: query
+        name: liveI
+        schema:
+          type: string
+        description: RFG invalid-profile detail code
+      - in: query
+        name: liveP
+        schema:
+          type: string
+        description: RFG respondent journey bit field
+      - in: query
+        name: liveS
+        schema:
+          type: string
+        description: RFG security detail code
+      - in: query
+        name: quotaThrottle
+        schema:
+          type: string
+        description: RFG quota throttle flag
+      - in: query
         name: result
         schema:
           type: string
@@ -3318,6 +3338,16 @@ paths:
           type: string
         description: Platform respondent ID
         required: true
+      - in: query
+        name: ruledOutBy
+        schema:
+          type: string
+        description: RFG termination reason
+      - in: query
+        name: sesskey
+        schema:
+          type: string
+        description: RFG session identifier
       tags:
       - Respondent callbacks
       security:

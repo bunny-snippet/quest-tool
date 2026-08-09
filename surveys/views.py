@@ -1,7 +1,7 @@
 import csv
 import ipaddress
 import json
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
@@ -53,6 +53,7 @@ from .serializers import (
     UserHitsResponseSerializer,
 )
 from .pagination import SurveyPagination
+from .rfg_outcomes import RFG_STATUS_MAP, describe_rfg_outcome
 from .services import replace_survey_quotas, replace_survey_targeting, sync_surveys
 from .survey_flow import (
     backfill_attempt_entry_audit,
@@ -339,6 +340,43 @@ def _has_exact_query(request, expected_names):
     )
 
 
+def _rfg_result_url(rid, result):
+    return f"{reverse('rfg-result')}?{urlencode({'rid': rid, 'result': result})}"
+
+
+def _finish_local_rfg_attempt(attempt, answers, request, *, result, reason):
+    now = timezone.now()
+    with transaction.atomic():
+        locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
+        if locked.status != SurveyAttempt.Status.INITIATED:
+            return locked
+        client_data = get_request_client_data(request)
+        locked.answers = answers
+        locked.submitted_at = now
+        locked.callback_at = now
+        locked.last_callback_at = now
+        locked.callback_ip = get_request_ip(request) or locked.initiation_ip
+        locked.exit_user_agent = client_data.get("user_agent", "")
+        locked.exit_browser = client_data.get("browser", "")
+        locked.exit_device = client_data.get("device", "")
+        locked.exit_os = client_data.get("os", "")
+        locked.exit_client_data = client_data
+        locked.status = RFG_STATUS_MAP[result]
+        locked.status_source = "local_prescreener"
+        locked.loi_seconds = locked.calculate_loi_seconds(now)
+        locked.upstream_transaction_data = {
+            **(locked.upstream_transaction_data or {}),
+            "rfg_local_outcome": {"result": result, "local_reason": reason},
+        }
+        locked.save(update_fields=[
+            "answers", "submitted_at", "callback_at", "last_callback_at", "callback_ip",
+            "exit_user_agent", "exit_browser", "exit_device", "exit_os", "exit_client_data",
+            "status", "status_source", "loi_seconds", "upstream_transaction_data", "updated_at",
+        ])
+        finalize_attempt_capacity(locked)
+    return locked
+
+
 @require_http_methods(["GET", "POST"])
 def survey_start(request):
     if request.method == "GET" and not request.GET.get("rid"):
@@ -381,6 +419,10 @@ def survey_start(request):
         stale = survey.targeting_synced_at is None or (
             survey.source_modified_at and survey.targeting_synced_at < survey.source_modified_at
         )
+        if survey.integration_id and survey.integration.provider_code == "rfg":
+            stale = stale or not survey.targeting_questions.filter(
+                raw_data__adapter_version=2
+            ).exists()
         targeting_warning = ""
         if stale:
             try:
@@ -441,12 +483,26 @@ def survey_start(request):
                     from .providers import get_provider
 
                     provider = get_provider(attempt.survey.integration)
+                    eligible, reason = provider.validate_prescreener(attempt.survey, answers)
+                    if not eligible:
+                        _finish_local_rfg_attempt(
+                            attempt, answers, request, result="7", reason=reason
+                        )
+                        return HttpResponseRedirect(_rfg_result_url(attempt.rid, "7"))
                     if provider.duplicate_check(
                         attempt.survey,
                         attempt,
                         get_request_ip(request) or attempt.initiation_ip,
+                        request.POST.get("rfg_fingerprint", "0"),
                     ):
-                        errors.append("This respondent has already attempted this survey.")
+                        _finish_local_rfg_attempt(
+                            attempt,
+                            answers,
+                            request,
+                            result="8",
+                            reason="This respondent has already attempted this survey or survey group.",
+                        )
+                        return HttpResponseRedirect(_rfg_result_url(attempt.rid, "8"))
                 if not errors:
                     with transaction.atomic():
                         locked = SurveyAttempt.objects.select_for_update().select_related(
@@ -495,6 +551,10 @@ def survey_start(request):
         "questions": _prescreener_questions(attempt.survey, request.POST if request.method == "POST" else None),
         "errors": errors,
         "warning": request.session.pop(f"attempt_warning_{attempt.rid}", ""),
+        "is_rfg": bool(
+            attempt.survey.integration_id
+            and attempt.survey.integration.provider_code == "rfg"
+        ),
     })
 
 
@@ -510,22 +570,56 @@ RFG_CALLBACK_IPS = {
     "15.222.163.99", "3.97.223.177", "3.97.28.227", "3.230.105.121",
     "52.21.20.32", "52.45.41.61",
 }
-RFG_STATUS_MAP = {
-    "1": SurveyAttempt.Status.COMPLETED,
-    "2": SurveyAttempt.Status.TERMINATED,
-    "3": SurveyAttempt.Status.OVER_QUOTA,
-    "4": SurveyAttempt.Status.TERMINATED,
-    "5": SurveyAttempt.Status.TERMINATED,
-    "7": SurveyAttempt.Status.TERMINATED,
-    "8": SurveyAttempt.Status.TERMINATED,
-    "9": SurveyAttempt.Status.OVER_QUOTA,
-    "10": SurveyAttempt.Status.QUALITY_TERMINATED,
-    "11": SurveyAttempt.Status.TERMINATED,
-    "12": SurveyAttempt.Status.TERMINATED,
-    "13": SurveyAttempt.Status.TERMINATED,
-    "19": SurveyAttempt.Status.TERMINATED,
-    **{str(code): SurveyAttempt.Status.QUALITY_TERMINATED for code in (*range(30, 45), *range(50, 54))},
-}
+
+
+@require_http_methods(["GET"])
+def rfg_result(request):
+    rid = status_rid_from_request(request)
+    attempt = SurveyAttempt.objects.select_related("survey__integration").filter(
+        rid=rid,
+        survey__integration__provider_code="rfg",
+    ).first()
+    if not attempt:
+        return _invalid_survey_link(
+            request, "This RFG result link is invalid.", status_code=404
+        )
+
+    browser_parameters = dict(request.GET.items())
+    now = timezone.now()
+    client_data = get_request_client_data(request)
+    with transaction.atomic():
+        locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
+        locked.last_callback_at = now
+        locked.exit_user_agent = client_data.get("user_agent", "")
+        locked.exit_browser = client_data.get("browser", "")
+        locked.exit_device = client_data.get("device", "")
+        locked.exit_os = client_data.get("os", "")
+        locked.exit_client_data = client_data
+        locked.upstream_transaction_data = {
+            **(locked.upstream_transaction_data or {}),
+            "rfg_browser_return": browser_parameters,
+        }
+        locked.save(update_fields=[
+            "last_callback_at", "exit_user_agent", "exit_browser", "exit_device", "exit_os",
+            "exit_client_data", "upstream_transaction_data", "updated_at",
+        ])
+        attempt = locked
+
+    stored = attempt.upstream_transaction_data or {}
+    local_parameters = stored.get("rfg_local_outcome") or {}
+    callback_parameters = stored.get("rfg_callback") or {}
+    outcome_parameters = (
+        callback_parameters if attempt.is_verified else local_parameters or browser_parameters
+    )
+    outcome = describe_rfg_outcome(outcome_parameters, attempt=attempt)
+    return render(request, "surveys/rfg_result.html", {
+        "attempt": attempt,
+        "outcome": outcome,
+        "verified": bool(attempt.is_verified or attempt.status_source == "local_prescreener"),
+        "verification_pending": bool(
+            attempt.status_source != "local_prescreener" and not attempt.is_verified
+        ),
+    })
 
 
 class RFGCallbackAPIView(APIView):
@@ -544,6 +638,12 @@ class RFGCallbackAPIView(APIView):
         parameters=[
             OpenApiParameter("rid", OpenApiTypes.STR, required=True, description="Platform respondent ID"),
             OpenApiParameter("result", OpenApiTypes.STR, required=True, description="RFG result code"),
+            OpenApiParameter("ruledOutBy", OpenApiTypes.STR, required=False, description="RFG termination reason"),
+            OpenApiParameter("sesskey", OpenApiTypes.STR, required=False, description="RFG session identifier"),
+            OpenApiParameter("liveP", OpenApiTypes.STR, required=False, description="RFG respondent journey bit field"),
+            OpenApiParameter("liveS", OpenApiTypes.STR, required=False, description="RFG security detail code"),
+            OpenApiParameter("liveI", OpenApiTypes.STR, required=False, description="RFG invalid-profile detail code"),
+            OpenApiParameter("quotaThrottle", OpenApiTypes.STR, required=False, description="RFG quota throttle flag"),
         ],
         responses={200: RFGCallbackResponseSerializer},
     )
@@ -587,6 +687,7 @@ class RFGCallbackAPIView(APIView):
             locked.upstream_transaction_data = {
                 **(locked.upstream_transaction_data or {}),
                 "rfg_callback": dict(request.GET.items()),
+                "rfg_outcome": describe_rfg_outcome(dict(request.GET.items())),
             }
             locked.save(update_fields=[
                 "status", "callback_at", "last_callback_at", "callback_ip", "callback_count",

@@ -26,15 +26,23 @@ Client onboarding uses a hybrid model: owners configure non-secret metadata in *
 
 RFG inventory is never scheduled more frequently than 600 seconds. Celery Beat checks for due integrations every minute, while `last_sync_started_at` plus the configured interval controls whether a connection is actually queued. Inventory rows are keyed by `(integration, source_key)`, so equal upstream IDs belonging to separate client accounts cannot overwrite one another.
 
-Inventory sync stores normalized projects first, then runs a bounded detail refresh outside the inventory transaction. The detail adapter stores targeting, quotas, provider questions and the permanent entry link. The respondent flow collects birthday, gender and postal code plus relevant targeting answers. Immediately before redirect it calls RFG `duplicateCheck`, then appends RID and profile parameters to the provider link.
+Inventory sync stores normalized projects first, then runs a bounded detail refresh outside the inventory transaction. The detail adapter stores targeting, quotas, every displayable provider answer and the permanent entry link. The respondent flow collects birthday, gender and country-valid postal code plus relevant targeting answers. Non-matching answers end locally with a recorded reason. Immediately before an eligible redirect it obtains RFG's official browser fingerprint when available, calls `duplicateCheck` with the RID/IP/fingerprint, then appends RID and profile parameters to the provider link. If fingerprint generation is unavailable, RFG's documented `fingerprint: 0` plus mandatory RID fallback is used.
 
 Configure the RFG server callback to the production HTTPS endpoint:
 
 ```text
-https://api.exchange-ip.com/survey/rfg/callback?result={start.result}&rid={params.rid}
+https://api.exchange-ip.com/survey/rfg/callback?result={start.result}&rid={params.rid}&ruledOutBy={start.ruledOutBy}&sesskey={sesskey}
 ```
 
-Use RFG's server-to-server callback mode. `rid` is one of the tracking parameters appended to every entry link, so RFG echoes it as `{params.rid}`; `{start.result}` supplies the documented terminal result. The endpoint records exit IP/time, LOI and raw callback metadata, and finalizes allocation capacity. It rejects unknown RIDs and requests outside the documented RFG callback IP allowlist. If RFG changes its callback addresses, update `config.callback_ip_allowlist` through an audited integration update before switching traffic.
+Use RFG's server-to-server callback mode. `rid` is one of the tracking parameters appended to every entry link, so RFG echoes it as `{params.rid}`; `{start.result}` supplies the documented terminal result. The endpoint records exit IP/time, LOI, the human-readable outcome and raw callback metadata, then finalizes allocation capacity. It rejects unknown RIDs and requests outside the documented RFG callback IP allowlist. If RFG changes its callback addresses, update `config.callback_ip_allowlist` through an audited integration update before switching traffic.
+
+Configure the respondent-facing complete and non-complete page redirects to the dedicated outcome page:
+
+```text
+https://api.exchange-ip.com/survey/rfg/result?result={start.result}&rid={params.rid}&ruledOutBy={start.ruledOutBy}&sesskey={sesskey}
+```
+
+The browser outcome page explains complete, terminate, quota, duplicate, paused, profile-validation and security result codes. A browser redirect is display-only and never marks a completion verified or payable; only the trusted server callback does that. RFG may also append `liveP`, `liveS`, `liveI` and `quotaThrottle`, which are retained in the attempt audit and used to improve the displayed reason.
 
 ## Operational API
 

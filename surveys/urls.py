@@ -13,6 +13,7 @@ from .views import (
     user_hits_page,
     survey_start,
     RFGCallbackAPIView,
+    rfg_result,
     survey_status,
     workspace_home,
 )
@@ -25,6 +26,7 @@ router.register("survey-attempts", SurveyAttemptViewSet, basename="survey-attemp
 urlpatterns = [
     path("survey/start", survey_start, name="survey-start"),
     path("survey/rfg/callback", RFGCallbackAPIView.as_view(), name="rfg-callback"),
+    path("survey/rfg/result", rfg_result, name="rfg-result"),
     path("survey", survey_status, name="survey-status"),
     path("", workspace_home, name="home"),
     path("dashboard/", dashboard_page, name="dashboard"),

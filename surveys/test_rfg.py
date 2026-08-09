@@ -4,6 +4,7 @@ import json
 from datetime import datetime, timezone as dt_timezone
 from decimal import Decimal
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
@@ -12,7 +13,7 @@ from rest_framework.test import APIClient
 
 from vendors.models import Client, ClientIntegration
 
-from .models import Survey, SurveyAttempt
+from .models import Survey, SurveyAttempt, TargetingQuestion
 from .provider_services import sync_client_integration
 from .providers.base import NormalizedSurvey, ProviderConfigurationError
 from .providers.rfg import ResearchForGoodProvider
@@ -164,6 +165,199 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertNotContains(integration_page, 'id="provider" value="innovatemr"')
         self.assertNotContains(integration_page, 'placeholder="InnovateMR production"')
 
+    @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
+    def test_prescreener_validates_targeting_and_builds_required_rfg_url(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-001",
+            local_id="20260812345678",
+            country_code="US",
+            status=Survey.Status.LIVE,
+            entry_link="https://survey.saysoforgood.com/live/survey/example?init=token",
+        )
+        birthday = TargetingQuestion.objects.create(
+            survey=survey, question_id=-1, key="RFG_BIRTHDAY", question_type="date",
+            raw_data={"targeting_age_ranges": [{"min": 18, "max": 35}]},
+        )
+        gender = TargetingQuestion.objects.create(
+            survey=survey, question_id=-2, key="RFG_GENDER", question_type="single",
+            raw_data={"targeting_choices": [1]},
+        )
+        postal = TargetingQuestion.objects.create(
+            survey=survey, question_id=-3, key="RFG_POSTAL_CODE", question_type="text",
+        )
+        income = TargetingQuestion.objects.create(
+            survey=survey, question_id=-4, key="household_income", text="Household income",
+            question_type="single", options=[
+                {"OptionId": 1, "OptionText": "Under target"},
+                {"OptionId": 2, "OptionText": "Target answer"},
+            ], raw_data={"targeting_choices": [2]},
+        )
+        answers = {
+            str(birthday.pk): {"question_key": birthday.key, "upstream_values": ["2000-01-01"]},
+            str(gender.pk): {"question_key": gender.key, "upstream_values": ["M"]},
+            str(postal.pk): {"question_key": postal.key, "upstream_values": ["12 345"]},
+            str(income.pk): {"question_key": income.key, "upstream_values": ["2"]},
+        }
+        attempt = SurveyAttempt.objects.create(
+            rid="Abc123Xyz9", survey=survey, user_id="42"
+        )
+        provider = ResearchForGoodProvider(self.integration)
+        self.assertEqual(provider.validate_prescreener(survey, answers), (True, ""))
+        outbound = parse_qs(urlsplit(provider.build_outbound_url(survey, attempt, answers)).query)
+        self.assertEqual(outbound["rid"], [attempt.rid])
+        self.assertEqual(outbound["country"], ["US"])
+        self.assertEqual(outbound["postalCode"], ["12345"])
+        self.assertEqual(outbound["gender"], ["M"])
+        self.assertEqual(outbound["birthday"], ["2000-01-01"])
+        self.assertEqual(outbound["household_income"], ["2"])
+        self.assertEqual(outbound["code"], [survey.local_id])
+
+        answers[str(income.pk)]["upstream_values"] = ["1"]
+        eligible, reason = provider.validate_prescreener(survey, answers)
+        self.assertFalse(eligible)
+        self.assertIn("Household income", reason)
+        answers[str(income.pk)]["upstream_values"] = ["2"]
+        answers[str(postal.pk)]["upstream_values"] = ["invalid"]
+        self.assertFalse(provider.validate_prescreener(survey, answers)[0])
+
+    @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
+    def test_detail_refresh_keeps_all_answers_and_marks_qualifying_choices(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-002",
+            country_code="US",
+            status=Survey.Status.LIVE,
+        )
+        provider = ResearchForGoodProvider(self.integration)
+        targeting = {
+            "datapoints": [{"name": "Income", "values": [{"choice": 2}]}],
+            "quotas": [],
+        }
+        metadata = {
+            "property": "income",
+            "type": 0,
+            "question": {"en-US": "What is your income?"},
+            "answers": [None, {"en-US": "Lower"}, {"en-US": "Target"}],
+        }
+        with patch.object(provider, "targeting", return_value=targeting), patch.object(
+            provider, "datapoint", return_value=metadata
+        ), patch.object(provider, "create_link", return_value="https://survey.saysoforgood.com/live/example"):
+            provider.refresh_details(survey)
+        question = survey.targeting_questions.get(key="income")
+        self.assertEqual([item["OptionId"] for item in question.options], [1, 2])
+        self.assertEqual(question.raw_data["targeting_choices"], [2])
+        self.assertEqual(question.raw_data["adapter_version"], 2)
+
+    @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
+    def test_duplicate_check_uses_official_fingerprint_when_available(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-004",
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="Ghi789QrS4", survey=survey, user_id="42"
+        )
+        session = RecordingSession({"result": 0, "response": {"isDuplicate": False}})
+        provider = ResearchForGoodProvider(self.integration, session=session)
+        fingerprint = "c042ac342900efdfceee4a2edb549f5c"
+        self.assertFalse(provider.duplicate_check(
+            survey, attempt, "187.143.120.25", fingerprint
+        ))
+        payload = json.loads(session.request[1]["data"].decode())
+        self.assertEqual(payload["fingerprint"], fingerprint)
+        self.assertEqual(payload["rid"], attempt.rid)
+        self.assertEqual(payload["ip"], "187.143.120.25")
+
+    def test_browser_result_shows_reason_without_trusting_unverified_complete(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-003",
+            local_id="20260812345679",
+            country_code="US",
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="Def456UvW7",
+            survey=survey,
+            user_id="42",
+            status=SurveyAttempt.Status.REDIRECTED,
+        )
+        response = self.client.get("/survey/rfg/result", {
+            "rid": attempt.rid,
+            "result": "41",
+            "ruledOutBy": "Postal code failed provider validation",
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Invalid postal code")
+        self.assertContains(response, "Postal code failed provider validation")
+        self.assertContains(response, "Secure server confirmation is still pending")
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, SurveyAttempt.Status.REDIRECTED)
+        self.assertFalse(attempt.is_verified)
+        self.assertEqual(
+            attempt.upstream_transaction_data["rfg_browser_return"]["result"], "41"
+        )
+
+    @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
+    def test_non_matching_prescreener_finishes_locally_with_reason_page(self):
+        user = get_user_model().objects.create_superuser(
+            "respondent-admin", "respondent@example.com", "pass"
+        )
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-005",
+            local_id="20260812345680",
+            country_code="US",
+            status=Survey.Status.LIVE,
+            entry_link="https://survey.saysoforgood.com/live/survey/example?init=token",
+        )
+        birthday = TargetingQuestion.objects.create(
+            survey=survey, question_id=-11, key="RFG_BIRTHDAY", text="Date of birth",
+            question_type="date", raw_data={"targeting_age_ranges": [{"min": 18, "max": 35}]},
+        )
+        gender = TargetingQuestion.objects.create(
+            survey=survey, question_id=-12, key="RFG_GENDER", text="Gender",
+            question_type="single", options=[
+                {"OptionId": "M", "OptionText": "Male"},
+                {"OptionId": "F", "OptionText": "Female"},
+            ], raw_data={"targeting_choices": [1]},
+        )
+        postal = TargetingQuestion.objects.create(
+            survey=survey, question_id=-13, key="RFG_POSTAL_CODE", text="Postal code",
+            question_type="text",
+        )
+        income = TargetingQuestion.objects.create(
+            survey=survey, question_id=-14, key="income", text="Household income",
+            question_type="single", options=[
+                {"OptionId": 1, "OptionText": "Non-matching"},
+                {"OptionId": 2, "OptionText": "Matching"},
+            ], raw_data={"targeting_choices": [2]},
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="Jkl012MnO5", survey=survey, platform_user=user, user_id=str(user.pk)
+        )
+        response = self.client.post("/survey/start", {
+            "rid": attempt.rid,
+            f"question_{birthday.pk}": "2000-01-01",
+            f"question_{gender.pk}": "M",
+            f"question_{postal.pk}": "12345",
+            f"question_{income.pk}": "1",
+            "rfg_fingerprint": "0",
+        }, follow=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Early termination")
+        self.assertContains(response, "Household income")
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)
+        self.assertEqual(attempt.status_source, "local_prescreener")
+        self.assertIsNotNone(attempt.callback_at)
+        self.assertIn("rfg_local_outcome", attempt.upstream_transaction_data)
+
     def test_trusted_rfg_callback_completes_attempt(self):
         self.integration.last_test_status = "success"
         self.integration.save(update_fields=["last_test_status"])
@@ -175,9 +369,19 @@ class ResearchForGoodIntegrationTests(TestCase):
             country_code="US",
         )
         attempt = SurveyAttempt.objects.create(rid="Abc123Xyz9", survey=survey, user_id="42", status=SurveyAttempt.Status.REDIRECTED)
-        response = self.client.get("/survey/rfg/callback", {"result": "1", "rid": attempt.rid}, REMOTE_ADDR="15.222.163.99")
+        response = self.client.get("/survey/rfg/callback", {
+            "result": "1", "rid": attempt.rid, "sesskey": "rfg-session-1",
+        }, REMOTE_ADDR="15.222.163.99")
         self.assertEqual(response.status_code, 200)
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, SurveyAttempt.Status.COMPLETED)
         self.assertTrue(attempt.is_verified)
         self.assertEqual(attempt.status_source, "rfg_callback")
+        self.assertEqual(
+            attempt.upstream_transaction_data["rfg_outcome"]["title"],
+            "Survey completed",
+        )
+        result_page = self.client.get("/survey/rfg/result", {"rid": attempt.rid})
+        self.assertContains(result_page, "Survey completed")
+        self.assertContains(result_page, "Result recorded")
+        self.assertNotContains(result_page, "Secure server confirmation is still pending")

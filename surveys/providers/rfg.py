@@ -3,7 +3,7 @@ import hmac
 import json
 import re
 import time
-from datetime import datetime, timezone as dt_timezone
+from datetime import date, datetime, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -176,10 +176,27 @@ class ResearchForGoodProvider(SurveyProvider):
     def refresh_details(self, survey):
         targeting = self.targeting(survey.source_key)
         datapoints = targeting.get("datapoints") if isinstance(targeting.get("datapoints"), list) else []
+        age_ranges = []
+        gender_choices = []
+        for target in datapoints:
+            if not isinstance(target, dict):
+                continue
+            if target.get("name") == "Age":
+                age_ranges = [
+                    {"min": item.get("min"), "max": item.get("max")}
+                    for item in target.get("values", [])
+                    if isinstance(item, dict) and item.get("min") is not None and item.get("max") is not None
+                ]
+            elif target.get("name") == "Gender":
+                gender_choices = [
+                    int(item["choice"])
+                    for item in target.get("values", [])
+                    if isinstance(item, dict) and str(item.get("choice", "")).isdigit()
+                ]
         questions = [
-            TargetingQuestion(survey=survey, question_id=self._question_id("rfg-birthday"), key="RFG_BIRTHDAY", text="What is your date of birth?", question_type="date", category="Required profile", options=[], raw_data={"mandatory_link_parameter": "birthday"}),
-            TargetingQuestion(survey=survey, question_id=self._question_id("rfg-gender"), key="RFG_GENDER", text="What is your gender?", question_type="single", category="Required profile", options=[{"OptionId": "M", "OptionText": "Male"}, {"OptionId": "F", "OptionText": "Female"}], raw_data={"mandatory_link_parameter": "gender"}),
-            TargetingQuestion(survey=survey, question_id=self._question_id("rfg-postal"), key="RFG_POSTAL_CODE", text="What is your postal code?", question_type="text", category="Required profile", options=[], raw_data={"mandatory_link_parameter": "postalCode"}),
+            TargetingQuestion(survey=survey, question_id=self._question_id("rfg-birthday"), key="RFG_BIRTHDAY", text="What is your date of birth?", question_type="date", category="Required profile", options=[], raw_data={"adapter_version": 2, "mandatory_link_parameter": "birthday", "targeting_age_ranges": age_ranges}),
+            TargetingQuestion(survey=survey, question_id=self._question_id("rfg-gender"), key="RFG_GENDER", text="What is your gender?", question_type="single", category="Required profile", options=[{"OptionId": "M", "OptionText": "Male"}, {"OptionId": "F", "OptionText": "Female"}], raw_data={"adapter_version": 2, "mandatory_link_parameter": "gender", "targeting_choices": gender_choices}),
+            TargetingQuestion(survey=survey, question_id=self._question_id("rfg-postal"), key="RFG_POSTAL_CODE", text="What is your postal code?", question_type="text", category="Required profile", options=[], raw_data={"adapter_version": 2, "mandatory_link_parameter": "postalCode", "country": survey.country_code}),
         ]
         for target in datapoints:
             if not isinstance(target, dict) or not target.get("name") or target.get("name") in {"Age", "Gender"}:
@@ -194,9 +211,9 @@ class ResearchForGoodProvider(SurveyProvider):
             allowed = {int(item["choice"]) for item in target.get("values", []) if isinstance(item, dict) and str(item.get("choice", "")).isdigit()}
             options = []
             for index, answer in enumerate(answers):
-                if index == 0 or not isinstance(answer, dict) or (allowed and index not in allowed):
+                if index == 0 or not isinstance(answer, dict) or int(answer.get("disposition") or 0) == 3:
                     continue
-                options.append({"OptionId": index, "OptionText": answer.get(locale) or answer.get("en-US") or f"Choice {index}"})
+                options.append({"OptionId": index, "OptionText": answer.get(locale) or answer.get("en-US") or f"Choice {index}", "Disposition": int(answer.get("disposition") or 0)})
             questions.append(TargetingQuestion(
                 survey=survey,
                 question_id=self._question_id(metadata.get("property") or target["name"]),
@@ -205,7 +222,7 @@ class ResearchForGoodProvider(SurveyProvider):
                 question_type="multi" if question_type == 1 else "single",
                 category="RFG targeting",
                 options=options,
-                raw_data={"targeting": target, "datapoint": metadata},
+                raw_data={"adapter_version": 2, "targeting": target, "datapoint": metadata, "targeting_choices": sorted(allowed)},
             ))
         quotas = targeting.get("quotas") if isinstance(targeting.get("quotas"), list) else []
         quota_rows = []
@@ -238,8 +255,11 @@ class ResearchForGoodProvider(SurveyProvider):
             survey.detail_synced_at = now
             survey.save(update_fields=["entry_link", "has_quota", "targeting_synced_at", "quota_synced_at", "detail_synced_at", "updated_at"])
 
-    def duplicate_check(self, survey, attempt, ip_address):
-        response = self._command({"command": "livealert/duplicateCheck/1", "rfg_id": survey.source_key, "fingerprint": 0, "rid": attempt.rid, "ip": ip_address or ""})
+    def duplicate_check(self, survey, attempt, ip_address, fingerprint="0"):
+        fingerprint = str(fingerprint or "0").strip()
+        if fingerprint != "0" and not re.fullmatch(r"[0-9a-fA-F]{32,128}", fingerprint):
+            fingerprint = "0"
+        response = self._command({"command": "livealert/duplicateCheck/1", "rfg_id": survey.source_key, "fingerprint": 0 if fingerprint == "0" else fingerprint, "rid": attempt.rid, "ip": ip_address or ""})
         return bool(response.get("isDuplicate"))
 
     @staticmethod
@@ -250,7 +270,9 @@ class ResearchForGoodProvider(SurveyProvider):
         values = self._answer_map(answers)
         birthday = (values.get("RFG_BIRTHDAY") or [""])[0]
         gender = (values.get("RFG_GENDER") or [""])[0]
-        postal = (values.get("RFG_POSTAL_CODE") or [""])[0]
+        postal = re.sub(
+            r"[\s-]", "", str((values.get("RFG_POSTAL_CODE") or [""])[0]).upper()
+        )
         try:
             datetime.strptime(str(birthday), "%Y-%m-%d")
         except ValueError as exc:
@@ -263,7 +285,7 @@ class ResearchForGoodProvider(SurveyProvider):
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
         query.update({
             "rid": attempt.rid,
-            "country": survey.country_code,
+            "country": str(survey.country_code or "").upper(),
             "postalCode": postal,
             "gender": str(gender).upper(),
             "birthday": birthday,
@@ -275,3 +297,64 @@ class ResearchForGoodProvider(SurveyProvider):
                 continue
             query[key] = ",".join(str(value) for value in selected)
         return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
+
+    @staticmethod
+    def _age_on(birthday, today=None):
+        born = datetime.strptime(str(birthday), "%Y-%m-%d").date()
+        today = today or date.today()
+        return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+
+    @staticmethod
+    def _postal_is_valid(country, postal):
+        compact = re.sub(r"[\s-]", "", str(postal or "").upper())
+        patterns = {
+            "AU": r"\d{4}", "ZA": r"\d{4}",
+            "US": r"\d{5}", "EG": r"\d{5}", "FR": r"\d{5}", "DE": r"\d{5}",
+            "ID": r"\d{5}", "IT": r"\d{5}", "MY": r"\d{5}", "MX": r"\d{5}",
+            "SA": r"\d{5}", "ES": r"\d{5}", "TH": r"\d{5}", "TR": r"\d{5}",
+            "CN": r"\d{6}", "KR": r"\d{6}", "RU": r"\d{6}", "SG": r"\d{6}", "VN": r"\d{6}",
+            "BR": r"\d{8}", "CA": r"[A-Z]\d[A-Z]\d[A-Z]\d", "AR": r"[A-Z]\d{4}[A-Z]{3}",
+            "GB": r"(?:[A-Z]{2}\d[A-Z]\d[A-Z]{2}|[A-Z]\d[A-Z]\d[A-Z]{2}|[A-Z]\d{2}[A-Z]{2}|[A-Z]\d{3}[A-Z]{2}|[A-Z]{2}\d{2}[A-Z]{2}|[A-Z]{2}\d{3}[A-Z])",
+        }
+        pattern = patterns.get(str(country or "").upper())
+        return bool(compact and (pattern is None or re.fullmatch(pattern, compact)))
+
+    def validate_prescreener(self, survey, answers):
+        values = self._answer_map(answers)
+        birthday = (values.get("RFG_BIRTHDAY") or [""])[0]
+        gender = str((values.get("RFG_GENDER") or [""])[0]).upper()
+        postal = re.sub(r"[\s-]", "", str((values.get("RFG_POSTAL_CODE") or [""])[0]).upper())
+        try:
+            age = self._age_on(birthday)
+        except (TypeError, ValueError):
+            return False, "Please enter a valid date of birth."
+        if gender not in {"M", "F", "1", "2"}:
+            return False, "Please select a valid gender."
+        if not self._postal_is_valid(survey.country_code, postal):
+            return False, f"The postal code is not valid for {survey.country_code or 'this market'}."
+
+        for question in survey.targeting_questions.all():
+            raw = question.raw_data or {}
+            selected = {str(value) for value in values.get(question.key, [])}
+            if question.key == "RFG_BIRTHDAY":
+                ranges = raw.get("targeting_age_ranges") or []
+                if ranges and not any(int(item["min"]) <= age <= int(item["max"]) for item in ranges):
+                    return False, "The respondent's age does not match this survey's targeting requirements."
+            elif question.key == "RFG_GENDER":
+                allowed = {str(value) for value in raw.get("targeting_choices") or []}
+                gender_choice = "1" if gender in {"M", "1"} else "2"
+                if allowed and gender_choice not in allowed:
+                    return False, "The respondent's gender does not match this survey's targeting requirements."
+            elif question.key.startswith("RFG_"):
+                continue
+            else:
+                allowed = {str(value) for value in raw.get("targeting_choices") or []}
+                if allowed and not selected.intersection(allowed):
+                    return False, f"The answer to '{question.text or question.key}' does not match this survey's requirements."
+                exclusive = {
+                    str(option.get("OptionId")) for option in question.options
+                    if int(option.get("Disposition") or 0) in {4, 5}
+                }
+                if len(selected) > 1 and selected.intersection(exclusive):
+                    return False, f"Select the exclusive answer by itself for '{question.text or question.key}'."
+        return True, ""

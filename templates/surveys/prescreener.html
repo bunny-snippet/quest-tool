@@ -21,6 +21,7 @@
   <form method="post" class="prescreener-form" novalidate>
     {% csrf_token %}
     <input type="hidden" name="rid" value="{{ attempt.rid }}">
+    {% if is_rfg %}<input type="hidden" id="rfgFingerprint" name="rfg_fingerprint" value="0">{% endif %}
     {% for question in questions %}
       <fieldset class="screen-question">
         <legend><span class="question-number">{{ forloop.counter|stringformat:"02d" }}</span><span><small>{{ question.model.category|default:"Profile" }} · {{ question.model.question_type|default:"Question" }}</small><strong>{{ question.model.text|default:question.model.key }}</strong></span></legend>
@@ -53,4 +54,23 @@
     <div class="form-actions"><p>By continuing, your survey attempt and duration will be recorded against this RID.</p><button type="submit">Continue to survey <span>→</span></button></div>
   </form>
 </main>
+{% endblock %}
+{% block scripts %}
+{% if is_rfg %}
+<script src="https://hosting.researchforgood.com/js/df-fp.js"></script>
+<script>
+(() => {
+  const field = document.getElementById('rfgFingerprint');
+  if (!field || typeof window.getDataForceFingerprint !== 'function') return;
+  try {
+    window.getDataForceFingerprint((fingerprint) => {
+      const value = String(fingerprint || '').trim();
+      if (/^[0-9a-f]{32,128}$/i.test(value)) field.value = value;
+    });
+  } catch (error) {
+    field.value = '0';
+  }
+})();
+</script>
+{% endif %}
 {% endblock %}
