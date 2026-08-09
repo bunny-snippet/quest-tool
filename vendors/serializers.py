@@ -98,6 +98,10 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
         fields = [
             "id", "client", "client_name", "name", "provider_code", "base_url", "credential_env_key",
             "api_token", "has_credential", "masked_credential", "supplier_code", "scheduled_sync_enabled",
+            "inventory_endpoint", "paged_inventory_endpoint", "quota_endpoint_template",
+            "targeting_endpoint_template", "transaction_endpoint_template", "auth_header_name",
+            "auth_header_prefix", "inventory_result_key", "quota_result_key", "targeting_result_key",
+            "transaction_result_key", "field_mapping",
             "sync_interval_seconds", "detail_refresh_batch", "is_active", "survey_count",
             "last_tested_at", "last_test_status", "last_test_error", "last_sync_started_at",
             "last_sync_finished_at", "last_sync_status", "last_sync_error", "last_sync_summary",
@@ -108,6 +112,39 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
             "last_sync_started_at", "last_sync_finished_at", "last_sync_status", "last_sync_error",
             "last_sync_summary", "created_at", "updated_at",
         ]
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        provider = str(attrs.get("provider_code", getattr(self.instance, "provider_code", ""))).lower()
+        provider_key = provider.replace("-", "").replace("_", "")
+        base_url = str(attrs.get("base_url", getattr(self.instance, "base_url", ""))).rstrip("/")
+
+        def set_default(field, value):
+            if field not in attrs and not getattr(self.instance, field, ""):
+                attrs[field] = value
+
+        if provider_key in {"biobrain", "voqall"} or "voqall.com" in base_url.lower():
+            api_root = base_url[:-8] if base_url.lower().endswith("/surveys") else base_url
+            current_inventory = attrs.get(
+                "inventory_endpoint", getattr(self.instance, "inventory_endpoint", "")
+            )
+            if not base_url.lower().endswith("/surveys") and not current_inventory:
+                attrs["inventory_endpoint"] = "/surveys"
+            set_default("auth_header_name", "EQ-PARTNER-ACCESS-KEY")
+            set_default("inventory_result_key", "Surveys")
+            set_default("quota_endpoint_template", f"{api_root}/survey-quotas/{{survey_id}}")
+            set_default("targeting_endpoint_template", f"{api_root}/survey-qualifications/{{survey_id}}")
+            set_default("quota_result_key", "Quotas")
+            set_default("targeting_result_key", "Qualifications")
+        elif provider_key == "innovatemr":
+            set_default("inventory_endpoint", "/supply/getAllocatedSurveys")
+            set_default("paged_inventory_endpoint", "/supply/getAllocatedSurveysPaged")
+            set_default("quota_endpoint_template", "/supply/getQuotaForSurvey/{survey_id}")
+            set_default("targeting_endpoint_template", "/supply/getSurveyTargeting/{survey_id}")
+            set_default("transaction_endpoint_template", "/supply/getSurveyTransactionsByCond/{survey_id}/{pid}")
+            set_default("auth_header_name", "x-access-token")
+            set_default("inventory_result_key", "result")
+        return attrs
 
     def get_has_credential(self, obj):
         return bool(obj.encrypted_api_token or obj.credential_env_key)

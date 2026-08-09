@@ -56,6 +56,18 @@ class ClientIntegration(models.Model):
     credential_last_four = models.CharField(max_length=4, blank=True, editable=False)
     credential_changed_at = models.DateTimeField(null=True, blank=True, editable=False)
     supplier_code = models.CharField(max_length=40, default="1000")
+    inventory_endpoint = models.CharField(max_length=500, blank=True, help_text="Relative or absolute inventory endpoint. Blank calls Base URL exactly.")
+    paged_inventory_endpoint = models.CharField(max_length=500, blank=True)
+    quota_endpoint_template = models.CharField(max_length=500, blank=True, help_text="Optional endpoint containing {survey_id}.")
+    targeting_endpoint_template = models.CharField(max_length=500, blank=True, help_text="Optional endpoint containing {survey_id}.")
+    transaction_endpoint_template = models.CharField(max_length=500, blank=True, help_text="Optional endpoint containing {survey_id} and {pid}.")
+    auth_header_name = models.CharField(max_length=120, default="x-access-token")
+    auth_header_prefix = models.CharField(max_length=40, blank=True, help_text="For example: Bearer")
+    inventory_result_key = models.CharField(max_length=120, default="result")
+    quota_result_key = models.CharField(max_length=120, default="result")
+    targeting_result_key = models.CharField(max_length=120, default="result")
+    transaction_result_key = models.CharField(max_length=120, default="result")
+    field_mapping = models.JSONField(default=dict, blank=True, help_text="Optional canonical-field to upstream-field mapping for custom providers.")
     scheduled_sync_enabled = models.BooleanField(default=False)
     sync_interval_seconds = models.PositiveIntegerField(
         default=60,

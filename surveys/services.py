@@ -88,7 +88,7 @@ def merge_inventory(*inventories: list[dict[str, Any]]) -> dict[int, dict[str, A
 
 def _survey_values(payload: dict[str, Any], seen_at: datetime) -> dict[str, Any]:
     return {
-        "company_name": "InnovateMR",
+        "company_name": str(payload.get("_provider_name") or "InnovateMR"),
         "name": str(payload.get("surveyName") or ""),
         "status": Survey.Status.LIVE,
         "sample_size": max(0, _integer(payload.get("N"))),
