@@ -121,6 +121,29 @@ class ResearchForGoodIntegrationTests(TestCase):
         response = api.get("/api/v1/vendors/integrations/providers/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()[0]["code"], "rfg")
+        self.assertEqual(
+            {provider["code"] for provider in response.json()},
+            {"rfg", "innovatemr", "biobrain", "custom"},
+        )
+        response = api.post("/api/v1/vendors/integrations/", {
+            "client": self.client_record.pk,
+            "name": "RFG UI connection",
+            "provider_code": "rfg",
+            "base_url": "https://api.researchforgood.com/API/",
+            "credential_env_keys": {"apid": "RFG_APID", "secret": "RFG_SECRET"},
+            "config": {
+                "country": "US",
+                "category": "B2C",
+                "allow_recontacts": False,
+                "callback_security_mode": "ip",
+            },
+            "supplier_code": "1000",
+            "sync_interval_seconds": 600,
+            "detail_refresh_batch": 3,
+            "scheduled_sync_enabled": False,
+            "is_active": True,
+        }, format="json")
+        self.assertEqual(response.status_code, 201, response.json())
         response = api.get(f"/api/v1/vendors/integrations/{self.integration.pk}/")
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -131,6 +154,14 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertContains(page, "Secure upstream connection")
         self.assertContains(page, "Test connection")
+
+        integration_page = self.client.get("/client-integrations/")
+        self.assertEqual(integration_page.status_code, 200)
+        self.assertContains(integration_page, "RFG credential references")
+        self.assertContains(integration_page, "No provider is assumed automatically")
+        self.assertContains(integration_page, "Custom REST API")
+        self.assertNotContains(integration_page, 'id="provider" value="innovatemr"')
+        self.assertNotContains(integration_page, 'placeholder="InnovateMR production"')
 
     def test_trusted_rfg_callback_completes_attempt(self):
         self.integration.last_test_status = "success"

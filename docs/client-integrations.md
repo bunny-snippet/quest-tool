@@ -1,13 +1,26 @@
 # Client integrations
 
-Client onboarding uses a hybrid model: owners configure non-secret metadata in **Organization → Client catalog**, while credential values stay in the server `.env` file. `ClientIntegration.credential_env_keys` contains names such as `RFG_APID`; it never contains the APID or secret itself.
+Client onboarding uses a hybrid model: owners configure non-secret metadata in **Client controls → Client API integrations**, while credential values stay in the server `.env` file. `ClientIntegration.credential_env_keys` contains names such as `RFG_APID`; it never contains the APID or secret itself.
 
 ## Research For Good
 
 1. Add the production values to the VPS `.env` as `RFG_APID` and `RFG_SECRET`.
 2. Restart Gunicorn and Celery so every process receives the new environment.
-3. In Client catalog, create or open the RFG client and choose **Add integration**.
-4. Keep the default API URL `https://api.researchforgood.com/API/`, enter the environment-variable names, and save.
+3. Open **Client API integrations**, choose **Add integration**, select the RFG client and choose **Research For Good** as the provider.
+4. Complete the provider-aware form:
+
+   | Field | Value |
+   |---|---|
+   | Integration name | A descriptive name such as `RFG Production` |
+   | Base URL | `https://api.researchforgood.com/API/` |
+   | APID environment variable | `RFG_APID` |
+   | Secret environment variable | `RFG_SECRET` |
+   | Country | Optional two-letter ISO code, for example `US` |
+   | Category | Optional `B2C` or `B2B` |
+   | Public supplier code | `1000` |
+   | Sync interval | `600` seconds or longer |
+
+   Generic REST endpoint, API-header, token and Advanced fields are intentionally hidden for RFG because the backend adapter owns its signed-command contract.
 5. Run **Test connection**. Only a verified connection can enable scheduled sync.
 6. Use **Preview inventory** for a read-only check, then **Sync now**. Enable scheduled sync after validation.
 

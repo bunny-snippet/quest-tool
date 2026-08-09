@@ -249,7 +249,7 @@ class ProviderCredentialFieldSerializer(serializers.Serializer):
 class ProviderCatalogSerializer(serializers.Serializer):
     code = serializers.CharField()
     label = serializers.CharField()
-    default_base_url = serializers.URLField()
+    default_base_url = serializers.URLField(allow_blank=True)
     minimum_sync_interval_seconds = serializers.IntegerField(min_value=60)
     credential_fields = ProviderCredentialFieldSerializer(many=True)
 
