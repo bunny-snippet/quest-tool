@@ -24,7 +24,7 @@
     {% if is_rfg %}<input type="hidden" id="rfgFingerprint" name="rfg_fingerprint" value="0">{% endif %}
     {% for question in questions %}
       <fieldset class="screen-question">
-        <legend><span class="question-number">{{ forloop.counter|stringformat:"02d" }}</span><span><small>{{ question.model.category|default:"Profile" }} · {{ question.model.question_type|default:"Question" }}</small><strong>{{ question.model.text|default:question.model.key }}</strong></span></legend>
+        <legend><span class="question-number">{{ forloop.counter|stringformat:"02d" }}</span><span><small>{{ question.model.category|default:"Profile" }} · {{ question.model.question_type|default:"Question" }}</small><strong>{{ question.display_text }}</strong></span></legend>
 
         {% if question.input_kind == "radio" %}
           <div class="choice-grid">

@@ -1,4 +1,5 @@
 from .models import SurveyAttempt
+from .rfg_text import clean_rfg_display_text
 
 
 RFG_RESULT_DETAILS = {
@@ -77,6 +78,7 @@ def describe_rfg_outcome(parameters, attempt=None):
     reason = local_reason or reason or live_invalid or live_security or message
     if str(parameters.get("quotaThrottle") or "") == "1":
         reason = "The matching quota is temporarily throttled. It may reopen after approximately 10 minutes."
+    reason = clean_rfg_display_text(reason)
     return {
         "code": code,
         "status": status,

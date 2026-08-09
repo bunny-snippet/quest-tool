@@ -752,7 +752,7 @@ paths:
     get:
       operationId: api_v1_surveys_list
       description: Returns locally stored surveys using page-number pagination. Search
-        matches project ID, InnovateMR survey ID, survey name, country and category.
+        matches project ID, upstream survey ID, survey name, country and category.
         Date filters accept ISO-8601 timestamps.
       summary: List synchronized surveys
       parameters:
@@ -894,8 +894,8 @@ paths:
   /api/v1/surveys/{local_id}/quotas/:
     get:
       operationId: api_v1_surveys_quotas_list
-      description: Returns the most recently synchronized getQuotaForSurvey result
-        for this survey.
+      description: Returns the most recently synchronized, provider-normalized quota
+        data for this survey.
       summary: List a survey's quotas
       parameters:
       - in: query
@@ -1020,8 +1020,8 @@ paths:
   /api/v1/surveys/{local_id}/targeting/:
     get:
       operationId: api_v1_surveys_targeting_list
-      description: Returns the most recently synchronized getSurveyTargeting result.
-        Options preserve InnovateMR's source structure.
+      description: Returns provider-normalized pre-screening questions. Answer codes
+        preserve the upstream provider mapping.
       summary: List pre-screening questions and accepted answers
       parameters:
       - in: query
@@ -5815,20 +5815,26 @@ components:
           maxLength: 180
         text:
           type: string
+          readOnly: true
         question_type:
           type: string
           maxLength: 120
         category:
           type: string
           maxLength: 120
-        options: {}
+        options:
+          type: array
+          items: {}
+          readOnly: true
         updated_at:
           type: string
           format: date-time
           readOnly: true
       required:
       - id
+      - options
       - question_id
+      - text
       - updated_at
     TypeEnum:
       enum:

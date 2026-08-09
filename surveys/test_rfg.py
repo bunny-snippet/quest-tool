@@ -17,6 +17,8 @@ from .models import Survey, SurveyAttempt, TargetingQuestion
 from .provider_services import sync_client_integration
 from .providers.base import NormalizedSurvey, ProviderConfigurationError
 from .providers.rfg import ResearchForGoodProvider
+from .serializers import TargetingQuestionSerializer
+from .views import SurveyViewSet
 
 
 class FakeResponse:
@@ -239,17 +241,50 @@ class ResearchForGoodIntegrationTests(TestCase):
         metadata = {
             "property": "income",
             "type": 0,
-            "question": {"en-US": "What is your income?"},
-            "answers": [None, {"en-US": "Lower"}, {"en-US": "Target"}],
+            "question": {"en-US": "What is your income? %%3867%%"},
+            "answers": [None, {"en-US": "Lower"}, {"en-US": "Target %%3867%%"}],
         }
         with patch.object(provider, "targeting", return_value=targeting), patch.object(
             provider, "datapoint", return_value=metadata
         ), patch.object(provider, "create_link", return_value="https://survey.saysoforgood.com/live/example"):
             provider.refresh_details(survey)
         question = survey.targeting_questions.get(key="income")
+        self.assertEqual(question.text, "What is your income?")
         self.assertEqual([item["OptionId"] for item in question.options], [1, 2])
+        self.assertEqual(question.options[1]["OptionText"], "Target")
         self.assertEqual(question.raw_data["targeting_choices"], [2])
         self.assertEqual(question.raw_data["adapter_version"], 2)
+
+    def test_legacy_rfg_markers_are_cleaned_in_detail_api_output(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-legacy",
+        )
+        question = TargetingQuestion.objects.create(
+            survey=survey,
+            question_id=-99,
+            key="rfg63867",
+            text="What type of Spotify subscription do you currently have? Please select one.%%3867%%",
+            options=[{"OptionId": 1, "OptionText": "Premium %%3867%%"}],
+        )
+        payload = TargetingQuestionSerializer(question).data
+        self.assertEqual(
+            payload["text"],
+            "What type of Spotify subscription do you currently have? Please select one.",
+        )
+        self.assertEqual(payload["options"][0]["OptionText"], "Premium")
+
+    @patch("surveys.views.get_provider")
+    def test_stale_rfg_eye_details_use_rfg_provider(self, get_provider_mock):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-stale",
+        )
+        SurveyViewSet._refresh_if_stale(survey, "targeting")
+        get_provider_mock.assert_called_once_with(self.integration)
+        get_provider_mock.return_value.refresh_details.assert_called_once_with(survey)
 
     @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
     def test_duplicate_check_uses_official_fingerprint_when_available(self):
@@ -289,11 +324,12 @@ class ResearchForGoodIntegrationTests(TestCase):
         response = self.client.get("/survey/rfg/result", {
             "rid": attempt.rid,
             "result": "41",
-            "ruledOutBy": "Postal code failed provider validation",
+            "ruledOutBy": "Postal code failed provider validation %%3867%%",
         })
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Invalid postal code")
         self.assertContains(response, "Postal code failed provider validation")
+        self.assertNotContains(response, "%%3867%%")
         self.assertContains(response, "Secure server confirmation is still pending")
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, SurveyAttempt.Status.REDIRECTED)
@@ -332,7 +368,7 @@ class ResearchForGoodIntegrationTests(TestCase):
             question_type="text",
         )
         income = TargetingQuestion.objects.create(
-            survey=survey, question_id=-14, key="income", text="Household income",
+            survey=survey, question_id=-14, key="income", text="Household income %%3867%%",
             question_type="single", options=[
                 {"OptionId": 1, "OptionText": "Non-matching"},
                 {"OptionId": 2, "OptionText": "Matching"},
@@ -352,6 +388,7 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertContains(response, "Early termination")
         self.assertContains(response, "Household income")
+        self.assertNotContains(response, "%%3867%%")
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)
         self.assertEqual(attempt.status_source, "local_prescreener")

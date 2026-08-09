@@ -53,7 +53,9 @@ from .serializers import (
     UserHitsResponseSerializer,
 )
 from .pagination import SurveyPagination
+from .providers import ProviderError, get_provider
 from .rfg_outcomes import RFG_STATUS_MAP, describe_rfg_outcome
+from .rfg_text import clean_rfg_display_text
 from .services import replace_survey_quotas, replace_survey_targeting, sync_surveys
 from .survey_flow import (
     backfill_attempt_entry_audit,
@@ -247,6 +249,7 @@ def workspace_home(request):
 def _prescreener_questions(survey, submitted_data=None):
     prepared = []
     for question in survey.targeting_questions.all():
+        display_text = clean_rfg_display_text(question.text or question.key)
         lowered_type = question.question_type.lower()
         options = []
         age_ranges = []
@@ -256,7 +259,9 @@ def _prescreener_questions(survey, submitted_data=None):
                 label = f"{option.get('ageStart')}–{option.get('ageEnd')}"
                 age_ranges.append(option)
             else:
-                label = option.get("OptionText") or str(option_id or "Option")
+                label = clean_rfg_display_text(
+                    option.get("OptionText") or str(option_id or "Option")
+                )
             options.append({"value": str(option_id or label), "label": label})
         if "date" in lowered_type:
             input_kind = "date"
@@ -274,6 +279,7 @@ def _prescreener_questions(survey, submitted_data=None):
             option["selected"] = option["value"] in selected_values
         prepared.append({
             "model": question,
+            "display_text": display_text,
             "field_name": field_name,
             "input_kind": input_kind,
             "options": options,
@@ -291,7 +297,7 @@ def _collect_prescreener_answers(request, survey):
         question = prepared["model"]
         values = [value.strip() for value in request.POST.getlist(prepared["field_name"]) if value.strip()]
         if not values:
-            errors.append(f"Please answer: {question.text or question.key}")
+            errors.append(f"Please answer: {prepared['display_text']}")
             continue
 
         valid_options = {item["value"] for item in prepared["options"]}
@@ -299,13 +305,13 @@ def _collect_prescreener_answers(request, survey):
         if prepared["input_kind"] in {"radio", "checkbox"}:
             invalid = [value for value in values if value not in valid_options]
             if invalid:
-                errors.append(f"Invalid answer for: {question.text or question.key}")
+                errors.append(f"Invalid answer for: {prepared['display_text']}")
                 continue
         elif prepared["input_kind"] == "number":
             try:
                 numeric_value = int(values[0])
             except ValueError:
-                errors.append(f"Enter a valid number for: {question.text or question.key}")
+                errors.append(f"Enter a valid number for: {prepared['display_text']}")
                 continue
             matched = [
                 str(option.get("OptionId"))
@@ -319,7 +325,7 @@ def _collect_prescreener_answers(request, survey):
         answers[str(question.pk)] = {
             "question_id": question.question_id,
             "question_key": question.key,
-            "question_text": question.text,
+            "question_text": prepared["display_text"],
             "values": values,
             "upstream_values": upstream_values,
         }
@@ -753,7 +759,7 @@ def survey_status(request):
         tags=["Surveys"],
         summary="List synchronized surveys",
         description=(
-            "Returns locally stored surveys using page-number pagination. Search matches project ID, InnovateMR survey ID, "
+            "Returns locally stored surveys using page-number pagination. Search matches project ID, upstream survey ID, "
             "survey name, country and category. Date filters accept ISO-8601 timestamps."
         ),
         parameters=[
@@ -848,13 +854,16 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
             survey.source_modified_at is not None and synced_at < survey.source_modified_at
         )
         if stale:
-            refresh = replace_survey_quotas if detail_type == "quotas" else replace_survey_targeting
-            refresh(InnovateMRClient(integration=survey.integration), survey)
+            if survey.integration_id and survey.integration.provider_code == "rfg":
+                get_provider(survey.integration).refresh_details(survey)
+            else:
+                refresh = replace_survey_quotas if detail_type == "quotas" else replace_survey_targeting
+                refresh(InnovateMRClient(integration=survey.integration), survey)
 
     @extend_schema(
         tags=["Survey details"],
         summary="List a survey's quotas",
-        description="Returns the most recently synchronized getQuotaForSurvey result for this survey.",
+        description="Returns the most recently synchronized, provider-normalized quota data for this survey.",
         responses={200: SurveyQuotaSerializer(many=True)},
     )
     @action(detail=True, methods=["get"])
@@ -862,7 +871,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         survey = self.get_object()
         try:
             self._refresh_if_stale(survey, "quotas")
-        except InnovateMRAPIError as exc:
+        except (InnovateMRAPIError, ProviderError) as exc:
             if survey.quota_synced_at is None:
                 raise UpstreamUnavailable(str(exc)) from exc
         return Response(SurveyQuotaSerializer(survey.quotas.all(), many=True).data)
@@ -870,7 +879,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     @extend_schema(
         tags=["Survey details"],
         summary="List pre-screening questions and accepted answers",
-        description="Returns the most recently synchronized getSurveyTargeting result. Options preserve InnovateMR's source structure.",
+        description="Returns provider-normalized pre-screening questions. Answer codes preserve the upstream provider mapping.",
         responses={200: TargetingQuestionSerializer(many=True)},
     )
     @action(detail=True, methods=["get"], url_path="targeting")
@@ -878,7 +887,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         survey = self.get_object()
         try:
             self._refresh_if_stale(survey, "targeting")
-        except InnovateMRAPIError as exc:
+        except (InnovateMRAPIError, ProviderError) as exc:
             if survey.targeting_synced_at is None:
                 raise UpstreamUnavailable(str(exc)) from exc
         return Response(TargetingQuestionSerializer(survey.targeting_questions.all(), many=True).data)

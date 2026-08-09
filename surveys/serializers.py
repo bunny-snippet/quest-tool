@@ -10,6 +10,7 @@ from vendors.access import is_external_vendor_scope, vendor_scope_user_id
 from vendors.services import organization_client_ids_for_user, survey_pricing_for_user
 
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
+from .rfg_text import clean_rfg_display_text, clean_rfg_options
 
 
 class SurveyQuotaSerializer(serializers.ModelSerializer):
@@ -19,9 +20,18 @@ class SurveyQuotaSerializer(serializers.ModelSerializer):
 
 
 class TargetingQuestionSerializer(serializers.ModelSerializer):
+    text = serializers.SerializerMethodField()
+    options = serializers.SerializerMethodField()
+
     class Meta:
         model = TargetingQuestion
         fields = ["id", "question_id", "key", "text", "question_type", "category", "options", "updated_at"]
+
+    def get_text(self, obj) -> str:
+        return clean_rfg_display_text(obj.text)
+
+    def get_options(self, obj) -> list:
+        return clean_rfg_options(obj.options)
 
 
 class SurveyListSerializer(serializers.ModelSerializer):

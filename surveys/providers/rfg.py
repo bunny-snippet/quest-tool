@@ -12,6 +12,7 @@ from django.db import transaction
 from django.utils import timezone
 
 from surveys.models import Survey, SurveyQuota, TargetingQuestion
+from surveys.rfg_text import clean_rfg_display_text
 
 from .base import (
     NormalizedSurvey,
@@ -213,12 +214,20 @@ class ResearchForGoodProvider(SurveyProvider):
             for index, answer in enumerate(answers):
                 if index == 0 or not isinstance(answer, dict) or int(answer.get("disposition") or 0) == 3:
                     continue
-                options.append({"OptionId": index, "OptionText": answer.get(locale) or answer.get("en-US") or f"Choice {index}", "Disposition": int(answer.get("disposition") or 0)})
+                options.append({
+                    "OptionId": index,
+                    "OptionText": clean_rfg_display_text(
+                        answer.get(locale) or answer.get("en-US") or f"Choice {index}"
+                    ),
+                    "Disposition": int(answer.get("disposition") or 0),
+                })
             questions.append(TargetingQuestion(
                 survey=survey,
                 question_id=self._question_id(metadata.get("property") or target["name"]),
                 key=str(metadata.get("property") or target["name"]),
-                text=str(question_texts.get(locale) or question_texts.get("en-US") or target["name"]),
+                text=clean_rfg_display_text(
+                    question_texts.get(locale) or question_texts.get("en-US") or target["name"]
+                ),
                 question_type="multi" if question_type == 1 else "single",
                 category="RFG targeting",
                 options=options,
@@ -350,11 +359,13 @@ class ResearchForGoodProvider(SurveyProvider):
             else:
                 allowed = {str(value) for value in raw.get("targeting_choices") or []}
                 if allowed and not selected.intersection(allowed):
-                    return False, f"The answer to '{question.text or question.key}' does not match this survey's requirements."
+                    display_text = clean_rfg_display_text(question.text or question.key)
+                    return False, f"The answer to '{display_text}' does not match this survey's requirements."
                 exclusive = {
                     str(option.get("OptionId")) for option in question.options
                     if int(option.get("Disposition") or 0) in {4, 5}
                 }
                 if len(selected) > 1 and selected.intersection(exclusive):
-                    return False, f"Select the exclusive answer by itself for '{question.text or question.key}'."
+                    display_text = clean_rfg_display_text(question.text or question.key)
+                    return False, f"Select the exclusive answer by itself for '{display_text}'."
         return True, ""
