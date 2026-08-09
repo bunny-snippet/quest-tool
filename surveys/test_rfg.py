@@ -13,11 +13,11 @@ from rest_framework.test import APIClient
 
 from vendors.models import Client, ClientIntegration
 
-from .models import Survey, SurveyAttempt, TargetingQuestion
+from .models import Survey, SurveyAttempt, SurveyQuota, TargetingQuestion
 from .provider_services import sync_client_integration
 from .providers.base import NormalizedSurvey, ProviderConfigurationError
 from .providers.rfg import ResearchForGoodProvider
-from .serializers import TargetingQuestionSerializer
+from .serializers import SurveyQuotaSerializer, TargetingQuestionSerializer
 from .views import SurveyViewSet
 
 
@@ -139,6 +139,7 @@ class ResearchForGoodIntegrationTests(TestCase):
                 "country": "US",
                 "category": "B2C",
                 "allow_recontacts": False,
+                "enforce_local_targeting": True,
                 "callback_security_mode": "ip",
             },
             "supplier_code": "1000",
@@ -148,6 +149,18 @@ class ResearchForGoodIntegrationTests(TestCase):
             "is_active": True,
         }, format="json")
         self.assertEqual(response.status_code, 201, response.json())
+        created_integration_id = response.json()["id"]
+        response = api.patch(f"/api/v1/vendors/integrations/{created_integration_id}/", {
+            "config": {
+                "country": "US",
+                "category": "B2C",
+                "allow_recontacts": False,
+                "enforce_local_targeting": False,
+                "callback_security_mode": "ip",
+            },
+        }, format="json")
+        self.assertEqual(response.status_code, 200, response.json())
+        self.assertFalse(response.json()["config"]["enforce_local_targeting"])
         response = api.get(f"/api/v1/vendors/integrations/{self.integration.pk}/")
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -164,6 +177,8 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertContains(integration_page, "RFG credential references")
         self.assertContains(integration_page, "No provider is assumed automatically")
         self.assertContains(integration_page, "Custom REST API")
+        self.assertContains(integration_page, "Strict local targeting")
+        self.assertContains(integration_page, "Relaxed flow")
         self.assertNotContains(integration_page, 'id="provider" value="innovatemr"')
         self.assertNotContains(integration_page, 'placeholder="InnovateMR production"')
 
@@ -264,6 +279,15 @@ class ResearchForGoodIntegrationTests(TestCase):
         answers[str(postal.pk)]["upstream_values"] = ["invalid"]
         self.assertFalse(provider.validate_prescreener(survey, answers)[0])
 
+        self.integration.config = {"enforce_local_targeting": False}
+        self.integration.save(update_fields=["config"])
+        answers[str(postal.pk)]["upstream_values"] = ["12345"]
+        answers[str(income.pk)]["upstream_values"] = ["1"]
+        relaxed_provider = ResearchForGoodProvider(self.integration)
+        self.assertEqual(relaxed_provider.validate_prescreener(survey, answers), (True, ""))
+        relaxed_url = parse_qs(urlsplit(relaxed_provider.build_outbound_url(survey, attempt, answers)).query)
+        self.assertEqual(relaxed_url["household_income"], ["1"])
+
     @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
     def test_detail_refresh_keeps_all_answers_and_marks_qualifying_choices(self):
         survey = Survey.objects.create(
@@ -294,6 +318,47 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual(question.options[1]["OptionText"], "Target")
         self.assertEqual(question.raw_data["targeting_choices"], [2])
         self.assertEqual(question.raw_data["adapter_version"], 2)
+        serialized = TargetingQuestionSerializer(question).data
+        self.assertFalse(serialized["options"][0]["Qualifies"])
+        self.assertTrue(serialized["options"][1]["Qualifies"])
+        self.assertEqual(serialized["targeting_note"], "Qualifying answer: Target")
+
+    def test_rfg_quota_serializer_does_not_present_unknown_totals_as_zero(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-quota",
+        )
+        TargetingQuestion.objects.create(
+            survey=survey,
+            question_id=-401,
+            key="income",
+            text="Income",
+            options=[
+                {"OptionId": 1, "OptionText": "Lower"},
+                {"OptionId": 2, "OptionText": "Target"},
+            ],
+            raw_data={"targeting": {"name": "Income"}, "targeting_choices": [2]},
+        )
+        quota = SurveyQuota.objects.create(
+            survey=survey,
+            source_key="quota-one",
+            name="Completes quota",
+            remaining=0,
+            status="Open",
+            targeting={"datapoints": [{"name": "Income", "values": [{"choice": 2}]}]},
+            raw_data={
+                "completesLeft": 0,
+                "quotaLimitBy": "completes",
+                "datapoints": [{"name": "Income", "values": [{"choice": 2}]}],
+            },
+        )
+        payload = SurveyQuotaSerializer(quota).data
+        self.assertFalse(payload["target_known"])
+        self.assertFalse(payload["completed_known"])
+        self.assertEqual(payload["status"], "Full")
+        self.assertEqual(payload["scope_label"], "Targeted respondent quota")
+        self.assertEqual(payload["targeting_details"], [{"name": "Income", "values": ["Target"]}])
 
     def test_legacy_rfg_markers_are_cleaned_in_detail_api_output(self):
         survey = Survey.objects.create(
@@ -434,6 +499,26 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual(attempt.status_source, "local_prescreener")
         self.assertIsNotNone(attempt.callback_at)
         self.assertIn("rfg_local_outcome", attempt.upstream_transaction_data)
+
+        self.integration.config = {"enforce_local_targeting": False}
+        self.integration.save(update_fields=["config"])
+        relaxed_attempt = SurveyAttempt.objects.create(
+            rid="Mno345PqR6", survey=survey, platform_user=user, user_id=str(user.pk)
+        )
+        with patch.object(ResearchForGoodProvider, "duplicate_check", return_value=False):
+            response = self.client.post("/survey/start", {
+                "rid": relaxed_attempt.rid,
+                f"question_{birthday.pk}": "2000-01-01",
+                f"question_{gender.pk}": "M",
+                f"question_{postal.pk}": "12345",
+                f"question_{income.pk}": "1",
+                "rfg_fingerprint": "0",
+            })
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(urlsplit(response["Location"]).netloc, "survey.saysoforgood.com")
+        self.assertEqual(parse_qs(urlsplit(response["Location"]).query)["income"], ["1"])
+        relaxed_attempt.refresh_from_db()
+        self.assertEqual(relaxed_attempt.status, SurveyAttempt.Status.REDIRECTED)
 
     def test_trusted_rfg_callback_completes_attempt(self):
         self.integration.last_test_status = "success"

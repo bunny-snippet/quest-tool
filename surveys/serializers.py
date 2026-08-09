@@ -14,24 +14,159 @@ from .rfg_text import clean_rfg_display_text, clean_rfg_options
 
 
 class SurveyQuotaSerializer(serializers.ModelSerializer):
+    status = serializers.SerializerMethodField(help_text="Current quota state; RFG zero-remaining quotas are reported as Full.")
+    target_known = serializers.SerializerMethodField(help_text="True only when the provider supplied a target total.")
+    completed_known = serializers.SerializerMethodField(help_text="True only when the provider supplied a completed total.")
+    limit_type = serializers.SerializerMethodField(help_text="Provider quota unit, such as Completes or Starts.")
+    scope_label = serializers.SerializerMethodField(help_text="Human-readable overall or targeted quota scope.")
+    targeting_details = serializers.SerializerMethodField(help_text="Quota targeting decoded into readable datapoint names and answer labels.")
+
     class Meta:
         model = SurveyQuota
-        fields = ["id", "quota_id", "title", "name", "sample_size", "remaining", "completes", "clicks", "status", "targeting", "updated_at"]
+        fields = [
+            "id", "quota_id", "title", "name", "sample_size", "remaining", "completes",
+            "clicks", "status", "targeting", "target_known", "completed_known", "limit_type",
+            "scope_label", "targeting_details", "updated_at",
+        ]
+
+    @staticmethod
+    def _is_rfg(obj) -> bool:
+        return bool(obj.survey.integration_id and obj.survey.integration.provider_code == "rfg")
+
+    def get_status(self, obj) -> str:
+        raw = obj.raw_data or {}
+        if self._is_rfg(obj):
+            if raw.get("quotaThrottle") == 1:
+                return "Throttled"
+            if obj.remaining <= 0:
+                return "Full"
+        return obj.status or "Open"
+
+    def get_target_known(self, obj) -> bool:
+        if not self._is_rfg(obj):
+            return True
+        raw = obj.raw_data or {}
+        return obj.sample_size > 0 or any(
+            raw.get(key) is not None for key in ("limit", "quotaTarget", "sampleSize")
+        )
+
+    def get_completed_known(self, obj) -> bool:
+        if not self._is_rfg(obj):
+            return True
+        raw = obj.raw_data or {}
+        return any(raw.get(key) is not None for key in ("currentCompletes", "completes", "completed"))
+
+    def get_limit_type(self, obj) -> str:
+        raw = obj.raw_data or {}
+        return str(raw.get("quotaLimitBy") or "completes").replace("_", " ").strip().title()
+
+    def _quota_datapoints(self, obj) -> list:
+        raw = obj.raw_data or {}
+        datapoints = raw.get("datapoints")
+        if not isinstance(datapoints, list):
+            datapoints = (obj.targeting or {}).get("datapoints")
+        return datapoints if isinstance(datapoints, list) else []
+
+    def get_scope_label(self, obj) -> str:
+        return "Targeted respondent quota" if self._quota_datapoints(obj) else "Overall survey quota"
+
+    @staticmethod
+    def _range_label(value) -> str:
+        minimum, maximum = value.get("min"), value.get("max")
+        if minimum is None and maximum is None:
+            return ""
+        if minimum == maximum:
+            return str(minimum)
+        if minimum is None:
+            return f"Up to {maximum}"
+        if maximum is None:
+            return f"{minimum}+"
+        return f"{minimum}\u2013{maximum}"
+
+    def get_targeting_details(self, obj) -> list:
+        questions = list(obj.survey.targeting_questions.all())
+        details = []
+        for datapoint in self._quota_datapoints(obj):
+            if not isinstance(datapoint, dict):
+                continue
+            name = str(datapoint.get("name") or datapoint.get("property") or "Targeting")
+            question = next((item for item in questions if (
+                str((item.raw_data or {}).get("targeting", {}).get("name") or "") == name
+                or item.key == name
+            )), None)
+            option_labels = {
+                str(option.get("OptionId")): clean_rfg_display_text(option.get("OptionText"))
+                for option in (question.options if question else [])
+                if isinstance(option, dict)
+            }
+            values = []
+            for value in datapoint.get("values") or []:
+                if not isinstance(value, dict):
+                    values.append(str(value))
+                    continue
+                range_label = self._range_label(value)
+                if range_label:
+                    values.append(range_label)
+                    continue
+                choice = value.get("choice")
+                if choice is not None:
+                    if name.lower() == "gender":
+                        values.append({"1": "Male", "2": "Female"}.get(str(choice), str(choice)))
+                    else:
+                        values.append(option_labels.get(str(choice), f"Choice {choice}"))
+                    continue
+                free_value = value.get("value", value.get("text", value.get("freeList")))
+                if free_value not in (None, ""):
+                    values.append(str(free_value))
+            details.append({"name": clean_rfg_display_text(name), "values": values or ["Provider-defined segment"]})
+        return details
 
 
 class TargetingQuestionSerializer(serializers.ModelSerializer):
     text = serializers.SerializerMethodField()
     options = serializers.SerializerMethodField()
+    targeting_note = serializers.SerializerMethodField(help_text="Readable RFG qualifying-answer or age rule for internal project details.")
 
     class Meta:
         model = TargetingQuestion
-        fields = ["id", "question_id", "key", "text", "question_type", "category", "options", "updated_at"]
+        fields = ["id", "question_id", "key", "text", "question_type", "category", "options", "targeting_note", "updated_at"]
 
     def get_text(self, obj) -> str:
         return clean_rfg_display_text(obj.text)
 
     def get_options(self, obj) -> list:
-        return clean_rfg_options(obj.options)
+        options = clean_rfg_options(obj.options)
+        raw = obj.raw_data or {}
+        if "targeting_choices" not in raw:
+            return options
+        allowed = {str(value) for value in raw.get("targeting_choices") or []}
+        if obj.key == "RFG_GENDER":
+            allowed = {"M" if value == "1" else "F" if value == "2" else value for value in allowed}
+        return [
+            {**option, "Qualifies": str(option.get("OptionId")) in allowed}
+            for option in options
+        ]
+
+    def get_targeting_note(self, obj) -> str:
+        raw = obj.raw_data or {}
+        ranges = raw.get("targeting_age_ranges") or []
+        if ranges:
+            labels = [SurveyQuotaSerializer._range_label(item) for item in ranges if isinstance(item, dict)]
+            labels = [label for label in labels if label]
+            if labels:
+                return f"Qualifying age: {', '.join(labels)}"
+        if "targeting_choices" in raw:
+            qualifying = [
+                str(option.get("OptionText")) for option in self.get_options(obj)
+                if option.get("Qualifies") is True
+            ]
+            return (
+                f"Qualifying answer{'s' if len(qualifying) != 1 else ''}: {', '.join(qualifying)}"
+                if qualifying else "No fixed answer restriction was returned by RFG."
+            )
+        if obj.category == "Required profile":
+            return "Required respondent profile field."
+        return ""
 
 
 class SurveyListSerializer(serializers.ModelSerializer):

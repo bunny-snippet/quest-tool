@@ -3589,7 +3589,9 @@ components:
           description: Provider credential names mapped to environment-variable names;
             never secret values.
         config:
-          description: Non-secret provider configuration.
+          description: 'Provider-specific settings. RFG supports enforce_local_targeting:
+            true for Strict local termination or false for Relaxed provider-side eligibility
+            decisions.'
         has_credential:
           type: boolean
           readOnly: true
@@ -3748,7 +3750,9 @@ components:
           description: Provider credential names mapped to environment-variable names;
             never secret values.
         config:
-          description: Non-secret provider configuration.
+          description: 'Provider-specific settings. RFG supports enforce_local_targeting:
+            true for Strict local termination or false for Relaxed provider-side eligibility
+            decisions.'
         api_token:
           type: string
           writeOnly: true
@@ -4597,7 +4601,9 @@ components:
           description: Provider credential names mapped to environment-variable names;
             never secret values.
         config:
-          description: Non-secret provider configuration.
+          description: 'Provider-specific settings. RFG supports enforce_local_targeting:
+            true for Strict local termination or false for Relaxed provider-side eligibility
+            decisions.'
         api_token:
           type: string
           writeOnly: true
@@ -5675,14 +5681,44 @@ components:
           format: int64
         status:
           type: string
-          maxLength: 80
+          readOnly: true
+          description: Current quota state; RFG zero-remaining quotas are reported
+            as Full.
         targeting: {}
+        target_known:
+          type: boolean
+          readOnly: true
+          description: True only when the provider supplied a target total.
+        completed_known:
+          type: boolean
+          readOnly: true
+          description: True only when the provider supplied a completed total.
+        limit_type:
+          type: string
+          readOnly: true
+          description: Provider quota unit, such as Completes or Starts.
+        scope_label:
+          type: string
+          readOnly: true
+          description: Human-readable overall or targeted quota scope.
+        targeting_details:
+          type: array
+          items: {}
+          readOnly: true
+          description: Quota targeting decoded into readable datapoint names and answer
+            labels.
         updated_at:
           type: string
           format: date-time
           readOnly: true
       required:
+      - completed_known
       - id
+      - limit_type
+      - scope_label
+      - status
+      - target_known
+      - targeting_details
       - updated_at
     SurveyStatusEnum:
       enum:
@@ -5826,6 +5862,11 @@ components:
           type: array
           items: {}
           readOnly: true
+        targeting_note:
+          type: string
+          readOnly: true
+          description: Readable RFG qualifying-answer or age rule for internal project
+            details.
         updated_at:
           type: string
           format: date-time
@@ -5834,6 +5875,7 @@ components:
       - id
       - options
       - question_id
+      - targeting_note
       - text
       - updated_at
     TypeEnum:

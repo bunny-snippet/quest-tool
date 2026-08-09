@@ -239,14 +239,31 @@ class ResearchForGoodProvider(SurveyProvider):
             if not isinstance(quota, dict):
                 continue
             remaining = quota.get("completesLeft", quota.get("startsLeft", 0))
+            target = quota.get("limit", quota.get("quotaTarget", quota.get("sampleSize")))
+            completed = quota.get("currentCompletes", quota.get("completes", quota.get("completed")))
+            try:
+                target = max(0, int(target)) if target is not None else 0
+            except (TypeError, ValueError):
+                target = 0
+            try:
+                completed = max(0, int(completed)) if completed is not None else 0
+            except (TypeError, ValueError):
+                completed = 0
+            try:
+                remaining = max(0, int(remaining or 0))
+            except (TypeError, ValueError):
+                remaining = 0
+            limit_type = str(quota.get("quotaLimitBy") or targeting.get("quotaLimitBy") or "completes")
             key = hashlib.sha256(json.dumps(quota, sort_keys=True, default=str).encode()).hexdigest()
             quota_rows.append(SurveyQuota(
                 survey=survey,
                 source_key=key,
                 title=f"Quota {index + 1}",
-                name=str(quota.get("quotaLimitBy") or "RFG quota"),
-                remaining=max(0, int(remaining or 0)),
-                status="Throttled" if quota.get("quotaThrottle") == 1 else "Open",
+                name=f"{limit_type.replace('_', ' ').title()} quota",
+                sample_size=target,
+                completes=completed,
+                remaining=remaining,
+                status=("Throttled" if quota.get("quotaThrottle") == 1 else "Full" if remaining == 0 else "Open"),
                 targeting={"datapoints": quota.get("datapoints") or []},
                 raw_data=quota,
             ))
@@ -342,23 +359,25 @@ class ResearchForGoodProvider(SurveyProvider):
         if not self._postal_is_valid(survey.country_code, postal):
             return False, f"The postal code is not valid for {survey.country_code or 'this market'}."
 
+        strict_targeting = bool((self.integration.config or {}).get("enforce_local_targeting", True))
+
         for question in survey.targeting_questions.all():
             raw = question.raw_data or {}
             selected = {str(value) for value in values.get(question.key, [])}
             if question.key == "RFG_BIRTHDAY":
                 ranges = raw.get("targeting_age_ranges") or []
-                if ranges and not any(int(item["min"]) <= age <= int(item["max"]) for item in ranges):
+                if strict_targeting and ranges and not any(int(item["min"]) <= age <= int(item["max"]) for item in ranges):
                     return False, "The respondent's age does not match this survey's targeting requirements."
             elif question.key == "RFG_GENDER":
                 allowed = {str(value) for value in raw.get("targeting_choices") or []}
                 gender_choice = "1" if gender in {"M", "1"} else "2"
-                if allowed and gender_choice not in allowed:
+                if strict_targeting and allowed and gender_choice not in allowed:
                     return False, "The respondent's gender does not match this survey's targeting requirements."
             elif question.key.startswith("RFG_"):
                 continue
             else:
                 allowed = {str(value) for value in raw.get("targeting_choices") or []}
-                if allowed and not selected.intersection(allowed):
+                if strict_targeting and allowed and not selected.intersection(allowed):
                     display_text = clean_rfg_display_text(question.text or question.key)
                     return False, f"The answer to '{display_text}' does not match this survey's requirements."
                 exclusive = {

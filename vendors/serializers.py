@@ -96,6 +96,13 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
     has_credential = serializers.SerializerMethodField()
     masked_credential = serializers.SerializerMethodField()
     survey_count = serializers.IntegerField(source="surveys.count", read_only=True)
+    config = serializers.JSONField(
+        required=False,
+        help_text=(
+            "Provider-specific settings. RFG supports enforce_local_targeting: true for Strict "
+            "local termination or false for Relaxed provider-side eligibility decisions."
+        ),
+    )
 
     class Meta:
         model = ClientIntegration
@@ -149,6 +156,7 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
             allowed_config = {
                 "country", "category", "allow_recontacts", "locale", "timeout_seconds",
                 "detail_refresh_batch", "callback_security_mode", "callback_ip_allowlist",
+                "enforce_local_targeting",
             }
             unexpected = set(config) - allowed_config
             if unexpected:
@@ -160,6 +168,8 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"config": "Country must be a two-letter ISO code."})
             if config.get("category") not in {None, "", "B2B", "B2C"}:
                 raise serializers.ValidationError({"config": "Category must be B2B or B2C."})
+            if "enforce_local_targeting" in config and not isinstance(config["enforce_local_targeting"], bool):
+                raise serializers.ValidationError({"config": "Strict targeting mode must be true or false."})
             if config.get("callback_security_mode", "ip") != "ip":
                 raise serializers.ValidationError({"config": "Only RFG's documented server-IP callback mode is supported."})
             for address in config.get("callback_ip_allowlist") or []:
