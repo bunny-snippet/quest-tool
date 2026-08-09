@@ -28,6 +28,8 @@ RFG inventory is never scheduled more frequently than 600 seconds. Celery Beat c
 
 Inventory sync stores normalized projects first, then runs a bounded detail refresh outside the inventory transaction. The detail adapter stores targeting, quotas, every displayable provider answer and the permanent entry link. The respondent flow collects birthday, gender and country-valid postal code plus relevant targeting answers. Non-matching answers end locally with a recorded reason. Immediately before an eligible redirect it obtains RFG's official browser fingerprint when available, calls `duplicateCheck` with the RID/IP/fingerprint, then appends RID and profile parameters to the provider link. If fingerprint generation is unavailable, RFG's documented `fingerprint: 0` plus mandatory RID fallback is used.
 
+Every visible live RFG inventory row can expose the platform Copy Link even while its bounded background detail refresh is pending. On the first valid platform start, a missing permanent RFG link and targeting snapshot are hydrated before an attempt is created. The raw URL returned by `livealert/createLink/1` is never treated as respondent-ready on its own because it does not yet contain the mandatory RID and profile parameters.
+
 Configure the RFG server callback to the production HTTPS endpoint:
 
 ```text

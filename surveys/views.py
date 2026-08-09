@@ -1,6 +1,7 @@
 import csv
 import ipaddress
 import json
+import logging
 from urllib.parse import quote, urlencode
 
 from django.conf import settings
@@ -67,6 +68,9 @@ from .survey_flow import (
 )
 from .tasks import sync_innovatemr_surveys_task
 from .user_hits import aggregate_user_hits, user_hit_filter_options
+
+
+logger = logging.getLogger(__name__)
 
 
 class UpstreamUnavailable(APIException):
@@ -416,7 +420,12 @@ def survey_start(request):
         ).filter(
             source_key=survey_id, local_id=internal_code, status=Survey.Status.LIVE
         ).first()
-        if survey is None or not survey.entry_link:
+        if survey is None:
+            return _invalid_survey_link(request)
+        is_rfg = bool(
+            survey.integration_id and survey.integration.provider_code == "rfg"
+        )
+        if not survey.entry_link and not is_rfg:
             return _invalid_survey_link(request)
         expected_supplier_code = survey.integration.supplier_code if survey.integration_id else settings.PUBLIC_SUPPLIER_CODE
         if supplier_code != expected_supplier_code:
@@ -425,22 +434,37 @@ def survey_start(request):
         stale = survey.targeting_synced_at is None or (
             survey.source_modified_at and survey.targeting_synced_at < survey.source_modified_at
         )
-        if survey.integration_id and survey.integration.provider_code == "rfg":
-            stale = stale or not survey.targeting_questions.filter(
+        if is_rfg:
+            stale = stale or not survey.entry_link or not survey.targeting_questions.filter(
                 raw_data__adapter_version=2
             ).exists()
         targeting_warning = ""
         if stale:
             try:
-                if survey.integration_id and survey.integration.provider_code == "rfg":
-                    from .providers import get_provider
-
+                if is_rfg:
                     get_provider(survey.integration).refresh_details(survey)
                 else:
                     replace_survey_targeting(InnovateMRClient(integration=survey.integration), survey)
             except Exception:
+                logger.exception(
+                    "Provider detail hydration failed for survey=%s integration=%s",
+                    survey.pk,
+                    survey.integration_id,
+                )
+                if not survey.entry_link:
+                    return _invalid_survey_link(
+                        request,
+                        "The provider entry link is temporarily unavailable. Please try again shortly.",
+                        status_code=503,
+                    )
                 if not survey.targeting_questions.exists():
                     targeting_warning = "Pre-screening criteria are temporarily unavailable. You can still continue."
+        if not survey.entry_link:
+            return _invalid_survey_link(
+                request,
+                "The provider entry link is temporarily unavailable. Please try again shortly.",
+                status_code=503,
+            )
         try:
             with transaction.atomic():
                 allocation_context = resolve_vendor_survey_context(
@@ -486,8 +510,6 @@ def survey_start(request):
             try:
                 provider = None
                 if attempt.survey.integration_id and attempt.survey.integration.provider_code == "rfg":
-                    from .providers import get_provider
-
                     provider = get_provider(attempt.survey.integration)
                     eligible, reason = provider.validate_prescreener(attempt.survey, answers)
                     if not eligible:
@@ -532,8 +554,6 @@ def survey_start(request):
                         ])
                     return HttpResponseRedirect(outbound_url)
             except Exception as exc:
-                from .providers import ProviderError
-
                 detail = str(exc) if isinstance(exc, ProviderError) else "The upstream provider is temporarily unavailable."
                 errors.append(f"Survey provider could not continue: {detail}")
     else:
@@ -776,7 +796,7 @@ def survey_status(request):
     ),
 )
 class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Survey.objects.select_related("client").all().prefetch_related("quotas", "targeting_questions")
+    queryset = Survey.objects.select_related("client", "integration").all().prefetch_related("quotas", "targeting_questions")
     lookup_field = "local_id"
     filterset_class = SurveyFilter
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]

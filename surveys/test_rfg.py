@@ -167,6 +167,46 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertNotContains(integration_page, 'id="provider" value="innovatemr"')
         self.assertNotContains(integration_page, 'placeholder="InnovateMR production"')
 
+    @patch("surveys.views.get_provider")
+    def test_unsynced_live_rfg_survey_has_copy_link_and_hydrates_on_first_start(self, get_provider_mock):
+        admin = get_user_model().objects.create_superuser(
+            "rfg-link-owner", "rfg-link-owner@example.com", "pass"
+        )
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-lazy-link",
+            country_code="US",
+            status=Survey.Status.LIVE,
+            entry_link="",
+        )
+        api = APIClient()
+        api.force_authenticate(admin)
+        listing = api.get("/api/v1/surveys/", {"search": survey.source_key})
+        self.assertEqual(listing.status_code, 200)
+        start_link = listing.data["results"][0]["start_link"]
+        self.assertIn(f"surveyId={survey.source_key}", start_link)
+        self.assertIn("supplierCode=1000", start_link)
+
+        def hydrate(target):
+            target.entry_link = "https://survey.saysoforgood.com/live/survey/lazy?init=token"
+            target.targeting_synced_at = timezone.now()
+            target.quota_synced_at = timezone.now()
+            target.detail_synced_at = timezone.now()
+            target.save(update_fields=[
+                "entry_link", "targeting_synced_at", "quota_synced_at",
+                "detail_synced_at", "updated_at",
+            ])
+
+        get_provider_mock.return_value.refresh_details.side_effect = hydrate
+        response = self.client.get(start_link)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/survey/start?rid=", response["Location"])
+        get_provider_mock.assert_called_once_with(self.integration)
+        get_provider_mock.return_value.refresh_details.assert_called_once()
+        survey.refresh_from_db()
+        self.assertTrue(survey.entry_link)
+
     @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
     def test_prescreener_validates_targeting_and_builds_required_rfg_url(self):
         survey = Survey.objects.create(
