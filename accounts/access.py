@@ -14,6 +14,7 @@ EXTERNAL_VENDOR_FORBIDDEN_CODES = frozenset({
     "users.manage", "users.view", "users.create", "users.update", "users.delete",
     "respondents.create",
     "clients.manage", "vendors.manage", "allocations.manage",
+    "organization.view", "organization.manage", "organization.clients.manage",
     "sync.run",
 })
 
@@ -38,6 +39,7 @@ def effective_permission_codes(user) -> set[str]:
             codes.discard(code)
     if profile and profile.account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
         codes.difference_update(EXTERNAL_VENDOR_FORBIDDEN_CODES)
+        codes = {code for code in codes if not code.startswith("organization.")}
     return codes
 
 
@@ -88,6 +90,23 @@ def subordinate_user_ids(user) -> set[int]:
     return descendants
 
 
+def manageable_user_ids(user) -> set[int]:
+    """Subordinates plus members explicitly placed in an internal vendor workspace."""
+
+    ids = subordinate_user_ids(user)
+    if not user or not user.is_authenticated or user.is_superuser:
+        return ids
+    profile = EmployeeProfile.objects.filter(user=user).first()
+    if profile and profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
+        ids.update(
+            EmployeeProfile.objects.filter(
+                organization_unit__workspace_owner=user,
+                account_type=EmployeeProfile.AccountType.EMPLOYEE,
+            ).values_list("user_id", flat=True)
+        )
+    return ids
+
+
 def activity_visible_user_ids(user) -> set[int]:
     """Return users whose tracking activity is visible to ``user``.
 
@@ -105,14 +124,42 @@ def activity_visible_user_ids(user) -> set[int]:
 
     visible_ids = subordinate_user_ids(user)
     visible_ids.add(user.id)
-    profile = EmployeeProfile.objects.select_related("role").filter(user=user).first()
+    profile = EmployeeProfile.objects.select_related(
+        "role", "organization_unit__workspace_owner"
+    ).filter(user=user).first()
     if (
         not profile
-        or profile.account_type != EmployeeProfile.AccountType.EMPLOYEE
         or not profile.role
-        or profile.role.rank < 20
-        or not profile.created_by_id
     ):
+        return visible_ids
+
+    from vendors.access import organization_unit_descendant_ids, vendor_scope_user_id
+
+    vendor_id = vendor_scope_user_id(user)
+    if profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR and vendor_id:
+        visible_ids.update(
+            EmployeeProfile.objects.filter(
+                organization_unit__workspace_owner_id=vendor_id,
+                account_type=EmployeeProfile.AccountType.EMPLOYEE,
+            ).values_list("user_id", flat=True)
+        )
+        return visible_ids
+    if profile.account_type != EmployeeProfile.AccountType.EMPLOYEE or profile.role.rank < 20:
+        return visible_ids
+
+    if profile.organization_unit_id:
+        unit_ids = organization_unit_descendant_ids(profile.organization_unit)
+        visible_ids.update(
+            EmployeeProfile.objects.filter(
+                organization_unit_id__in=unit_ids,
+                account_type=EmployeeProfile.AccountType.EMPLOYEE,
+                role__isnull=False,
+                role__rank__lt=profile.role.rank,
+            ).values_list("user_id", flat=True)
+        )
+        return visible_ids
+
+    if not profile.created_by_id:
         return visible_ids
 
     lower_rank_peers = EmployeeProfile.objects.filter(
@@ -121,10 +168,6 @@ def activity_visible_user_ids(user) -> set[int]:
         role__isnull=False,
         role__rank__lt=profile.role.rank,
     )
-    if profile.company_name.strip():
-        lower_rank_peers = lower_rank_peers.filter(company_name__iexact=profile.company_name.strip())
-    if profile.department.strip():
-        lower_rank_peers = lower_rank_peers.filter(department__iexact=profile.department.strip())
     visible_ids.update(lower_rank_peers.values_list("user_id", flat=True))
     return visible_ids
 

@@ -12,7 +12,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
-from vendors.models import Client
+from vendors.models import Client, OrganizationUnit
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
@@ -604,9 +604,12 @@ class StudiesTrackingTests(TestCase):
         self.assertNotContains(page, "<th>Status</th>", html=True)
         self.assertEqual(scoped_api.get(reverse("survey-attempt-list"), {"status": "1"}).status_code, 403)
 
-    def test_team_lead_sees_lower_rank_employee_activity_in_same_branch_only(self):
+    def test_team_lead_sees_lower_rank_employee_activity_in_same_shift_only(self):
         team_lead = get_user_model().objects.create_user(
             username="tracking-lead", first_name="Tracking", last_name="Lead"
+        )
+        second_team_lead = get_user_model().objects.create_user(
+            username="tracking-lead-two", first_name="Second", last_name="Lead"
         )
         employee = get_user_model().objects.create_user(
             username="tracking-employee", first_name="Branch", last_name="Employee"
@@ -617,18 +620,42 @@ class StudiesTrackingTests(TestCase):
         manager = get_user_model().objects.create_user(
             username="tracking-manager", first_name="Branch", last_name="Manager"
         )
+        delhi = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, unit_type=OrganizationUnit.UnitType.BRANCH,
+            name="Delhi", code="delhi", created_by=self.owner,
+        )
+        delhi_ops = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, parent=delhi, unit_type=OrganizationUnit.UnitType.SUB_BRANCH,
+            name="Operations", code="operations", created_by=self.owner,
+        )
+        delhi_morning = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, parent=delhi_ops, unit_type=OrganizationUnit.UnitType.SHIFT,
+            name="Morning", code="morning", created_by=self.owner,
+        )
+        mumbai = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, unit_type=OrganizationUnit.UnitType.BRANCH,
+            name="Mumbai", code="mumbai", created_by=self.owner,
+        )
+        mumbai_ops = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, parent=mumbai, unit_type=OrganizationUnit.UnitType.SUB_BRANCH,
+            name="Operations", code="operations", created_by=self.owner,
+        )
+        mumbai_morning = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, parent=mumbai_ops, unit_type=OrganizationUnit.UnitType.SHIFT,
+            name="Morning", code="morning", created_by=self.owner,
+        )
         profiles = [
-            (team_lead, "team-lead", "Delhi", "Operations"),
-            (employee, "employee", "Delhi", "Operations"),
-            (other_branch_employee, "employee", "Mumbai", "Operations"),
-            (manager, "manager", "Delhi", "Operations"),
+            (team_lead, "team-lead", delhi_morning),
+            (second_team_lead, "team-lead", delhi_morning),
+            (employee, "employee", delhi_morning),
+            (other_branch_employee, "employee", mumbai_morning),
+            (manager, "manager", delhi_morning),
         ]
-        for platform_user, role_slug, company, department in profiles:
+        for platform_user, role_slug, organization_unit in profiles:
             EmployeeProfile.objects.filter(user=platform_user).update(
                 role=Role.objects.get(slug=role_slug),
                 created_by=self.owner,
-                company_name=company,
-                department=department,
+                organization_unit=organization_unit,
             )
 
         visible_attempt = SurveyAttempt.objects.create(
@@ -655,6 +682,16 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(hits.status_code, 200)
         self.assertEqual(hits.data["count"], 1)
         self.assertEqual(hits.data["results"][0]["user_id"], employee.pk)
+        self.assertEqual(hits.data["results"][0]["branch"], "Delhi")
+        self.assertEqual(hits.data["results"][0]["sub_branch"], "Operations")
+        self.assertEqual(hits.data["results"][0]["shift"], "Morning")
+
+        second_lead_api = APIClient()
+        second_lead_api.force_authenticate(second_team_lead)
+        second_lead_studies = second_lead_api.get(reverse("survey-attempt-list"))
+        self.assertEqual(second_lead_studies.status_code, 200)
+        self.assertEqual(second_lead_studies.data["count"], 1)
+        self.assertEqual(second_lead_studies.data["results"][0]["rid"], visible_attempt.rid)
 
         self.client.force_login(team_lead)
         page = self.client.get(reverse("studies"))

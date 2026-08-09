@@ -11,7 +11,7 @@
     activeUsers: byId('activeUserCount'), dayCount: byId('hitDayCount'),
   };
   if (!elements.rows) return;
-  document.querySelector('.user-hits-table').style.minWidth = `${Math.max(520, columnCount * 175)}px`;
+  document.querySelector('.user-hits-table').style.minWidth = `${Math.max(520, columnCount * 145)}px`;
 
   const state = { page: 1, pages: 1, pageSize: 20, timer: null, controller: null };
   const icons = {
@@ -26,7 +26,7 @@
 
   function updateMultiLabel(container) {
     const checked = [...container.querySelectorAll('input:checked')]; const button = container.querySelector('.multi-trigger');
-    const fallback = { branch: 'All branches', sub_branch: 'All sub-branches', user: 'All users' }[container.dataset.hitFilter];
+    const fallback = { branch: 'All branches', sub_branch: 'All sub-branches', shift: 'All shifts', user: 'All users' }[container.dataset.hitFilter];
     button.querySelector('span').textContent = checked.length === 0 ? fallback : checked.length === 1 ? checked[0].closest('label').innerText.trim() : `${checked.length} selected`;
     button.classList.toggle('has-value', checked.length > 0);
   }
@@ -75,6 +75,7 @@
     const cells = [];
     if (columns.has('branch')) cells.push(`<td><strong class="hit-branch">${escapeHtml(row.branch || '—')}</strong></td>`);
     if (columns.has('sub_branch')) cells.push(`<td><span class="hit-sub-branch">${escapeHtml(row.sub_branch || '—')}</span></td>`);
+    if (columns.has('shift')) cells.push(`<td><span class="hit-sub-branch">${escapeHtml(row.shift || '—')}</span></td>`);
     if (columns.has('user')) cells.push(`<td>${userCell(row)}</td>`);
     if (columns.has('date')) cells.push(`<td><time class="hit-date" datetime="${escapeHtml(row.date)}"><strong>${formatDate(row.date)}</strong><span>IST calendar day</span></time></td>`);
     if (columns.has('hits')) cells.push(`<td>${deviceBreakdown(row.hits)}</td>`);
@@ -84,7 +85,11 @@
 
   function cardTemplate(row) {
     if (!columns.size) return '<article class="survey-card user-hit-card"><div class="column-denied">No User Hits columns are assigned to your account.</div></article>';
-    const location = columns.has('branch') || columns.has('sub_branch') ? `<div class="hit-location">${columns.has('branch') ? `<span>${escapeHtml(row.branch)}</span>` : ''}${columns.has('branch') && columns.has('sub_branch') ? '<i>→</i>' : ''}${columns.has('sub_branch') ? `<span>${escapeHtml(row.sub_branch)}</span>` : ''}</div>` : '';
+    const locationParts = [];
+    if (columns.has('branch')) locationParts.push(escapeHtml(row.branch));
+    if (columns.has('sub_branch')) locationParts.push(escapeHtml(row.sub_branch));
+    if (columns.has('shift')) locationParts.push(escapeHtml(row.shift));
+    const location = locationParts.length ? `<div class="hit-location">${locationParts.map((part) => `<span>${part}</span>`).join('<i>→</i>')}</div>` : '';
     const metrics = `${columns.has('hits') ? `<section><label>Hits</label>${deviceBreakdown(row.hits)}</section>` : ''}${columns.has('completes') ? `<section><label>Completes</label>${deviceBreakdown(row.completes)}</section>` : ''}`;
     return `<article class="survey-card user-hit-card"><div class="user-hit-card-head">${columns.has('user') ? userCell(row) : '<div></div>'}${columns.has('date') ? `<time>${formatDate(row.date)}</time>` : ''}</div>${location}${metrics ? `<div class="hit-card-metrics">${metrics}</div>` : ''}</article>`;
   }

@@ -73,6 +73,179 @@ class ClientIntegration(models.Model):
         return f"{self.client} · {self.name}"
 
 
+class OrganizationUnit(models.Model):
+    """A strict Branch -> Sub-branch -> Shift hierarchy inside one workspace."""
+
+    class UnitType(models.TextChoices):
+        BRANCH = "branch", "Branch"
+        SUB_BRANCH = "sub_branch", "Sub-branch"
+        SHIFT = "shift", "Shift"
+
+    workspace_owner = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        on_delete=models.PROTECT,
+        related_name="organization_units",
+        help_text="The super-admin workspace or internal vendor that owns this hierarchy.",
+    )
+    parent = models.ForeignKey(
+        "self",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="children",
+    )
+    unit_type = models.CharField(max_length=16, choices=UnitType.choices, db_index=True)
+    name = models.CharField(max_length=120)
+    code = models.SlugField(max_length=80)
+    description = models.CharField(max_length=240, blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_organization_units",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["workspace_owner_id", "unit_type", "name", "id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["workspace_owner", "parent", "unit_type", "code"],
+                name="unique_organization_unit_code_in_parent",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["workspace_owner", "unit_type", "is_active"]),
+            models.Index(fields=["parent", "is_active"]),
+        ]
+
+    @property
+    def path_label(self):
+        labels = [self.name]
+        current = self.parent
+        visited = {self.pk}
+        while current and current.pk not in visited:
+            visited.add(current.pk)
+            labels.append(current.name)
+            current = current.parent
+        return " / ".join(reversed(labels))
+
+    def clean(self):
+        super().clean()
+        if not self.workspace_owner_id:
+            raise ValidationError({"workspace_owner": "Select a workspace owner."})
+        parent_rules = {
+            self.UnitType.BRANCH: None,
+            self.UnitType.SUB_BRANCH: self.UnitType.BRANCH,
+            self.UnitType.SHIFT: self.UnitType.SUB_BRANCH,
+        }
+        if self.unit_type not in parent_rules:
+            raise ValidationError({"unit_type": "Select a valid organization unit type."})
+        profile = getattr(self.workspace_owner, "employee_profile", None)
+        if not self.workspace_owner.is_superuser and getattr(profile, "account_type", "") != "internal_vendor":
+            raise ValidationError({"workspace_owner": "Organization workspaces must belong to a super admin or internal vendor."})
+        expected_parent_type = parent_rules[self.unit_type]
+        if expected_parent_type is None and self.parent_id:
+            raise ValidationError({"parent": "A branch cannot have a parent."})
+        if expected_parent_type is not None:
+            if not self.parent_id:
+                raise ValidationError({"parent": f"A {self.get_unit_type_display().lower()} requires a parent."})
+            if self.pk and self.parent_id == self.pk:
+                raise ValidationError({"parent": "An organization unit cannot be its own parent."})
+            if self.parent.unit_type != expected_parent_type:
+                parent_name = dict(self.UnitType.choices)[expected_parent_type].lower()
+                raise ValidationError({"parent": f"Parent must be a {parent_name}."})
+            if self.parent.workspace_owner_id != self.workspace_owner_id:
+                raise ValidationError({"parent": "Parent and child must belong to the same workspace."})
+            visited = {self.pk} if self.pk else set()
+            current = self.parent
+            while current:
+                if current.pk in visited:
+                    raise ValidationError({"parent": "This parent would create a hierarchy cycle."})
+                visited.add(current.pk)
+                current = current.parent
+        if self.pk:
+            expected_child_type = {
+                self.UnitType.BRANCH: self.UnitType.SUB_BRANCH,
+                self.UnitType.SUB_BRANCH: self.UnitType.SHIFT,
+                self.UnitType.SHIFT: None,
+            }[self.unit_type]
+            children = OrganizationUnit.objects.filter(parent_id=self.pk)
+            invalid_children = children if expected_child_type is None else children.exclude(unit_type=expected_child_type)
+            if invalid_children.exists():
+                raise ValidationError({
+                    "unit_type": "This type change would invalidate existing child units. Move or deactivate the children first."
+                })
+        duplicate = OrganizationUnit.objects.filter(
+            workspace_owner_id=self.workspace_owner_id,
+            parent_id=self.parent_id,
+            unit_type=self.unit_type,
+            code=self.code,
+        )
+        if self.pk:
+            duplicate = duplicate.exclude(pk=self.pk)
+        if duplicate.exists():
+            raise ValidationError({"code": "This code is already used at the same hierarchy level."})
+
+    def __str__(self):
+        return self.path_label
+
+
+class OrganizationClientAccess(models.Model):
+    """Explicit client visibility inherited by an organization unit's descendants."""
+
+    organization_unit = models.ForeignKey(
+        OrganizationUnit,
+        on_delete=models.PROTECT,
+        related_name="client_access_rules",
+    )
+    client = models.ForeignKey(Client, on_delete=models.PROTECT, related_name="organization_access_rules")
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_by = models.ForeignKey(
+        settings.AUTH_USER_MODEL,
+        null=True,
+        blank=True,
+        on_delete=models.SET_NULL,
+        related_name="created_organization_client_access_rules",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["organization_unit__workspace_owner_id", "organization_unit__name", "client__name"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["organization_unit", "client"],
+                name="unique_client_access_per_organization_unit",
+            ),
+        ]
+        indexes = [
+            models.Index(fields=["organization_unit", "is_active"]),
+            models.Index(fields=["client", "is_active"]),
+        ]
+
+    def clean(self):
+        super().clean()
+        errors = {}
+        if not self.organization_unit_id:
+            errors["organization_unit"] = "Select an organization unit."
+        if not self.client_id:
+            errors["client"] = "Select a client."
+        if errors:
+            raise ValidationError(errors)
+        owner = self.organization_unit.workspace_owner
+        profile = getattr(owner, "employee_profile", None)
+        if getattr(profile, "account_type", "") == "internal_vendor":
+            if not VendorClientAllocation.objects.filter(vendor=owner, client=self.client, is_active=True).exists():
+                raise ValidationError({"client": "Allocate this client to the internal vendor before assigning it to a branch."})
+
+    def __str__(self):
+        return f"{self.organization_unit.path_label} · {self.client.name}"
+
+
 class VendorCommercialProfile(models.Model):
     """Commercial defaults for a user marked as an internal or external vendor."""
 

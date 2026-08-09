@@ -10,8 +10,8 @@ from django.utils import timezone
 from accounts.models import EmployeeProfile
 from surveys.models import Survey, SurveyAttempt
 
-from .access import vendor_scope_user_id
-from .models import AllocationReservation, VendorClientAllocation, VendorSurveyAllocation
+from .access import organization_unit_ancestor_ids, vendor_scope_user_id
+from .models import AllocationReservation, OrganizationClientAccess, VendorClientAllocation, VendorSurveyAllocation
 
 
 MONEY_QUANTUM = Decimal("0.01")
@@ -63,12 +63,47 @@ def _available_quantity_q(prefix="") -> Q:
     })
 
 
+def organization_client_ids_for_user(user) -> set[int] | None:
+    """Return explicit unit client grants, or ``None`` for a root/unassigned account."""
+
+    if hasattr(user, "_organization_client_ids_cache"):
+        return user._organization_client_ids_cache
+    profile = EmployeeProfile.objects.select_related(
+        "organization_unit__parent__parent"
+    ).filter(user=user).first()
+    if not profile or not profile.organization_unit_id:
+        user._organization_client_ids_cache = None
+        return None
+    current_unit = profile.organization_unit
+    visited_units = set()
+    while current_unit and current_unit.pk not in visited_units:
+        visited_units.add(current_unit.pk)
+        if not current_unit.is_active:
+            user._organization_client_ids_cache = set()
+            return set()
+        current_unit = current_unit.parent
+    unit_ids = organization_unit_ancestor_ids(profile.organization_unit)
+    client_ids = set(
+        OrganizationClientAccess.objects.filter(
+            organization_unit_id__in=unit_ids,
+            organization_unit__is_active=True,
+            client__is_active=True,
+            is_active=True,
+        ).values_list("client_id", flat=True)
+    )
+    user._organization_client_ids_cache = client_ids
+    return client_ids
+
+
 def scope_surveys_for_user(queryset, user):
     """Expose only explicitly allocated projects with client and project capacity."""
 
     vendor_id = vendor_scope_user_id(user)
+    organization_client_ids = organization_client_ids_for_user(user)
     if not vendor_id:
-        return queryset
+        if organization_client_ids is None:
+            return queryset
+        return queryset.filter(client_id__in=organization_client_ids).distinct()
     now = timezone.now()
     client_allocations = (
         VendorClientAllocation.objects.filter(
@@ -88,7 +123,7 @@ def scope_surveys_for_user(queryset, user):
         .filter(_available_quantity_q())
         .select_related("client_allocation", "client_allocation__vendor", "client_allocation__vendor__employee_profile")
     )
-    return (
+    scoped = (
         queryset.filter(vendor_allocations__in=available_rules, remaining__gt=0)
         .prefetch_related(
             Prefetch("client__vendor_allocations", queryset=client_allocations, to_attr="request_vendor_allocations"),
@@ -96,11 +131,17 @@ def scope_surveys_for_user(queryset, user):
         )
         .distinct()
     )
+    if organization_client_ids is not None:
+        scoped = scoped.filter(client_id__in=organization_client_ids)
+    return scoped
 
 
 def resolve_vendor_survey_context(user, survey: Survey, *, require_capacity=True, for_update=False):
     """Resolve the vendor's active client grant and mandatory project allocation."""
 
+    organization_client_ids = organization_client_ids_for_user(user)
+    if organization_client_ids is not None and survey.client_id not in organization_client_ids:
+        raise AllocationUnavailable("This client is not assigned to the user's organization unit.")
     vendor_id = vendor_scope_user_id(user)
     if not vendor_id:
         return None

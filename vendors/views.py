@@ -9,15 +9,23 @@ from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.access import HasFunctionPermission, any_function_permission_required, effective_permission_codes, has_function_access
+from accounts.access import (
+    HasFunctionPermission,
+    any_function_permission_required,
+    effective_permission_codes,
+    function_permission_required,
+    has_function_access,
+)
 from accounts.models import EmployeeProfile
 
-from .access import vendor_scope_user_id
+from .access import organization_workspace_owner_ids, vendor_scope_user_id
 
 from .models import (
     AllocationReservation,
     Client,
     ClientIntegration,
+    OrganizationClientAccess,
+    OrganizationUnit,
     VendorClientAllocation,
     VendorCommercialProfile,
     VendorAPIKey,
@@ -27,6 +35,9 @@ from .serializers import (
     AllocationReservationSerializer,
     ClientIntegrationSerializer,
     ClientSerializer,
+    OrganizationClientAccessSerializer,
+    OrganizationManagementOptionsSerializer,
+    OrganizationUnitSerializer,
     VendorClientAllocationSerializer,
     VendorCommercialProfileSerializer,
     VendorAPIKeySerializer,
@@ -79,6 +90,175 @@ def vendor_management_page(request):
         "api_columns": api_columns, "api_column_count": max(1, len(api_columns)),
         "first_vendor_tab": first_vendor_tab,
     })
+
+
+@function_permission_required("organization.view")
+def organization_management_page(request):
+    codes = effective_permission_codes(request.user)
+    can_view_structure = "organization.tab.structure" in codes
+    can_view_client_access = "organization.tab.client_access" in codes
+    can_view_clients = request.user.is_superuser and "organization.tab.clients" in codes
+    unit_columns = [
+        name for name in ("path", "type", "members", "clients", "status", "actions")
+        if f"organization.column.unit.{name}" in codes
+    ]
+    access_columns = [
+        name for name in ("unit", "client", "status", "actions")
+        if f"organization.column.access.{name}" in codes
+    ]
+    first_tab = next((name for name, available in (
+        ("structure", can_view_structure),
+        ("client-access", can_view_client_access),
+        ("clients", can_view_clients),
+    ) if available), "")
+    return render(request, "vendors/organization.html", {
+        "active_page": "organization",
+        "can_view_summary": "organization.summary" in codes,
+        "can_view_structure": can_view_structure,
+        "can_view_client_access": can_view_client_access,
+        "can_view_clients": can_view_clients,
+        "can_manage_units": any(
+            code in codes for code in ("organization.action.create_unit", "organization.action.edit_unit")
+        ),
+        "can_create_units": "organization.action.create_unit" in codes,
+        "can_edit_units": "organization.action.edit_unit" in codes,
+        "can_manage_unit_clients": "organization.action.assign_client" in codes,
+        "can_manage_clients": "clients.manage" in codes and request.user.is_superuser,
+        "organization_unit_columns": unit_columns,
+        "organization_access_columns": access_columns,
+        "first_organization_tab": first_tab,
+    })
+
+
+class OrganizationManagementOptionsView(APIView):
+    permission_classes = [HasFunctionPermission]
+    required_function_permission = "organization.view"
+
+    @extend_schema(
+        tags=["Organization hierarchy"],
+        summary="List organization workspace and client selector options",
+        responses={200: OrganizationManagementOptionsSerializer},
+    )
+    def get(self, request):
+        owner_ids = organization_workspace_owner_ids(request.user)
+        owners = get_user_model().objects.filter(pk__in=owner_ids).select_related("employee_profile").order_by(
+            "first_name", "last_name", "username"
+        )
+        clients = Client.objects.filter(is_active=True).order_by("name")
+        eligibility = {}
+        visible_client_ids = set()
+        for owner in owners:
+            profile = getattr(owner, "employee_profile", None)
+            if owner.is_superuser:
+                eligible = list(clients.values_list("id", flat=True))
+                owner_type = "owner"
+            else:
+                eligible = list(
+                    VendorClientAllocation.objects.filter(vendor=owner, client__is_active=True, is_active=True)
+                    .values_list("client_id", flat=True)
+                )
+                owner_type = getattr(profile, "account_type", "")
+            eligibility[str(owner.pk)] = eligible
+            visible_client_ids.update(eligible)
+            owner._organization_owner_type = owner_type
+        visible_clients = clients.filter(pk__in=visible_client_ids)
+        return Response({
+            "owners": [
+                {
+                    "id": owner.pk,
+                    "name": owner.get_full_name() or owner.username,
+                    "username": owner.username,
+                    "type": owner._organization_owner_type,
+                }
+                for owner in owners
+            ],
+            "clients": [
+                {"id": client.pk, "name": client.name, "code": client.code, "provider_code": client.provider_code}
+                for client in visible_clients
+            ],
+            "client_eligibility": eligibility,
+        })
+
+
+class OrganizationScopedMixin:
+    def organization_owner_ids(self):
+        return organization_workspace_owner_ids(self.request.user)
+
+    def perform_create(self, serializer):
+        serializer.save(created_by=self.request.user)
+
+    def perform_update(self, serializer):
+        serializer.save()
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        instance.is_active = False
+        instance.save(update_fields=["is_active", "updated_at"])
+        return Response(status=status.HTTP_204_NO_CONTENT)
+
+
+@extend_schema_view(
+    list=extend_schema(tags=["Organization hierarchy"], summary="List Branch, Sub-branch and Shift units"),
+    create=extend_schema(tags=["Organization hierarchy"], summary="Create an organization unit"),
+    retrieve=extend_schema(tags=["Organization hierarchy"], summary="Get an organization unit"),
+    update=extend_schema(tags=["Organization hierarchy"], summary="Replace an organization unit"),
+    partial_update=extend_schema(tags=["Organization hierarchy"], summary="Update an organization unit"),
+    destroy=extend_schema(tags=["Organization hierarchy"], summary="Deactivate an organization unit"),
+)
+class OrganizationUnitViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
+    serializer_class = OrganizationUnitSerializer
+    permission_classes = [HasFunctionPermission]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ["workspace_owner", "parent", "unit_type", "is_active"]
+    search_fields = ["name", "code", "description", "workspace_owner__username"]
+    ordering_fields = ["unit_type", "name", "created_at", "updated_at"]
+    ordering = ["workspace_owner_id", "unit_type", "name"]
+
+    def get_required_function_permission(self):
+        if self.action in {"list", "retrieve"}:
+            return "organization.view"
+        if self.action == "create":
+            return "organization.action.create_unit"
+        return "organization.action.edit_unit"
+
+    def get_queryset(self):
+        return OrganizationUnit.objects.filter(
+            workspace_owner_id__in=self.organization_owner_ids()
+        ).select_related(
+            "workspace_owner", "workspace_owner__employee_profile", "parent", "created_by"
+        ).annotate(
+            member_count=Count("members", distinct=True),
+            client_count=Count("client_access_rules", filter=Q(client_access_rules__is_active=True), distinct=True),
+        )
+
+
+@extend_schema_view(
+    list=extend_schema(tags=["Organization hierarchy"], summary="List unit-level client visibility grants"),
+    create=extend_schema(tags=["Organization hierarchy"], summary="Assign a client to an organization unit"),
+    retrieve=extend_schema(tags=["Organization hierarchy"], summary="Get a unit client grant"),
+    update=extend_schema(tags=["Organization hierarchy"], summary="Replace a unit client grant"),
+    partial_update=extend_schema(tags=["Organization hierarchy"], summary="Update a unit client grant"),
+    destroy=extend_schema(tags=["Organization hierarchy"], summary="Deactivate a unit client grant"),
+)
+class OrganizationClientAccessViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
+    serializer_class = OrganizationClientAccessSerializer
+    permission_classes = [HasFunctionPermission]
+    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filterset_fields = ["organization_unit", "organization_unit__workspace_owner", "client", "is_active"]
+    search_fields = ["organization_unit__name", "organization_unit__code", "client__name", "client__code"]
+    ordering_fields = ["created_at", "updated_at", "organization_unit__name", "client__name"]
+    ordering = ["organization_unit__workspace_owner_id", "organization_unit__name", "client__name"]
+
+    def get_required_function_permission(self):
+        return "organization.view" if self.action in {"list", "retrieve"} else "organization.action.assign_client"
+
+    def get_queryset(self):
+        return OrganizationClientAccess.objects.filter(
+            organization_unit__workspace_owner_id__in=self.organization_owner_ids()
+        ).select_related(
+            "organization_unit", "organization_unit__workspace_owner", "organization_unit__parent__parent",
+            "client", "created_by",
+        )
 
 
 class VendorManagementOptionsView(APIView):

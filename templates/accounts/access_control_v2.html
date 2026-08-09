@@ -40,7 +40,7 @@
     {% for employee in employees %}
     <tr>
       <td><strong>{{ employee.get_full_name|default:employee.username }}</strong><small>{{ employee.email|default:employee.username }}{% if employee.employee_profile.created_by %} · by {{ employee.employee_profile.created_by.username }}{% endif %}</small></td>
-      <td><span class="vendor-pill {{ employee.employee_profile.account_type }}">{{ employee.employee_profile.get_account_type_display }}</span>{% if employee.employee_profile.company_name %}<small>{{ employee.employee_profile.company_name }}</small>{% endif %}</td>
+      <td><span class="vendor-pill {{ employee.employee_profile.account_type }}">{{ employee.employee_profile.get_account_type_display }}</span>{% if employee.employee_profile.organization_unit %}<small>{{ employee.employee_profile.organization_unit.path_label }}</small>{% elif employee.employee_profile.company_name %}<small>{{ employee.employee_profile.company_name }}{% if employee.employee_profile.department %} / {{ employee.employee_profile.department }}{% endif %}</small>{% endif %}</td>
       <td><span class="role-pill">{{ employee.employee_profile.role.name|default:"Unassigned" }}</span></td>
       <td><div class="override-summary">{% for override in employee.function_overrides.all %}<span class="{{ override.effect }}">{{ override.get_effect_display }} · {{ override.function.name }}</span>{% empty %}<em>Role defaults only</em>{% endfor %}</div></td>
       <td><span class="account-status {% if not employee.is_active %}inactive{% endif %}"><i></i>{% if employee.is_active %}Active{% else %}Inactive{% endif %}</span></td>
@@ -60,10 +60,9 @@
         <label><span>Last name</span><input name="last_name" autocomplete="family-name"></label>
         <label class="wide"><span>Email / login</span><input name="email" type="email" required autocomplete="email"></label>
         <label class="wide"><span>Password</span><input name="password" type="password" minlength="8" autocomplete="new-password"><small data-password-note>Required for a new user, minimum 8 characters.</small></label>
-        <label><span>Account type</span><select name="account_type">{% if is_internal_vendor %}<option value="employee">Employee / respondent</option>{% elif can_create_vendor_accounts %}<option value="internal_vendor">Internal vendor</option><option value="external_vendor">External vendor</option>{% endif %}</select></label>
+        <label><span>Account type</span><select name="account_type"><option value="employee">Employee / respondent</option>{% if not is_internal_vendor and can_create_vendor_accounts %}<option value="internal_vendor">Internal vendor</option><option value="external_vendor">External vendor</option>{% endif %}</select></label>
         <label data-role-field><span>Default role</span><select name="role" required>{% for role in roles %}<option value="{{ role.slug }}">{{ role.name }}</option>{% endfor %}</select><small data-role-note>Role default can be customized.</small></label>
-        <label data-branch-field><span>Branch / company</span><input name="company_name" placeholder="e.g. Gurgaon"></label>
-        <label data-branch-field><span>Sub-branch / department</span><input name="department" placeholder="e.g. Operations"></label>
+        <label class="wide" data-organization-field><span>Branch / Sub-branch / Shift</span><select name="organization_unit"><option value="">Unassigned legacy user</option>{% for unit in organization_units %}<option value="{{ unit.id }}" data-unit-type="{{ unit.unit_type }}">{{ unit.workspace_owner.get_full_name|default:unit.workspace_owner.username }} · {{ unit.path_label }} ({{ unit.get_unit_type_display }})</option>{% endfor %}</select><small>Employees and Team Leads should be assigned to a Shift.</small></label>
         <label class="toggle-row wide"><input name="is_active" type="checkbox" checked><span>Account is active</span></label>
       </div>
       <section class="permission-editor"><div><h3>Individual permission overrides</h3><p>Use role defaults normally. Select Allow for extra access or Deny to remove a role permission.</p></div>
@@ -90,4 +89,4 @@
 <section class="confirm-modal" id="confirmModal" role="alertdialog" aria-modal="true" hidden><div class="confirm-icon">!</div><h2>Delete <span data-delete-type>item</span>?</h2><p><strong data-delete-label></strong> will be permanently removed.</p><div><button type="button" class="cancel-button" data-close-modal>Cancel</button><button type="button" class="danger-button" data-confirm-delete>Delete</button></div></section>
 <div class="access-toast" data-access-toast aria-live="polite"></div>
 {% endblock %}
-{% block scripts %}<script src="{% static 'accounts/access.js' %}?v=3" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'accounts/access.js' %}?v=4" defer></script>{% endblock %}

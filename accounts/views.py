@@ -11,11 +11,13 @@ from rest_framework import filters, viewsets
 
 from .access import (
     EXTERNAL_VENDOR_FORBIDDEN_CODES, HasFunctionPermission, any_function_permission_required, assignable_functions, assignable_roles,
-    can_manage_role, has_function_access, subordinate_user_ids,
+    can_manage_role, has_function_access, manageable_user_ids,
 )
 from .forms import FirstAdminSetupForm, WorkspaceAuthenticationForm
 from .models import AccessFunction, EmployeeProfile, Role
 from .serializers import AccessFunctionSerializer, RoleSerializer, UserAccessSerializer
+from vendors.access import organization_workspace_owner_ids
+from vendors.models import OrganizationUnit
 
 
 class WorkspaceLoginView(LoginView):
@@ -62,12 +64,20 @@ def first_admin_setup(request):
 def access_control_page(request):
     roles = assignable_roles(request.user).annotate(employee_count=Count("employees")).prefetch_related("function_assignments__function")
     functions = assignable_functions(request.user)
-    user_ids = subordinate_user_ids(request.user)
+    user_ids = manageable_user_ids(request.user)
     if request.user.is_superuser:
         users = get_user_model().objects.all()
     else:
         users = get_user_model().objects.filter(id__in=user_ids)
-    users = users.select_related("employee_profile__role", "employee_profile__created_by").prefetch_related("function_overrides__function")
+    users = users.select_related(
+        "employee_profile__role", "employee_profile__created_by",
+        "employee_profile__organization_unit__workspace_owner",
+        "employee_profile__organization_unit__parent__parent",
+    ).prefetch_related("function_overrides__function")
+    organization_units = OrganizationUnit.objects.filter(
+        workspace_owner_id__in=organization_workspace_owner_ids(request.user),
+        is_active=True,
+    ).select_related("workspace_owner", "parent__parent").order_by("workspace_owner__username", "unit_type", "name")
     requester_type = getattr(getattr(request.user, "employee_profile", None), "account_type", "")
     return render(request, "accounts/access_control_v2.html", {
         "active_page": "access-control", "roles": roles, "functions": functions, "employees": users,
@@ -83,6 +93,7 @@ def access_control_page(request):
             else "Add user"
         ),
         "can_create_roles": has_function_access(request.user, "roles.create"),
+        "organization_units": organization_units,
     })
 
 
@@ -176,10 +187,14 @@ class UserAccessViewSet(viewsets.ModelViewSet):
         }.get(self.action, "users.view")
 
     def get_queryset(self):
-        queryset = get_user_model().objects.select_related("employee_profile__role", "employee_profile__created_by").prefetch_related("function_overrides__function")
+        queryset = get_user_model().objects.select_related(
+            "employee_profile__role", "employee_profile__created_by",
+            "employee_profile__organization_unit__workspace_owner",
+            "employee_profile__organization_unit__parent__parent",
+        ).prefetch_related("function_overrides__function")
         if self.request.user.is_superuser:
             return queryset
-        return queryset.filter(id__in=subordinate_user_ids(self.request.user), is_superuser=False)
+        return queryset.filter(id__in=manageable_user_ids(self.request.user), is_superuser=False)
 
     def perform_destroy(self, instance):
         if instance == self.request.user or instance.is_superuser:

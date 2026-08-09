@@ -10,6 +10,7 @@ from .access import (
     has_function_access,
 )
 from .models import AccessFunction, EmployeeProfile, Role, RoleFunctionPermission, UserFunctionOverride
+from vendors.models import OrganizationUnit
 
 
 class AccessFunctionSerializer(serializers.ModelSerializer):
@@ -92,6 +93,13 @@ class UserAccessSerializer(serializers.ModelSerializer):
     department = serializers.CharField(write_only=True, required=False, allow_blank=True, max_length=120)
     sub_branch = serializers.CharField(source="employee_profile.department", read_only=True)
     created_by = serializers.CharField(source="employee_profile.created_by.username", read_only=True, allow_null=True)
+    organization_unit = serializers.PrimaryKeyRelatedField(
+        queryset=OrganizationUnit.objects.filter(is_active=True),
+        required=False,
+        allow_null=True,
+        write_only=True,
+    )
+    organization_unit_details = serializers.SerializerMethodField()
 
     class Meta:
         model = get_user_model()
@@ -100,6 +108,7 @@ class UserAccessSerializer(serializers.ModelSerializer):
             "role", "role_details", "allow_codes", "deny_codes", "allowed_overrides", "denied_overrides",
             "effective_permissions", "password", "account_type", "account_type_details", "company_name", "company",
             "department", "sub_branch", "created_by",
+            "organization_unit", "organization_unit_details",
         ]
         extra_kwargs = {"username": {"required": False}}
         read_only_fields = ["last_login"]
@@ -114,6 +123,22 @@ class UserAccessSerializer(serializers.ModelSerializer):
     def get_account_type_details(self, obj) -> dict:
         profile = getattr(obj, "employee_profile", None)
         return {"value": profile.account_type, "label": profile.get_account_type_display()} if profile else {"value": "employee", "label": "Employee"}
+
+    def get_organization_unit_details(self, obj) -> dict | None:
+        profile = getattr(obj, "employee_profile", None)
+        unit = getattr(profile, "organization_unit", None) if profile else None
+        if not unit:
+            return None
+        owner = unit.workspace_owner
+        return {
+            "id": unit.pk,
+            "name": unit.name,
+            "type": unit.unit_type,
+            "type_label": unit.get_unit_type_display(),
+            "path": unit.path_label,
+            "workspace_owner": owner.pk,
+            "workspace_owner_name": owner.get_full_name() or owner.username,
+        }
 
     def get_allowed_overrides(self, obj) -> list[str]:
         return list(obj.function_overrides.filter(effect=UserFunctionOverride.Effect.ALLOW).values_list("function__code", flat=True))
@@ -133,13 +158,39 @@ class UserAccessSerializer(serializers.ModelSerializer):
             "account_type",
             getattr(getattr(self.instance, "employee_profile", None), "account_type", EmployeeProfile.AccountType.EMPLOYEE),
         )
+        requested_role = attrs.get(
+            "role",
+            getattr(getattr(getattr(self.instance, "employee_profile", None), "role", None), "slug", None),
+        )
+        organization_unit = attrs.get(
+            "organization_unit",
+            getattr(getattr(self.instance, "employee_profile", None), "organization_unit", None),
+        )
         forbidden_allows = sorted(set(attrs.get("allow_codes", [])) & EXTERNAL_VENDOR_FORBIDDEN_CODES)
         if requested_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR and forbidden_allows:
             raise serializers.ValidationError({
                 "allow_codes": f"External vendors cannot receive management functions: {', '.join(forbidden_allows)}"
             })
-        if self.instance is not None:
-            return attrs
+        if requested_type in {
+            EmployeeProfile.AccountType.INTERNAL_VENDOR,
+            EmployeeProfile.AccountType.EXTERNAL_VENDOR,
+        } and organization_unit:
+            raise serializers.ValidationError({"organization_unit": "Vendor accounts are workspace roots and cannot belong to a shift."})
+        if organization_unit:
+            from vendors.access import organization_workspace_owner_ids
+            if organization_unit.workspace_owner_id not in organization_workspace_owner_ids(request.user):
+                raise serializers.ValidationError({"organization_unit": "You cannot assign users to this organization workspace."})
+            current_unit = organization_unit
+            visited_units = set()
+            while current_unit and current_unit.pk not in visited_units:
+                visited_units.add(current_unit.pk)
+                if not current_unit.is_active:
+                    raise serializers.ValidationError({
+                        "organization_unit": "Users cannot be assigned below an inactive organization unit."
+                    })
+                current_unit = current_unit.parent
+            if requested_role in {"employee", "team-lead"} and organization_unit.unit_type != OrganizationUnit.UnitType.SHIFT:
+                raise serializers.ValidationError({"organization_unit": "Employees and Team Leads must be assigned to a Shift."})
         creator_profile = getattr(request.user, "employee_profile", None)
         creator_type = getattr(creator_profile, "account_type", EmployeeProfile.AccountType.EMPLOYEE)
         if creator_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
@@ -225,7 +276,7 @@ class UserAccessSerializer(serializers.ModelSerializer):
 
     def _update_access(
         self, user, role_slug, allow_codes, deny_codes, account_type=serializers.empty,
-        company_name=serializers.empty, department=serializers.empty,
+        company_name=serializers.empty, department=serializers.empty, organization_unit=serializers.empty,
     ):
         profile, _ = EmployeeProfile.objects.get_or_create(user=user)
         if role_slug is not serializers.empty:
@@ -236,6 +287,8 @@ class UserAccessSerializer(serializers.ModelSerializer):
             profile.company_name = company_name
         if department is not serializers.empty:
             profile.department = department
+        if organization_unit is not serializers.empty:
+            profile.organization_unit = organization_unit
         profile.save()
         user.employee_profile = profile
         if profile.account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
@@ -261,9 +314,11 @@ class UserAccessSerializer(serializers.ModelSerializer):
         role_slug = self._forced_role(account_type, requested_role)
         company_name = validated_data.pop("company_name", "")
         department = validated_data.pop("department", "")
+        organization_unit = validated_data.pop("organization_unit", None)
         if account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
             company_name = ""
             department = ""
+            organization_unit = None
         if not password:
             raise serializers.ValidationError({"password": "Password is required when creating a user."})
         if not validated_data.get("email"):
@@ -278,7 +333,9 @@ class UserAccessSerializer(serializers.ModelSerializer):
         profile, _ = EmployeeProfile.objects.get_or_create(user=user)
         profile.created_by = request.user if request else None
         profile.save(update_fields=["created_by", "updated_at"])
-        self._update_access(user, role_slug, allow_codes, deny_codes, account_type, company_name, department)
+        self._update_access(
+            user, role_slug, allow_codes, deny_codes, account_type, company_name, department, organization_unit
+        )
         self._ensure_vendor_policy(user, account_type, request.user if request else None)
         return user
 
@@ -291,6 +348,7 @@ class UserAccessSerializer(serializers.ModelSerializer):
         account_type = validated_data.pop("account_type", serializers.empty)
         company_name = validated_data.pop("company_name", serializers.empty)
         department = validated_data.pop("department", serializers.empty)
+        organization_unit = validated_data.pop("organization_unit", serializers.empty)
         final_account_type = (
             account_type
             if account_type is not serializers.empty
@@ -300,6 +358,7 @@ class UserAccessSerializer(serializers.ModelSerializer):
         if final_account_type == EmployeeProfile.AccountType.EXTERNAL_VENDOR:
             company_name = ""
             department = ""
+            organization_unit = None
         previous_email = instance.email
         for field, value in validated_data.items():
             setattr(instance, field, value)
@@ -308,7 +367,9 @@ class UserAccessSerializer(serializers.ModelSerializer):
         if password:
             instance.set_password(password)
         instance.save()
-        self._update_access(instance, role_slug, allow_codes, deny_codes, account_type, company_name, department)
+        self._update_access(
+            instance, role_slug, allow_codes, deny_codes, account_type, company_name, department, organization_unit
+        )
         request = self.context.get("request")
         self._ensure_vendor_policy(instance, final_account_type, request.user if request else None)
         return instance

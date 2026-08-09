@@ -1,6 +1,6 @@
 # Vendor, client, quantity and CPI operations
 
-This feature is additive and isolated on the UAT branch. Vendor allocation is enforced in project listing, copied-link validation, respondent initiation, callback finalization and legacy callback reconciliation. Ordinary non-vendor accounts continue to use the original inventory flow.
+This feature is additive and is now part of the main application. Vendor allocation is enforced in project listing, copied-link validation, respondent initiation, callback finalization and legacy callback reconciliation.
 
 ## Account rules
 
@@ -9,7 +9,20 @@ This feature is additive and isolated on the UAT branch. Vendor allocation is en
 - Every internal vendor is assigned the system `Admin` role automatically. With `respondents.create` it may create employee/respondent children only.
 - Every external vendor is assigned the safe system `External Vendor` role automatically. It can receive individual allow/deny overrides for permitted business functions.
 - An external vendor is always terminal and cannot create users or roles, even if an Admin role or management allow-override is assigned accidentally. Identity, role, client, allocation and synchronization management functions are removed at permission evaluation time as a second line of defense.
-- Branch/company and sub-branch/department apply to the internal hierarchy. External vendors store neither value and User Hits reports branch as not applicable.
+- External vendors are independent terminal accounts. They never belong to the internal organization hierarchy.
+
+## Internal organization hierarchy
+
+Internal operations use real relational units rather than profile text fields:
+
+1. a super-admin office or internal vendor owns one or more `OrganizationUnit` Branch rows;
+2. every Sub-branch belongs to exactly one Branch;
+3. every Shift belongs to exactly one Sub-branch; and
+4. Team Leads and Employees are assigned to a Shift through `EmployeeProfile.organization_unit`.
+
+Multiple Team Leads may share a Shift. Each Team Lead can see lower-rank employee Studies and User Hits in that Shift. A Manager or Admin assigned higher in the tree sees lower-rank activity in descendant units. Internal-vendor roots can manage and audit their full organization tree. Existing unassigned profiles remain valid for backward compatibility.
+
+`OrganizationClientAccess` assigns a client to any unit. Grants are inherited downward, so a Branch grant reaches all child Sub-branches and Shifts. Main-office grants may use any active client. Internal-vendor grants must also exist in that vendor's active `VendorClientAllocation`; the unit rule can narrow vendor visibility but can never expand beyond owner-controlled allocations. Project listing, detail access and manually punched respondent links enforce the same client scope.
 
 ## Data hierarchy
 
@@ -77,8 +90,11 @@ All endpoints require function permissions and are documented in Swagger:
 - `/api/v1/vendors/reservations/` (read-only audit)
 - `/api/v1/vendors/directory/` (vendor policy directory)
 - `/api/v1/vendors/management-options/` (non-secret vendor/client selector data)
+- `/api/v1/vendors/organization-units/` (Branch, Sub-branch and Shift CRUD)
+- `/api/v1/vendors/organization-client-access/` (unit client visibility CRUD)
+- `/api/v1/vendors/organization-options/` (scoped owner/client selector data)
 
-The responsive `/vendors/` workspace uses separate modals for commercial policy, client allocation, project allocation and API-key operations. User creation stays in the Access Control modal so account type, role and function-level allow/deny overrides have one source of truth.
+The responsive `/vendors/` workspace uses separate modals for commercial policy, client allocation, project allocation and API-key operations. `/organization/` manages Branch, Sub-branch, Shift and inherited client routing without horizontal page overflow. User creation stays in the Access Control modal and selects a real organization unit, so account type, role, hierarchy and function-level allow/deny overrides have one source of truth.
 
 Super admins and non-vendor management accounts see the full authorized dataset. Vendor accounts and respondents below an internal vendor are restricted to that vendor's allocations. Commercial policies, quantities and API keys remain owner-controlled and read-only for vendor-scoped accounts, even if a manage permission is assigned accidentally.
 

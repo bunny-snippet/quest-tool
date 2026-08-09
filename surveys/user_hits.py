@@ -41,7 +41,10 @@ def _empty_counts() -> dict[str, int]:
 def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
     users = list(
         get_user_model().objects.filter(pk__in=user_ids)
-        .select_related("employee_profile", "employee_profile__created_by")
+        .select_related(
+            "employee_profile", "employee_profile__created_by",
+            "employee_profile__organization_unit__parent__parent",
+        )
         .order_by("first_name", "last_name", "username")
     )
     profiles = {}
@@ -49,7 +52,7 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
     while pending_ids:
         batch = list(
             EmployeeProfile.objects.filter(user_id__in=pending_ids)
-            .select_related("user", "created_by")
+            .select_related("user", "created_by", "organization_unit__parent__parent")
         )
         profiles.update({profile.user_id: profile for profile in batch})
         pending_ids = {
@@ -75,8 +78,20 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
     metadata = {}
     for platform_user in users:
         profile = profiles.get(platform_user.pk)
-        branch = inherited_branch(platform_user.pk)
-        sub_branch = (profile.department.strip() if profile and profile.department and branch else "") or branch
+        unit = getattr(profile, "organization_unit", None) if profile else None
+        if unit:
+            unit_labels = {}
+            current = unit
+            while current:
+                unit_labels[current.unit_type] = current.name
+                current = current.parent
+            branch = unit_labels.get("branch", "")
+            sub_branch = unit_labels.get("sub_branch", "")
+            shift = unit_labels.get("shift", "")
+        else:
+            branch = inherited_branch(platform_user.pk)
+            sub_branch = (profile.department.strip() if profile and profile.department and branch else "") or branch
+            shift = ""
         metadata[platform_user.pk] = {
             "user_id": platform_user.pk,
             "user_name": platform_user.get_full_name() or platform_user.username,
@@ -84,6 +99,7 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
             "user_email": platform_user.email,
             "branch": branch,
             "sub_branch": sub_branch,
+            "shift": shift,
         }
     return metadata
 
@@ -102,6 +118,7 @@ def user_hit_filter_options(user) -> dict:
         "users": tracked,
         "branches": sorted({item["branch"] for item in tracked if item["branch"]}, key=str.casefold),
         "sub_branches": sorted({item["sub_branch"] for item in tracked if item["sub_branch"]}, key=str.casefold),
+        "shifts": sorted({item["shift"] for item in tracked if item["shift"]}, key=str.casefold),
     }
 
 
@@ -118,12 +135,15 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
 
     selected_branches = _csv_values(params.get("branch", ""))
     selected_sub_branches = _csv_values(params.get("sub_branch", ""))
+    selected_shifts = _csv_values(params.get("shift", ""))
     if selected_branches:
         visible_ids = {user_id for user_id in visible_ids if metadata.get(user_id, {}).get("branch") in selected_branches}
     if selected_sub_branches:
         visible_ids = {
             user_id for user_id in visible_ids if metadata.get(user_id, {}).get("sub_branch") in selected_sub_branches
         }
+    if selected_shifts:
+        visible_ids = {user_id for user_id in visible_ids if metadata.get(user_id, {}).get("shift") in selected_shifts}
 
     from_date = parse_date(params.get("from_date", "")) if params.get("from_date") else None
     to_date = parse_date(params.get("to_date", "")) if params.get("to_date") else None
@@ -192,7 +212,7 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
         rows = [
             row for row in rows
             if any(needle in str(row[field]).casefold() for field in (
-                "user_name", "username", "user_email", "branch", "sub_branch"
+                "user_name", "username", "user_email", "branch", "sub_branch", "shift"
             ))
         ]
     rows.sort(key=lambda row: (row["user_name"].casefold(), row["user_id"]))

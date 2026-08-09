@@ -17,6 +17,7 @@ Hostinger Ubuntu VPS deployment with MySQL, Nginx, Gunicorn, Redis and Celery is
 - Dynamic respondent pre-screener with 10-character RID, answer capture, supplier redirect, four callback outcomes, IP tracking and measured LOI.
 - Session login plus dynamic role/function access control with per-user allow and deny overrides.
 - UAT vendor operations workspace with internal/external policy, client visibility, quantity limits, CPI cuts and optional survey overrides.
+- Internal organization workspace with strict Branch → Sub-branch → Shift hierarchy, multiple Team Leads per Shift and inherited client visibility.
 - Transactional allocation reservation at respondent start, terminal consume/release and scheduled abandoned-reservation expiry.
 - Swagger UI, ReDoc, downloadable OpenAPI schema, Django Admin, sync audit records, and automated tests.
 
@@ -40,6 +41,7 @@ Open:
 - Swagger: `http://127.0.0.1:8000/api/docs/`
 - ReDoc: `http://127.0.0.1:8000/api/redoc/`
 - Admin: `http://127.0.0.1:8000/admin/`
+- Organization: `http://127.0.0.1:8000/organization/`
 
 Run one sync without Celery:
 
@@ -82,6 +84,8 @@ Opening Quota or Pre-screening in the UI also refreshes that survey immediately 
 | CRUD | `/api/v1/vendors/survey-allocations/` | Optional per-survey limit or CPI override |
 | CRUD | `/api/v1/vendors/api-keys/` | Issue/revoke hashed external-vendor API credentials (plaintext returned once) |
 | `GET` | `/api/v1/vendors/reservations/` | Reservation lifecycle audit |
+| CRUD | `/api/v1/vendors/organization-units/` | Branch, Sub-branch and Shift hierarchy |
+| CRUD | `/api/v1/vendors/organization-client-access/` | Inherited unit-level client visibility |
 | CRUD | `/api/v1/access/roles/` | Roles and their explicit function assignments |
 | CRUD | `/api/v1/access/functions/` | Function permission catalog |
 | CRUD | `/api/v1/access/users/` | Employee accounts, role and individual allow/deny overrides |

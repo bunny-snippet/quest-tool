@@ -38,6 +38,13 @@
       <div class="multi-menu" hidden>{% for sub_branch in sub_branches %}<label><input type="checkbox" value="{{ sub_branch }}"><span>{{ sub_branch }}</span></label>{% empty %}<span class="filter-empty">No sub-branches yet</span>{% endfor %}</div>
     </div>
   </div>{% endif %}
+  {% if hit_filters.shift %}<div class="field multi-field">
+    <label id="hitShiftLabel">Shift</label>
+    <div class="multi-select" data-hit-filter="shift">
+      <button class="multi-trigger" type="button" aria-labelledby="hitShiftLabel" aria-expanded="false"><span>All shifts</span><i>⌄</i></button>
+      <div class="multi-menu" hidden>{% for shift in shifts %}<label><input type="checkbox" value="{{ shift }}"><span>{{ shift }}</span></label>{% empty %}<span class="filter-empty">No shifts yet</span>{% endfor %}</div>
+    </div>
+  </div>{% endif %}
   {% if hit_filters.user %}<div class="field multi-field">
     <label id="hitUserLabel">Users</label>
     <div class="multi-select" data-hit-filter="user">
@@ -66,6 +73,7 @@
       <thead><tr>
         {% if 'branch' in hit_columns %}<th>Branch</th>{% endif %}
         {% if 'sub_branch' in hit_columns %}<th>Sub-branch</th>{% endif %}
+        {% if 'shift' in hit_columns %}<th>Shift</th>{% endif %}
         {% if 'user' in hit_columns %}<th>User</th>{% endif %}
         {% if 'date' in hit_columns %}<th>Date</th>{% endif %}
         {% if 'hits' in hit_columns %}<th>Hits</th>{% endif %}
@@ -86,4 +94,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/user_hits.js' %}?v=5" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/user_hits.js' %}?v=6" defer></script>{% endblock %}

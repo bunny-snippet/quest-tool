@@ -1,6 +1,6 @@
 # Architecture
 
-The UAT vendor/client allocation extension is documented in `vendor-allocation.md`. It adds client ownership, commercial policy, two-level quantity allocation and immutable attempt CPI snapshots without replacing the existing survey synchronization or respondent tracking tables.
+The vendor/client allocation and internal organization model is documented in `vendor-allocation.md`. It adds client ownership, commercial policy, quantity allocation, Branch → Sub-branch → Shift routing and immutable attempt CPI snapshots without replacing the existing survey synchronization or respondent tracking tables.
 
 ## Boundary and responsibilities
 
@@ -47,7 +47,7 @@ One record per respondent journey. RID is a random 10-character identifier and i
 
 The responsive Studies UI deliberately renders a compact operational subset. Its filtered CSV stream joins attempt, survey, platform-user, employee-profile and role context and includes the full audit payload. Streaming iteration keeps large exports memory-bounded, while CSV formula escaping prevents spreadsheet formula injection.
 
-The User Hits report derives its metrics from these immutable attempt rows. Each result represents one platform user and one IST calendar date. All attempts initiated on that date count as hits; status `1` attempts count as completes. Desktop, mobile and tablet use the captured entry-device classification, while missing legacy device audit data remains explicitly unclassified. Branch resolves from the user's company/vendor ownership chain and sub-branch from the employee department, with stable fallbacks for older profiles.
+The User Hits report derives its metrics from these immutable attempt rows. Each result represents one platform user and one IST calendar date. All attempts initiated on that date count as hits; status `1` attempts count as completes. Desktop, mobile and tablet use the captured entry-device classification, while missing legacy device audit data remains explicitly unclassified. Branch, Sub-branch and Shift resolve from `EmployeeProfile.organization_unit`; stable text-field fallbacks remain for legacy unassigned profiles.
 
 ### `LocalIdSequence`
 
@@ -70,4 +70,4 @@ For production volume, use PostgreSQL and Redis, run at least one dedicated work
 - The supplier token comes from process environment only and is sent in `x-access-token` over HTTPS.
 - It is never serialized, rendered, logged intentionally, or stored in survey payloads.
 - Raw upstream errors are kept server-side.
-- Production should add organization authentication/authorization around UI and REST routes before exposing the service beyond a trusted network.
+- Organization UI, component controls and REST actions use function-level permissions; querysets are additionally restricted to the current super-admin or internal-vendor workspace.

@@ -18,6 +18,16 @@
     userForm.elements.role.add(new Option(label, value));
   }
 
+  function applyOrganizationRules() {
+    if (!userForm?.elements.organization_unit || !userForm?.elements.role) return;
+    const shiftOnly = ['employee', 'team-lead'].includes(userForm.elements.role.value);
+    [...userForm.elements.organization_unit.options].forEach((option) => {
+      option.disabled = Boolean(option.value && shiftOnly && option.dataset.unitType !== 'shift');
+    });
+    const selected = userForm.elements.organization_unit.selectedOptions[0];
+    if (selected?.disabled) userForm.elements.organization_unit.value = '';
+  }
+
   function applyAccountTypeRules() {
     if (!userForm?.elements.account_type) return;
     const type = userForm.elements.account_type.value;
@@ -33,16 +43,14 @@
       role.disabled = false;
       note.textContent = 'Choose a role for this respondent.';
     }
-    $$('[data-branch-field]', userModal).forEach((item) => { item.hidden = type === 'external_vendor'; });
-    if (type === 'external_vendor') {
-      userForm.elements.company_name.value = '';
-      userForm.elements.department.value = '';
-    }
+    $$('[data-organization-field]', userModal).forEach((item) => { item.hidden = type !== 'employee'; });
+    if (type !== 'employee') userForm.elements.organization_unit.value = '';
     $$('[data-function]', userModal).forEach((row) => {
       const blocked = type === 'external_vendor' && externalForbidden.has(row.dataset.function);
       row.hidden = blocked;
       if (blocked) $('select', row).value = 'role';
     });
+    applyOrganizationRules();
   }
 
   function toast(message, error = false) {
@@ -109,8 +117,7 @@
       userForm.elements.last_name.value = data.last_name || '';
       userForm.elements.email.value = data.email || '';
       userForm.elements.account_type.value = data.account_type_details?.value || 'employee';
-      userForm.elements.company_name.value = data.company || '';
-      userForm.elements.department.value = data.sub_branch || '';
+      userForm.elements.organization_unit.value = data.organization_unit_details?.id || '';
       userForm.elements.role.value = data.role_details?.slug || '';
       userForm.elements.is_active.checked = data.is_active;
       (data.allowed_overrides || []).forEach((code) => { const item = $(`[data-function="${CSS.escape(code)}"] select`, userModal); if (item) item.value = 'allow'; });
@@ -122,12 +129,13 @@
     } catch (error) { toast(error.message, true); }
   }));
   userForm?.elements.account_type.addEventListener('change', applyAccountTypeRules);
+  userForm?.elements.role.addEventListener('change', applyOrganizationRules);
 
   userForm?.addEventListener('submit', async (event) => {
     event.preventDefault(); const errorBox = $('[data-user-error]'); errorBox.hidden = true;
     const allow = [], deny = [];
     $$('[data-function]', userModal).forEach((row) => { const value = $('select', row).value; if (value === 'allow') allow.push(row.dataset.function); if (value === 'deny') deny.push(row.dataset.function); });
-    const payload = { first_name: userForm.elements.first_name.value.trim(), last_name: userForm.elements.last_name.value.trim(), email: userForm.elements.email.value.trim(), role: userForm.elements.role.value, account_type: userForm.elements.account_type.value, company_name: userForm.elements.company_name.value.trim(), department: userForm.elements.department.value.trim(), is_active: userForm.elements.is_active.checked, allow_codes: allow, deny_codes: deny };
+    const payload = { first_name: userForm.elements.first_name.value.trim(), last_name: userForm.elements.last_name.value.trim(), email: userForm.elements.email.value.trim(), role: userForm.elements.role.value, account_type: userForm.elements.account_type.value, organization_unit: userForm.elements.organization_unit.value ? Number(userForm.elements.organization_unit.value) : null, is_active: userForm.elements.is_active.checked, allow_codes: allow, deny_codes: deny };
     if (userForm.elements.password.value) payload.password = userForm.elements.password.value;
     try {
       await api(userId ? `/api/v1/access/users/${userId}/` : '/api/v1/access/users/', { method: userId ? 'PATCH' : 'POST', body: JSON.stringify(payload) });

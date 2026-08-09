@@ -1,6 +1,7 @@
 from decimal import Decimal
 
 from django.contrib.auth import get_user_model
+from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
 from rest_framework import serializers
 
@@ -10,6 +11,8 @@ from .models import (
     AllocationReservation,
     Client,
     ClientIntegration,
+    OrganizationClientAccess,
+    OrganizationUnit,
     VendorClientAllocation,
     VendorCommercialProfile,
     VendorAPIKey,
@@ -68,6 +71,19 @@ class VendorManagementOptionsSerializer(serializers.Serializer):
     clients = VendorManagementClientOptionSerializer(many=True)
 
 
+class OrganizationOwnerOptionSerializer(serializers.Serializer):
+    id = serializers.IntegerField()
+    name = serializers.CharField()
+    username = serializers.CharField()
+    type = serializers.ChoiceField(choices=[("owner", "Main office"), ("internal_vendor", "Internal vendor")])
+
+
+class OrganizationManagementOptionsSerializer(serializers.Serializer):
+    owners = OrganizationOwnerOptionSerializer(many=True)
+    clients = VendorManagementClientOptionSerializer(many=True)
+    client_eligibility = serializers.DictField(child=serializers.ListField(child=serializers.IntegerField()))
+
+
 class ClientIntegrationSerializer(serializers.ModelSerializer):
     created_by = serializers.CharField(source="created_by.username", read_only=True, allow_null=True)
 
@@ -91,6 +107,102 @@ class ClientSerializer(serializers.ModelSerializer):
             "created_by", "created_at", "updated_at", "integrations",
         ]
         read_only_fields = ["created_at", "updated_at"]
+
+
+class OrganizationUnitSerializer(serializers.ModelSerializer):
+    workspace_owner_name = serializers.SerializerMethodField()
+    workspace_owner_type = serializers.SerializerMethodField()
+    parent_name = serializers.CharField(source="parent.name", read_only=True, allow_null=True)
+    path = serializers.CharField(source="path_label", read_only=True)
+    member_count = serializers.IntegerField(read_only=True, default=0)
+    client_count = serializers.IntegerField(read_only=True, default=0)
+    created_by = serializers.CharField(source="created_by.username", read_only=True, allow_null=True)
+
+    class Meta:
+        model = OrganizationUnit
+        fields = [
+            "id", "workspace_owner", "workspace_owner_name", "workspace_owner_type", "parent", "parent_name",
+            "unit_type", "name", "code", "description", "path", "member_count", "client_count",
+            "is_active", "created_by", "created_at", "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def get_workspace_owner_name(self, obj) -> str:
+        return obj.workspace_owner.get_full_name() or obj.workspace_owner.username
+
+    def get_workspace_owner_type(self, obj) -> str:
+        if obj.workspace_owner.is_superuser:
+            return "owner"
+        return getattr(getattr(obj.workspace_owner, "employee_profile", None), "account_type", "")
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        request = self.context.get("request")
+        owner = attrs.get("workspace_owner", getattr(self.instance, "workspace_owner", None))
+        if request:
+            from .access import organization_workspace_owner_ids
+            if not owner or owner.pk not in organization_workspace_owner_ids(request.user):
+                raise serializers.ValidationError({"workspace_owner": "You cannot manage this organization workspace."})
+        if self.instance and "workspace_owner" in attrs and owner != self.instance.workspace_owner:
+            raise serializers.ValidationError({"workspace_owner": "An organization unit cannot be moved to another workspace."})
+        values = {
+            "workspace_owner": owner,
+            "parent": attrs.get("parent", getattr(self.instance, "parent", None)),
+            "unit_type": attrs.get("unit_type", getattr(self.instance, "unit_type", None)),
+            "name": attrs.get("name", getattr(self.instance, "name", "")),
+            "code": attrs.get("code", getattr(self.instance, "code", "")),
+            "description": attrs.get("description", getattr(self.instance, "description", "")),
+            "is_active": attrs.get("is_active", getattr(self.instance, "is_active", True)),
+        }
+        candidate = OrganizationUnit(pk=getattr(self.instance, "pk", None), **values)
+        try:
+            candidate.full_clean(exclude=["created_by"])
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict) from exc
+        return attrs
+
+
+class OrganizationClientAccessSerializer(serializers.ModelSerializer):
+    workspace_owner = serializers.IntegerField(source="organization_unit.workspace_owner_id", read_only=True)
+    workspace_owner_name = serializers.SerializerMethodField()
+    unit_name = serializers.CharField(source="organization_unit.name", read_only=True)
+    unit_type = serializers.CharField(source="organization_unit.unit_type", read_only=True)
+    unit_path = serializers.CharField(source="organization_unit.path_label", read_only=True)
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    created_by = serializers.CharField(source="created_by.username", read_only=True, allow_null=True)
+
+    class Meta:
+        model = OrganizationClientAccess
+        fields = [
+            "id", "organization_unit", "workspace_owner", "workspace_owner_name", "unit_name", "unit_type",
+            "unit_path", "client", "client_name", "is_active", "created_by", "created_at", "updated_at",
+        ]
+        read_only_fields = ["created_at", "updated_at"]
+
+    def get_workspace_owner_name(self, obj) -> str:
+        owner = obj.organization_unit.workspace_owner
+        return owner.get_full_name() or owner.username
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+        unit = attrs.get("organization_unit", getattr(self.instance, "organization_unit", None))
+        client = attrs.get("client", getattr(self.instance, "client", None))
+        request = self.context.get("request")
+        if request:
+            from .access import organization_workspace_owner_ids
+            if not unit or unit.workspace_owner_id not in organization_workspace_owner_ids(request.user):
+                raise serializers.ValidationError({"organization_unit": "You cannot manage this organization workspace."})
+        candidate = OrganizationClientAccess(
+            pk=getattr(self.instance, "pk", None),
+            organization_unit=unit,
+            client=client,
+            is_active=attrs.get("is_active", getattr(self.instance, "is_active", True)),
+        )
+        try:
+            candidate.full_clean(exclude=["created_by"])
+        except DjangoValidationError as exc:
+            raise serializers.ValidationError(exc.message_dict) from exc
+        return attrs
 
 
 class VendorCommercialProfileSerializer(serializers.ModelSerializer):

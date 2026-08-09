@@ -11,6 +11,9 @@ from .views import (
     VendorDirectoryViewSet,
     VendorManagementOptionsView,
     VendorAPIKeyViewSet,
+    OrganizationClientAccessViewSet,
+    OrganizationManagementOptionsView,
+    OrganizationUnitViewSet,
 )
 
 
@@ -23,6 +26,9 @@ router.register("api-keys", VendorAPIKeyViewSet, basename="vendor-api-key")
 router.register("client-allocations", VendorClientAllocationViewSet, basename="vendor-client-allocation")
 router.register("survey-allocations", VendorSurveyAllocationViewSet, basename="vendor-survey-allocation")
 router.register("reservations", AllocationReservationViewSet, basename="allocation-reservation")
+router.register("organization-units", OrganizationUnitViewSet, basename="organization-unit")
+router.register("organization-client-access", OrganizationClientAccessViewSet, basename="organization-client-access")
 
 urlpatterns = router.urls
 urlpatterns += [path("management-options/", VendorManagementOptionsView.as_view(), name="vendor-management-options")]
+urlpatterns += [path("organization-options/", OrganizationManagementOptionsView.as_view(), name="organization-options")]

@@ -79,7 +79,12 @@ if DB_ENGINE == "mysql":
         }
     }
 else:
-    DATABASES = {"default": {"ENGINE": "django.db.backends.sqlite3", "NAME": BASE_DIR / "db.sqlite3"}}
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": os.getenv("SQLITE_PATH", BASE_DIR / "db.sqlite3"),
+        }
+    }
 
 AUTH_PASSWORD_VALIDATORS = []
 LANGUAGE_CODE = "en-us"
@@ -134,6 +139,7 @@ SPECTACULAR_SETTINGS = {
         {"name": "Synchronization", "description": "Trigger and audit upstream inventory synchronization."},
         {"name": "Access control", "description": "Dynamic roles, function assignments and per-user access overrides."},
         {"name": "Vendors & allocations", "description": "UAT client scope, vendor commercial policy and quantity allocation APIs."},
+        {"name": "Organization hierarchy", "description": "Branch, Sub-branch, Shift, team assignment and unit-level client visibility APIs."},
     ],
     "ENUM_NAME_OVERRIDES": {
         "SurveyStatusEnum": "surveys.models.Survey.Status",

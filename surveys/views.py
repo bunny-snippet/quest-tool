@@ -32,6 +32,7 @@ from vendors.services import (
     finalize_attempt_capacity,
     reserve_attempt_capacity,
     resolve_vendor_survey_context,
+    organization_client_ids_for_user,
     scope_surveys_for_user,
 )
 from vendors.access import is_external_vendor_scope, vendor_scope_user_id
@@ -98,14 +99,14 @@ STUDY_FILTER_PERMISSIONS = {
 }
 
 USER_HIT_COLUMN_PERMISSIONS = {
-    "branch": "user_hits.column.branch", "sub_branch": "user_hits.column.sub_branch",
+    "branch": "user_hits.column.branch", "sub_branch": "user_hits.column.sub_branch", "shift": "user_hits.column.shift",
     "user": "user_hits.column.user", "date": "user_hits.column.date",
     "hits": "user_hits.column.hits", "completes": "user_hits.column.completes",
 }
 
 USER_HIT_FILTER_PERMISSIONS = {
     "search": "user_hits.filter.search", "branch": "user_hits.filter.branch",
-    "sub_branch": "user_hits.filter.sub_branch", "user": "user_hits.filter.user",
+    "sub_branch": "user_hits.filter.sub_branch", "shift": "user_hits.filter.shift", "user": "user_hits.filter.user",
     "date": "user_hits.filter.date", "clear": "user_hits.filters.clear",
 }
 
@@ -145,8 +146,10 @@ def projects_page(request):
     codes = effective_permission_codes(request.user)
     visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
     countries = visible_surveys.exclude(country_code="").values_list("country_code", "country").distinct().order_by("country_code")
-    is_vendor_panel = bool(vendor_scope_user_id(request.user))
-    if is_vendor_panel:
+    is_client_scoped_panel = bool(
+        vendor_scope_user_id(request.user) or organization_client_ids_for_user(request.user) is not None
+    )
+    if is_client_scoped_panel:
         companies = visible_surveys.filter(client__isnull=False).values_list("client__name", flat=True).distinct().order_by("client__name")
     else:
         companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
@@ -163,7 +166,7 @@ def projects_page(request):
     return render(request, "surveys/projects.html", {
         "active_page": "projects", "countries": countries, "companies": companies,
         "company_filter_label": "Client",
-        "company_filter_param": "client_name" if is_vendor_panel else "company",
+        "company_filter_param": "client_name" if is_client_scoped_panel else "company",
         "company_filter_default": "All clients",
         "project_columns": project_columns, "project_column_count": max(1, len(project_columns)),
         "project_filters": project_filters,
@@ -556,7 +559,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
             "projects.filter.search": ("search",),
             "projects.filter.country": ("country",),
             "projects.filter.status": ("status",),
-            "projects.filter.client": ("company",),
+            "projects.filter.client": ("company", "client_name"),
             "projects.filter.date": ("created_from", "created_to", "modified_from", "modified_to"),
         })
         cpi_ordering = self.request.query_params.get("ordering", "").lstrip("-") == "cpi"
@@ -792,10 +795,11 @@ class UserHitsAPIView(APIView):
             "completes count status 1 within those attempts. Device splits use entry-device audit data."
         ),
         parameters=[
-            OpenApiParameter("search", OpenApiTypes.STR, description="Search user, email, branch or sub-branch."),
+            OpenApiParameter("search", OpenApiTypes.STR, description="Search user, email, branch, sub-branch or shift."),
             OpenApiParameter("user", OpenApiTypes.STR, description="Comma-separated platform user IDs."),
             OpenApiParameter("branch", OpenApiTypes.STR, description="Comma-separated branch/company labels."),
             OpenApiParameter("sub_branch", OpenApiTypes.STR, description="Comma-separated sub-branch/department labels."),
+            OpenApiParameter("shift", OpenApiTypes.STR, description="Comma-separated organization shift labels."),
             OpenApiParameter("from_date", OpenApiTypes.DATE, description="Inclusive IST entry date."),
             OpenApiParameter("to_date", OpenApiTypes.DATE, description="Inclusive IST entry date."),
             OpenApiParameter("from_time", OpenApiTypes.TIME, description="Optional inclusive IST start time; requires from_date."),
@@ -811,6 +815,7 @@ class UserHitsAPIView(APIView):
             "user_hits.filter.user": ("user",),
             "user_hits.filter.branch": ("branch",),
             "user_hits.filter.sub_branch": ("sub_branch",),
+            "user_hits.filter.shift": ("shift",),
             "user_hits.filter.date": ("from_date", "from_time", "to_date", "to_time"),
         })
         try:

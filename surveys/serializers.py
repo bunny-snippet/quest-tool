@@ -7,7 +7,7 @@ from rest_framework import serializers
 
 from accounts.access import has_function_access
 from vendors.access import is_external_vendor_scope, vendor_scope_user_id
-from vendors.services import survey_pricing_for_user
+from vendors.services import organization_client_ids_for_user, survey_pricing_for_user
 
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
 
@@ -52,7 +52,9 @@ class SurveyListSerializer(serializers.ModelSerializer):
 
     def get_display_company_name(self, obj) -> str:
         request = self.context.get("request")
-        if request and vendor_scope_user_id(request.user) and obj.client:
+        if request and (
+            vendor_scope_user_id(request.user) or organization_client_ids_for_user(request.user) is not None
+        ) and obj.client:
             return obj.client.name
         return obj.company_name
 
@@ -147,6 +149,7 @@ class UserHitRowSerializer(serializers.Serializer):
     user_email = serializers.EmailField(allow_blank=True)
     branch = serializers.CharField(allow_blank=True)
     sub_branch = serializers.CharField(allow_blank=True)
+    shift = serializers.CharField(allow_blank=True)
     date = serializers.DateField()
     hits = UserHitDeviceCountsSerializer()
     completes = UserHitDeviceCountsSerializer()
