@@ -61,7 +61,14 @@ class Survey(models.Model):
         on_delete=models.PROTECT,
         related_name="surveys",
     )
-    source_id = models.PositiveBigIntegerField(unique=True, db_index=True, help_text="InnovateMR surveyId")
+    integration = models.ForeignKey(
+        "vendors.ClientIntegration",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="surveys",
+    )
+    source_id = models.PositiveBigIntegerField(db_index=True, help_text="Provider survey ID")
     company_name = models.CharField(max_length=160, default="InnovateMR", db_index=True)
     name = models.CharField(max_length=500, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.LIVE, db_index=True)
@@ -97,6 +104,9 @@ class Survey(models.Model):
     class Meta:
         ordering = ["-source_modified_at", "-created_at"]
         indexes = [models.Index(fields=["status", "country_code"])]
+        constraints = [
+            models.UniqueConstraint(fields=["integration", "source_id"], name="unique_integration_survey_source"),
+        ]
 
     def save(self, *args, **kwargs):
         if not self.local_id:
@@ -150,6 +160,13 @@ class SyncRun(models.Model):
         PARTIAL = "partial", "Partial"
         FAILED = "failed", "Failed"
 
+    integration = models.ForeignKey(
+        "vendors.ClientIntegration",
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="sync_runs",
+    )
     started_at = models.DateTimeField(auto_now_add=True)
     finished_at = models.DateTimeField(null=True, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.RUNNING)

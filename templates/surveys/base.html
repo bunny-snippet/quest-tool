@@ -39,6 +39,9 @@
           <span class="nav-icon nav-icon-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 20v-9l8-5 8 5v9"/><path d="M8 20v-5h8v5M9 11h6"/></svg></span><span>Vendors</span>
         </a>
         {% endif %}
+        {% if 'clients.view' in access_codes %}<a class="nav-item {% if active_page == 'client-integrations' %}active{% endif %}" href="{% url 'client-integrations' %}">
+          <span class="nav-icon nav-icon-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M8 12h8m-4-4v8M5 5h14v14H5z"/></svg></span><span>Client APIs</span>
+        </a>{% endif %}
         {% if 'organization.view' in access_codes %}<a class="nav-item {% if active_page == 'organization' %}active{% endif %}" href="{% url 'organization-management' %}">
           <span class="nav-icon nav-icon-svg" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M12 4v5m-6 4v7m12-7v7M6 13h12M3 9h6v4H3zm12 0h6v4h-6zM9 3h6v4H9z"/></svg></span><span>Organization</span>
         </a>{% endif %}

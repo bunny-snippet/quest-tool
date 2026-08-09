@@ -25,9 +25,13 @@ class PagedSurveyResult:
 class InnovateMRClient:
     """Small server-side client for InnovateMR Supplier API v2."""
 
-    def __init__(self, token: str | None = None, session: requests.Session | None = None):
+    def __init__(self, token: str | None = None, session: requests.Session | None = None, integration=None):
+        self.integration = integration
+        if token is None and integration is not None:
+            from vendors.credentials import resolve_integration_token
+            token = resolve_integration_token(integration)
         self.token = token if token is not None else settings.INNOVATEMR_API_TOKEN
-        self.base_url = settings.INNOVATEMR_BASE_URL
+        self.base_url = (integration.base_url if integration is not None else settings.INNOVATEMR_BASE_URL).rstrip("/")
         self.timeout = settings.INNOVATEMR_TIMEOUT_SECONDS
         self.page_size = settings.INNOVATEMR_PAGE_SIZE
         self.max_pages = settings.INNOVATEMR_MAX_PAGES
@@ -67,6 +71,16 @@ class InnovateMRClient:
     def get_allocated_surveys(self) -> list[dict[str, Any]]:
         payload = self._get("/supply/getAllocatedSurveys")
         return self._result_list(payload)
+
+    def test_connection(self) -> dict[str, Any]:
+        """Validate authentication with one bounded read and expose no supplier payload."""
+        original_page_size = self.page_size
+        self.page_size = 1
+        try:
+            payload = self._get("/supply/getAllocatedSurveysPaged", params={"limit": 1})
+            return {"ok": True, "records_visible": len(self._result_list(payload))}
+        finally:
+            self.page_size = original_page_size
 
     def get_allocated_surveys_paged(self) -> PagedSurveyResult:
         surveys: list[dict[str, Any]] = []

@@ -118,6 +118,12 @@ Configure these four return outcomes with InnovateMR (use the deployed HTTPS hos
 
 Each callback captures its first arrival time, callback IP, callback count and LOI in seconds from `initiated_at`. Browser callbacks remain `is_verified=false`; a trusted InnovateMR S2S notification or redirect hash must verify them before financial reconciliation.
 
+## Multi-client API integrations
+
+Open `/client-integrations/` with the `clients.view` permission. Managers can create clients and connections, save a write-only encrypted API token, configure the supplier code and one-minute-or-longer schedule, test credentials, and queue an immediate sync. Celery Beat dispatches only integrations that are due; survey identity is unique by `(integration, source_id)`.
+
+Set a stable `INTEGRATION_CREDENTIAL_ENCRYPTION_KEY` before storing UI credentials. Changing a token immediately clears supplier links and cached upstream data for that integration only; saving the same token preserves them. `credential_env_key` remains supported for legacy deployments.
+
 ## Verification
 
 ```powershell

@@ -150,6 +150,7 @@ SPECTACULAR_SETTINGS = {
 INNOVATEMR_API_TOKEN = os.getenv("INNOVATEMR_API_TOKEN", "")
 INNOVATEMR_BASE_URL = os.getenv("INNOVATEMR_BASE_URL", "https://supplier.innovatemr.net/api/v2").rstrip("/")
 PUBLIC_SUPPLIER_CODE = os.getenv("PUBLIC_SUPPLIER_CODE", "1000").strip() or "1000"
+INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = os.getenv("INTEGRATION_CREDENTIAL_ENCRYPTION_KEY", SECRET_KEY)
 INNOVATEMR_TIMEOUT_SECONDS = int(os.getenv("INNOVATEMR_TIMEOUT_SECONDS", "30"))
 INNOVATEMR_PAGE_SIZE = int(os.getenv("INNOVATEMR_PAGE_SIZE", "100"))
 INNOVATEMR_MAX_PAGES = int(os.getenv("INNOVATEMR_MAX_PAGES", "1000"))
@@ -181,13 +182,9 @@ INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS = int(os.getenv("INNOVATEMR_ATTEMPT_
 VENDOR_RESERVATION_TTL_MINUTES = int(os.getenv("VENDOR_RESERVATION_TTL_MINUTES", "180"))
 VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS = int(os.getenv("VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS", "60"))
 CELERY_BEAT_SCHEDULE = {
-    "sync-innovatemr-survey-inventory": {
-        "task": "surveys.sync_innovatemr_surveys",
-        "schedule": float(INNOVATEMR_INVENTORY_SYNC_INTERVAL_SECONDS),
-    },
-    "refresh-stale-survey-details": {
-        "task": "surveys.refresh_stale_details",
-        "schedule": float(INNOVATEMR_DETAIL_SYNC_INTERVAL_SECONDS),
+    "dispatch-client-integration-syncs": {
+        "task": "surveys.dispatch_due_integrations",
+        "schedule": 60.0,
     },
     "reconcile-legacy-redirect-attempts": {
         "task": "surveys.reconcile_pending_attempts",

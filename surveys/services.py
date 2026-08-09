@@ -11,7 +11,7 @@ from dateutil import parser as date_parser
 from django.db import transaction
 from django.utils import timezone
 
-from vendors.models import Client
+from vendors.models import ClientIntegration
 
 from .integrations import InnovateMRAPIError, InnovateMRClient, InnovateMRNotFound
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
@@ -281,9 +281,11 @@ class SyncSummary:
     detail_failures: int
 
 
-def sync_surveys(client: InnovateMRClient | None = None) -> SyncSummary:
-    client = client or InnovateMRClient()
-    run = SyncRun.objects.create()
+def sync_surveys(client: InnovateMRClient | None = None, integration: ClientIntegration | None = None) -> SyncSummary:
+    if integration is None:
+        integration = ClientIntegration.objects.filter(is_active=True, client__is_active=True).order_by("id").first()
+    client = client or InnovateMRClient(integration=integration)
+    run = SyncRun.objects.create(integration=integration)
     now = timezone.now()
 
     try:
@@ -295,11 +297,14 @@ def sync_surveys(client: InnovateMRClient | None = None) -> SyncSummary:
         run.unique_surveys = len(merged)
 
         with transaction.atomic():
-            source_client = Client.objects.filter(code="innovatemr", is_active=True).first()
+            source_client = integration.client if integration else None
             for source_id, payload in merged.items():
-                existing = Survey.objects.filter(source_id=source_id).first()
+                lookup = Survey.objects.filter(source_id=source_id)
+                lookup = lookup.filter(integration=integration) if integration else lookup.filter(integration__isnull=True)
+                existing = lookup.first()
                 values = _survey_values(payload, now)
                 values["client"] = source_client
+                values["integration"] = integration
                 if existing is None:
                     survey = Survey.objects.create(source_id=source_id, **values)
                     run.created += 1
@@ -313,11 +318,7 @@ def sync_surveys(client: InnovateMRClient | None = None) -> SyncSummary:
                     existing.save(update_fields=["last_seen_at"])
                     run.unchanged += 1
 
-            closed = Survey.objects.filter(status=Survey.Status.LIVE)
-            if source_client:
-                closed = closed.filter(client=source_client)
-            else:
-                closed = closed.filter(company_name__iexact="InnovateMR")
+            closed = Survey.objects.filter(status=Survey.Status.LIVE, integration=integration)
             closed = closed.exclude(source_id__in=merged.keys())
             run.closed = closed.update(status=Survey.Status.CLOSED, updated_at=now)
 

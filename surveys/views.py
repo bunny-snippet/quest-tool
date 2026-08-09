@@ -351,7 +351,6 @@ def survey_start(request):
             or not user_id.isdigit()
             or not internal_code.isdigit()
             or len(internal_code) != 14
-            or supplier_code != settings.PUBLIC_SUPPLIER_CODE
         ):
             return _invalid_survey_link(request)
 
@@ -368,6 +367,9 @@ def survey_start(request):
         ).first()
         if survey is None or not survey.entry_link:
             return _invalid_survey_link(request)
+        expected_supplier_code = survey.integration.supplier_code if survey.integration_id else settings.PUBLIC_SUPPLIER_CODE
+        if supplier_code != expected_supplier_code:
+            return _invalid_survey_link(request)
 
         stale = survey.targeting_synced_at is None or (
             survey.source_modified_at and survey.targeting_synced_at < survey.source_modified_at
@@ -375,7 +377,7 @@ def survey_start(request):
         targeting_warning = ""
         if stale:
             try:
-                replace_survey_targeting(InnovateMRClient(), survey)
+                replace_survey_targeting(InnovateMRClient(integration=survey.integration), survey)
             except InnovateMRAPIError:
                 if not survey.targeting_questions.exists():
                     targeting_warning = "Pre-screening criteria are temporarily unavailable. You can still continue."
@@ -616,7 +618,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         )
         if stale:
             refresh = replace_survey_quotas if detail_type == "quotas" else replace_survey_targeting
-            refresh(InnovateMRClient(), survey)
+            refresh(InnovateMRClient(integration=survey.integration), survey)
 
     @extend_schema(
         tags=["Survey details"],

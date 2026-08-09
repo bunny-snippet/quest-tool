@@ -40,7 +40,7 @@ class Client(models.Model):
 
 
 class ClientIntegration(models.Model):
-    """Non-secret metadata for an upstream API connection owned by a client."""
+    """One independently scheduled and authenticated upstream client connection."""
 
     client = models.ForeignKey(Client, on_delete=models.PROTECT, related_name="integrations")
     name = models.CharField(max_length=120)
@@ -51,7 +51,30 @@ class ClientIntegration(models.Model):
         blank=True,
         help_text="Environment-variable name containing the token. Secret values are never stored here.",
     )
+    encrypted_api_token = models.TextField(blank=True, editable=False)
+    credential_fingerprint = models.CharField(max_length=64, blank=True, editable=False)
+    credential_last_four = models.CharField(max_length=4, blank=True, editable=False)
+    credential_changed_at = models.DateTimeField(null=True, blank=True, editable=False)
+    supplier_code = models.CharField(max_length=40, default="1000")
     scheduled_sync_enabled = models.BooleanField(default=False)
+    sync_interval_seconds = models.PositiveIntegerField(
+        default=60,
+        validators=[MinValueValidator(60)],
+        help_text="Minimum interval between inventory syncs for this integration.",
+    )
+    detail_refresh_batch = models.PositiveSmallIntegerField(
+        default=3,
+        validators=[MinValueValidator(0), MaxValueValidator(25)],
+        help_text="Survey detail records refreshed after each inventory sync.",
+    )
+    last_tested_at = models.DateTimeField(null=True, blank=True, editable=False)
+    last_test_status = models.CharField(max_length=20, blank=True, editable=False)
+    last_test_error = models.TextField(blank=True, editable=False)
+    last_sync_started_at = models.DateTimeField(null=True, blank=True, editable=False, db_index=True)
+    last_sync_finished_at = models.DateTimeField(null=True, blank=True, editable=False)
+    last_sync_status = models.CharField(max_length=20, blank=True, editable=False)
+    last_sync_error = models.TextField(blank=True, editable=False)
+    last_sync_summary = models.JSONField(default=dict, blank=True, editable=False)
     is_active = models.BooleanField(default=True, db_index=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,

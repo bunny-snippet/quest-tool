@@ -92,7 +92,7 @@ class SurveyListSerializer(serializers.ModelSerializer):
             return None
         query = urlencode({
             "surveyId": obj.source_id,
-            "supplierCode": settings.PUBLIC_SUPPLIER_CODE,
+            "supplierCode": obj.integration.supplier_code if obj.integration_id else settings.PUBLIC_SUPPLIER_CODE,
             "userId": request.user.pk,
             "code": obj.local_id,
         })
@@ -116,7 +116,7 @@ class SyncRunSerializer(serializers.ModelSerializer):
     class Meta:
         model = SyncRun
         fields = [
-            "id", "started_at", "finished_at", "duration_seconds", "status", "fetched_full", "fetched_paged",
+            "id", "integration", "started_at", "finished_at", "duration_seconds", "status", "fetched_full", "fetched_paged",
             "unique_surveys", "created", "updated", "unchanged", "closed", "detail_failures", "error",
         ]
 

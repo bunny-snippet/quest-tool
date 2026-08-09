@@ -5,6 +5,7 @@ from django.utils import timezone
 from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import filters, status, viewsets
+from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
@@ -89,6 +90,14 @@ def vendor_management_page(request):
         "vendor_project_columns": project_columns, "vendor_project_column_count": max(1, len(project_columns)),
         "api_columns": api_columns, "api_column_count": max(1, len(api_columns)),
         "first_vendor_tab": first_vendor_tab,
+    })
+
+
+@function_permission_required("clients.view")
+def client_integrations_page(request):
+    return render(request, "vendors/integrations.html", {
+        "active_page": "client-integrations",
+        "can_manage_integrations": has_function_access(request.user, "clients.manage"),
     })
 
 
@@ -415,6 +424,33 @@ class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     filterset_fields = ["client", "provider_code", "scheduled_sync_enabled", "is_active"]
     search_fields = ["name", "client__name", "client__code"]
     vendor_scope_filter = "client__vendor_allocations__vendor_id"
+
+    @action(detail=True, methods=["post"], url_path="test-connection")
+    def test_connection(self, request, pk=None):
+        from surveys.integrations import InnovateMRClient
+
+        integration = self.get_object()
+        try:
+            result = InnovateMRClient(integration=integration).test_connection()
+            integration.last_test_status = "success"
+            integration.last_test_error = ""
+            response_status = status.HTTP_200_OK
+        except Exception as exc:
+            integration.last_test_status = "failed"
+            integration.last_test_error = str(exc)[:10000]
+            result = {"ok": False, "error": integration.last_test_error}
+            response_status = status.HTTP_400_BAD_REQUEST
+        integration.last_tested_at = timezone.now()
+        integration.save(update_fields=["last_tested_at", "last_test_status", "last_test_error", "updated_at"])
+        return Response(result, status=response_status)
+
+    @action(detail=True, methods=["post"], url_path="sync-now")
+    def sync_now(self, request, pk=None):
+        from surveys.tasks import sync_client_integration_task
+
+        integration = self.get_object()
+        task = sync_client_integration_task.delay(integration.pk)
+        return Response({"status": "queued", "task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 
 
 @extend_schema_view(

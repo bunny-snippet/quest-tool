@@ -18,6 +18,7 @@ from .models import (
     VendorAPIKey,
     VendorSurveyAllocation,
 )
+from .credentials import set_integration_token
 
 
 class VendorDirectorySerializer(serializers.ModelSerializer):
@@ -86,14 +87,47 @@ class OrganizationManagementOptionsSerializer(serializers.Serializer):
 
 class ClientIntegrationSerializer(serializers.ModelSerializer):
     created_by = serializers.CharField(source="created_by.username", read_only=True, allow_null=True)
+    client_name = serializers.CharField(source="client.name", read_only=True)
+    api_token = serializers.CharField(write_only=True, required=False, allow_blank=True, trim_whitespace=False)
+    has_credential = serializers.SerializerMethodField()
+    masked_credential = serializers.SerializerMethodField()
+    survey_count = serializers.IntegerField(source="surveys.count", read_only=True)
 
     class Meta:
         model = ClientIntegration
         fields = [
-            "id", "client", "name", "provider_code", "base_url", "credential_env_key",
-            "scheduled_sync_enabled", "is_active", "created_by", "created_at", "updated_at",
+            "id", "client", "client_name", "name", "provider_code", "base_url", "credential_env_key",
+            "api_token", "has_credential", "masked_credential", "supplier_code", "scheduled_sync_enabled",
+            "sync_interval_seconds", "detail_refresh_batch", "is_active", "survey_count",
+            "last_tested_at", "last_test_status", "last_test_error", "last_sync_started_at",
+            "last_sync_finished_at", "last_sync_status", "last_sync_error", "last_sync_summary",
+            "created_by", "created_at", "updated_at",
         ]
-        read_only_fields = ["created_at", "updated_at"]
+        read_only_fields = [
+            "has_credential", "masked_credential", "last_tested_at", "last_test_status", "last_test_error",
+            "last_sync_started_at", "last_sync_finished_at", "last_sync_status", "last_sync_error",
+            "last_sync_summary", "created_at", "updated_at",
+        ]
+
+    def get_has_credential(self, obj):
+        return bool(obj.encrypted_api_token or obj.credential_env_key)
+
+    def get_masked_credential(self, obj):
+        return f"••••{obj.credential_last_four}" if obj.credential_last_four else ""
+
+    def create(self, validated_data):
+        token = validated_data.pop("api_token", None)
+        instance = super().create(validated_data)
+        if token is not None:
+            set_integration_token(instance, token)
+        return instance
+
+    def update(self, instance, validated_data):
+        token = validated_data.pop("api_token", None)
+        instance = super().update(instance, validated_data)
+        if token is not None:
+            set_integration_token(instance, token)
+        return instance
 
 
 class ClientSerializer(serializers.ModelSerializer):
