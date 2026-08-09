@@ -611,7 +611,7 @@ paths:
       - in: query
         name: survey_id
         schema:
-          type: integer
+          type: string
       - in: query
         name: user
         schema:
@@ -2445,6 +2445,148 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/vendors/integrations/{id}/preview/:
+    get:
+      operationId: api_v1_vendors_integrations_preview_retrieve
+      summary: Preview provider inventory without storing it
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client integration.
+        required: true
+      tags:
+      - Client integrations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/IntegrationPreview'
+          description: ''
+  /api/v1/vendors/integrations/{id}/sync-now/:
+    post:
+      operationId: api_v1_vendors_integrations_sync_now_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client integration.
+        required: true
+      tags:
+      - api
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientIntegration'
+          description: ''
+  /api/v1/vendors/integrations/{id}/test-connection/:
+    post:
+      operationId: api_v1_vendors_integrations_test_connection_create
+      parameters:
+      - in: path
+        name: id
+        schema:
+          type: integer
+        description: A unique integer value identifying this client integration.
+        required: true
+      tags:
+      - api
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/ClientIntegrationRequest'
+        required: true
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ClientIntegration'
+          description: ''
+  /api/v1/vendors/integrations/providers/:
+    get:
+      operationId: api_v1_vendors_integrations_providers_list
+      summary: List installed upstream provider adapters
+      parameters:
+      - in: query
+        name: client
+        schema:
+          type: integer
+      - in: query
+        name: is_active
+        schema:
+          type: boolean
+      - name: page
+        required: false
+        in: query
+        description: A page number within the paginated result set.
+        schema:
+          type: integer
+      - name: page_size
+        required: false
+        in: query
+        description: Number of results to return per page.
+        schema:
+          type: integer
+      - in: query
+        name: provider_code
+        schema:
+          type: string
+      - in: query
+        name: scheduled_sync_enabled
+        schema:
+          type: boolean
+      - name: search
+        required: false
+        in: query
+        description: A search term.
+        schema:
+          type: string
+      tags:
+      - Client integrations
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PaginatedProviderCatalogList'
+          description: ''
   /api/v1/vendors/management-options/:
     get:
       operationId: api_v1_vendors_management_options_retrieve
@@ -3157,6 +3299,36 @@ paths:
       responses:
         '204':
           description: No response body
+  /survey/rfg/callback:
+    get:
+      operationId: survey_rfg_callback_retrieve
+      description: Updates the RID attempt, exit IP/time, LOI and allocation state.
+        Requests outside the configured RFG IP allowlist are rejected.
+      summary: Receive a verified Research For Good result callback
+      parameters:
+      - in: query
+        name: result
+        schema:
+          type: string
+        description: RFG result code
+        required: true
+      - in: query
+        name: rid
+        schema:
+          type: string
+        description: Platform respondent ID
+        required: true
+      tags:
+      - Respondent callbacks
+      security:
+      - {}
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RFGCallbackResponse'
+          description: ''
 components:
   schemas:
     AccessFunction:
@@ -3345,7 +3517,8 @@ components:
         integrations:
           type: array
           items:
-            $ref: '#/components/schemas/ClientIntegration'
+            type: object
+            additionalProperties: {}
           readOnly: true
       required:
       - code
@@ -3363,6 +3536,9 @@ components:
           readOnly: true
         client:
           type: integer
+        client_name:
+          type: string
+          readOnly: true
         name:
           type: string
           maxLength: 120
@@ -3379,10 +3555,109 @@ components:
           description: Environment-variable name containing the token. Secret values
             are never stored here.
           maxLength: 120
+        credential_env_keys:
+          description: Provider credential names mapped to environment-variable names;
+            never secret values.
+        config:
+          description: Non-secret provider configuration.
+        has_credential:
+          type: boolean
+          readOnly: true
+        masked_credential:
+          type: string
+          readOnly: true
+        supplier_code:
+          type: string
+          maxLength: 40
         scheduled_sync_enabled:
           type: boolean
+        inventory_endpoint:
+          type: string
+          description: Relative or absolute inventory endpoint. Blank calls Base URL
+            exactly.
+          maxLength: 500
+        paged_inventory_endpoint:
+          type: string
+          maxLength: 500
+        quota_endpoint_template:
+          type: string
+          description: Optional endpoint containing {survey_id}.
+          maxLength: 500
+        targeting_endpoint_template:
+          type: string
+          description: Optional endpoint containing {survey_id}.
+          maxLength: 500
+        transaction_endpoint_template:
+          type: string
+          description: Optional endpoint containing {survey_id} and {pid}.
+          maxLength: 500
+        auth_header_name:
+          type: string
+          maxLength: 120
+        auth_header_prefix:
+          type: string
+          description: 'For example: Bearer'
+          maxLength: 40
+        inventory_result_key:
+          type: string
+          maxLength: 120
+        quota_result_key:
+          type: string
+          maxLength: 120
+        targeting_result_key:
+          type: string
+          maxLength: 120
+        transaction_result_key:
+          type: string
+          maxLength: 120
+        field_mapping:
+          description: Optional canonical-field to upstream-field mapping for custom
+            providers.
+        sync_interval_seconds:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 60
+          format: int64
+          description: Minimum interval between inventory syncs for this integration.
+        detail_refresh_batch:
+          type: integer
+          maximum: 25
+          minimum: 0
+          description: Survey detail records refreshed after each inventory sync.
         is_active:
           type: boolean
+        survey_count:
+          type: integer
+          readOnly: true
+        last_tested_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        last_test_status:
+          type: string
+          readOnly: true
+        last_test_error:
+          type: string
+          readOnly: true
+        last_sync_started_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        last_sync_finished_at:
+          type: string
+          format: date-time
+          readOnly: true
+          nullable: true
+        last_sync_status:
+          type: string
+          readOnly: true
+        last_sync_error:
+          type: string
+          readOnly: true
+        last_sync_summary:
+          readOnly: true
         created_by:
           type: string
           readOnly: true
@@ -3398,10 +3673,22 @@ components:
       required:
       - base_url
       - client
+      - client_name
       - created_at
       - created_by
+      - has_credential
       - id
+      - last_sync_error
+      - last_sync_finished_at
+      - last_sync_started_at
+      - last_sync_status
+      - last_sync_summary
+      - last_test_error
+      - last_test_status
+      - last_tested_at
+      - masked_credential
       - name
+      - survey_count
       - updated_at
     ClientIntegrationRequest:
       type: object
@@ -3427,8 +3714,78 @@ components:
           description: Environment-variable name containing the token. Secret values
             are never stored here.
           maxLength: 120
+        credential_env_keys:
+          description: Provider credential names mapped to environment-variable names;
+            never secret values.
+        config:
+          description: Non-secret provider configuration.
+        api_token:
+          type: string
+          writeOnly: true
+        supplier_code:
+          type: string
+          minLength: 1
+          maxLength: 40
         scheduled_sync_enabled:
           type: boolean
+        inventory_endpoint:
+          type: string
+          description: Relative or absolute inventory endpoint. Blank calls Base URL
+            exactly.
+          maxLength: 500
+        paged_inventory_endpoint:
+          type: string
+          maxLength: 500
+        quota_endpoint_template:
+          type: string
+          description: Optional endpoint containing {survey_id}.
+          maxLength: 500
+        targeting_endpoint_template:
+          type: string
+          description: Optional endpoint containing {survey_id}.
+          maxLength: 500
+        transaction_endpoint_template:
+          type: string
+          description: Optional endpoint containing {survey_id} and {pid}.
+          maxLength: 500
+        auth_header_name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        auth_header_prefix:
+          type: string
+          description: 'For example: Bearer'
+          maxLength: 40
+        inventory_result_key:
+          type: string
+          minLength: 1
+          maxLength: 120
+        quota_result_key:
+          type: string
+          minLength: 1
+          maxLength: 120
+        targeting_result_key:
+          type: string
+          minLength: 1
+          maxLength: 120
+        transaction_result_key:
+          type: string
+          minLength: 1
+          maxLength: 120
+        field_mapping:
+          description: Optional canonical-field to upstream-field mapping for custom
+            providers.
+        sync_interval_seconds:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 60
+          format: int64
+          description: Minimum interval between inventory syncs for this integration.
+        detail_refresh_batch:
+          type: integer
+          maximum: 25
+          minimum: 0
+          description: Survey detail records refreshed after each inventory sync.
         is_active:
           type: boolean
       required:
@@ -3472,6 +3829,50 @@ components:
         * `panel` - Panel only
         * `api` - API only
         * `both` - Panel and API
+    IntegrationPreview:
+      type: object
+      properties:
+        total_received:
+          type: integer
+          minimum: 0
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/IntegrationPreviewRow'
+      required:
+      - results
+      - total_received
+    IntegrationPreviewRow:
+      type: object
+      properties:
+        source_id:
+          type: string
+        name:
+          type: string
+        country:
+          type: string
+        cpi:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
+          nullable: true
+        loi:
+          type: integer
+          nullable: true
+        status:
+          type: string
+        modified_at:
+          type: string
+          format: date-time
+          nullable: true
+      required:
+      - country
+      - cpi
+      - loi
+      - modified_at
+      - name
+      - source_id
+      - status
     OrganizationClientAccess:
       type: object
       properties:
@@ -3820,6 +4221,29 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/OrganizationUnit'
+    PaginatedProviderCatalogList:
+      type: object
+      required:
+      - count
+      - results
+      properties:
+        count:
+          type: integer
+          example: 123
+        next:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=4
+        previous:
+          type: string
+          nullable: true
+          format: uri
+          example: http://api.example.org/accounts/?page=2
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderCatalog'
     PaginatedRoleList:
       type: object
       required:
@@ -4139,8 +4563,78 @@ components:
           description: Environment-variable name containing the token. Secret values
             are never stored here.
           maxLength: 120
+        credential_env_keys:
+          description: Provider credential names mapped to environment-variable names;
+            never secret values.
+        config:
+          description: Non-secret provider configuration.
+        api_token:
+          type: string
+          writeOnly: true
+        supplier_code:
+          type: string
+          minLength: 1
+          maxLength: 40
         scheduled_sync_enabled:
           type: boolean
+        inventory_endpoint:
+          type: string
+          description: Relative or absolute inventory endpoint. Blank calls Base URL
+            exactly.
+          maxLength: 500
+        paged_inventory_endpoint:
+          type: string
+          maxLength: 500
+        quota_endpoint_template:
+          type: string
+          description: Optional endpoint containing {survey_id}.
+          maxLength: 500
+        targeting_endpoint_template:
+          type: string
+          description: Optional endpoint containing {survey_id}.
+          maxLength: 500
+        transaction_endpoint_template:
+          type: string
+          description: Optional endpoint containing {survey_id} and {pid}.
+          maxLength: 500
+        auth_header_name:
+          type: string
+          minLength: 1
+          maxLength: 120
+        auth_header_prefix:
+          type: string
+          description: 'For example: Bearer'
+          maxLength: 40
+        inventory_result_key:
+          type: string
+          minLength: 1
+          maxLength: 120
+        quota_result_key:
+          type: string
+          minLength: 1
+          maxLength: 120
+        targeting_result_key:
+          type: string
+          minLength: 1
+          maxLength: 120
+        transaction_result_key:
+          type: string
+          minLength: 1
+          maxLength: 120
+        field_mapping:
+          description: Optional canonical-field to upstream-field mapping for custom
+            providers.
+        sync_interval_seconds:
+          type: integer
+          maximum: 9223372036854775807
+          minimum: 60
+          format: int64
+          description: Minimum interval between inventory syncs for this integration.
+        detail_refresh_batch:
+          type: integer
+          maximum: 25
+          minimum: 0
+          description: Survey detail records refreshed after each inventory sync.
         is_active:
           type: boolean
     PatchedClientRequest:
@@ -4391,6 +4885,53 @@ components:
           nullable: true
         is_active:
           type: boolean
+    ProviderCatalog:
+      type: object
+      properties:
+        code:
+          type: string
+        label:
+          type: string
+        default_base_url:
+          type: string
+          format: uri
+        minimum_sync_interval_seconds:
+          type: integer
+          minimum: 60
+        credential_fields:
+          type: array
+          items:
+            $ref: '#/components/schemas/ProviderCredentialField'
+      required:
+      - code
+      - credential_fields
+      - default_base_url
+      - label
+      - minimum_sync_interval_seconds
+    ProviderCredentialField:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+      required:
+      - key
+      - label
+    RFGCallbackResponse:
+      type: object
+      properties:
+        ok:
+          type: boolean
+        rid:
+          type: string
+          maxLength: 10
+        status:
+          type: string
+      required:
+      - ok
+      - rid
+      - status
     Role:
       type: object
       properties:
@@ -4488,7 +5029,7 @@ components:
           type: string
           readOnly: true
         survey_source_id:
-          type: integer
+          type: string
           readOnly: true
         survey_name:
           type: string
@@ -4720,11 +5261,13 @@ components:
           type: string
           readOnly: true
         source_id:
-          type: integer
-          maximum: 9223372036854775807
-          minimum: 0
-          format: int64
-          description: InnovateMR surveyId
+          oneOf:
+          - type: integer
+          - type: string
+          readOnly: true
+        provider_code:
+          type: string
+          readOnly: true
         company_name:
           type: string
           maxLength: 160
@@ -4883,6 +5426,7 @@ components:
       - id
       - local_id
       - progress_percent
+      - provider_code
       - quotas
       - source_created_display
       - source_id
@@ -4911,11 +5455,13 @@ components:
           type: string
           readOnly: true
         source_id:
-          type: integer
-          maximum: 9223372036854775807
-          minimum: 0
-          format: int64
-          description: InnovateMR surveyId
+          oneOf:
+          - type: integer
+          - type: string
+          readOnly: true
+        provider_code:
+          type: string
+          readOnly: true
         company_name:
           type: string
           maxLength: 160
@@ -5053,6 +5599,7 @@ components:
       - id
       - local_id
       - progress_percent
+      - provider_code
       - source_created_display
       - source_id
       - source_modified_display
@@ -5121,6 +5668,9 @@ components:
         id:
           type: integer
           readOnly: true
+        integration:
+          type: integer
+          nullable: true
         started_at:
           type: string
           format: date-time
@@ -5964,7 +6514,9 @@ components:
           type: string
           readOnly: true
         survey_source_id:
-          type: integer
+          oneOf:
+          - type: integer
+          - type: string
           readOnly: true
         survey_name:
           type: string

@@ -1,4 +1,5 @@
 import csv
+import ipaddress
 import json
 from urllib.parse import quote
 
@@ -45,6 +46,7 @@ from .serializers import (
     SurveyListSerializer,
     SurveyAttemptSerializer,
     SurveyQuotaSerializer,
+    RFGCallbackResponseSerializer,
     SyncRunSerializer,
     SyncTriggerResponseSerializer,
     TargetingQuestionSerializer,
@@ -255,7 +257,9 @@ def _prescreener_questions(survey, submitted_data=None):
             else:
                 label = option.get("OptionText") or str(option_id or "Option")
             options.append({"value": str(option_id or label), "label": label})
-        if "multi" in lowered_type:
+        if "date" in lowered_type:
+            input_kind = "date"
+        elif "multi" in lowered_type:
             input_kind = "checkbox"
         elif "single" in lowered_type and options:
             input_kind = "radio"
@@ -347,7 +351,8 @@ def survey_start(request):
         internal_code = request.GET.get("code", "").strip()
         user_id = request.GET.get("userId", "").strip()
         if (
-            not survey_id.isdigit()
+            not survey_id
+            or len(survey_id) > 160
             or not user_id.isdigit()
             or not internal_code.isdigit()
             or len(internal_code) != 14
@@ -362,8 +367,10 @@ def survey_start(request):
         ):
             return _invalid_survey_link(request)
 
-        survey = scope_surveys_for_user(Survey.objects.all(), platform_user).filter(
-            source_id=int(survey_id), local_id=internal_code, status=Survey.Status.LIVE
+        survey = scope_surveys_for_user(
+            Survey.objects.select_related("integration", "client"), platform_user
+        ).filter(
+            source_key=survey_id, local_id=internal_code, status=Survey.Status.LIVE
         ).first()
         if survey is None or not survey.entry_link:
             return _invalid_survey_link(request)
@@ -377,8 +384,13 @@ def survey_start(request):
         targeting_warning = ""
         if stale:
             try:
-                replace_survey_targeting(InnovateMRClient(integration=survey.integration), survey)
-            except InnovateMRAPIError:
+                if survey.integration_id and survey.integration.provider_code == "rfg":
+                    from .providers import get_provider
+
+                    get_provider(survey.integration).refresh_details(survey)
+                else:
+                    replace_survey_targeting(InnovateMRClient(integration=survey.integration), survey)
+            except Exception:
                 if not survey.targeting_questions.exists():
                     targeting_warning = "Pre-screening criteria are temporarily unavailable. You can still continue."
         try:
@@ -413,7 +425,9 @@ def survey_start(request):
     rid = (request.GET.get("rid", "") if request.method == "GET" else request.POST.get("rid", "")).strip()
     if len(rid) != 10 or not rid.isalnum():
         return _invalid_survey_link(request)
-    attempt = SurveyAttempt.objects.select_related("survey", "platform_user").filter(rid=rid).first()
+    attempt = SurveyAttempt.objects.select_related(
+        "survey", "survey__integration", "platform_user"
+    ).filter(rid=rid).first()
     if attempt is None or attempt.platform_user is None or not attempt.platform_user.is_active:
         return _invalid_survey_link(request, status_code=404)
     attempt = backfill_attempt_entry_audit(attempt, request)
@@ -421,19 +435,45 @@ def survey_start(request):
     if request.method == "POST":
         answers, errors = _collect_prescreener_answers(request, attempt.survey)
         if not errors:
-            with transaction.atomic():
-                locked = SurveyAttempt.objects.select_for_update().select_related("survey").get(pk=attempt.pk)
-                if locked.status != SurveyAttempt.Status.INITIATED:
-                    return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(locked.rid)}")
-                outbound_url = build_outbound_url(locked.survey.entry_link, locked.rid, answers)
-                now = timezone.now()
-                locked.answers = answers
-                locked.submitted_at = now
-                locked.redirected_at = now
-                locked.outbound_url = outbound_url
-                locked.status = SurveyAttempt.Status.REDIRECTED
-                locked.save(update_fields=["answers", "submitted_at", "redirected_at", "outbound_url", "status", "updated_at"])
-            return HttpResponseRedirect(outbound_url)
+            try:
+                provider = None
+                if attempt.survey.integration_id and attempt.survey.integration.provider_code == "rfg":
+                    from .providers import get_provider
+
+                    provider = get_provider(attempt.survey.integration)
+                    if provider.duplicate_check(
+                        attempt.survey,
+                        attempt,
+                        get_request_ip(request) or attempt.initiation_ip,
+                    ):
+                        errors.append("This respondent has already attempted this survey.")
+                if not errors:
+                    with transaction.atomic():
+                        locked = SurveyAttempt.objects.select_for_update().select_related(
+                            "survey", "survey__integration"
+                        ).get(pk=attempt.pk)
+                        if locked.status != SurveyAttempt.Status.INITIATED:
+                            return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(locked.rid)}")
+                        outbound_url = (
+                            provider.build_outbound_url(locked.survey, locked, answers)
+                            if provider
+                            else build_outbound_url(locked.survey.entry_link, locked.rid, answers)
+                        )
+                        now = timezone.now()
+                        locked.answers = answers
+                        locked.submitted_at = now
+                        locked.redirected_at = now
+                        locked.outbound_url = outbound_url
+                        locked.status = SurveyAttempt.Status.REDIRECTED
+                        locked.save(update_fields=[
+                            "answers", "submitted_at", "redirected_at", "outbound_url", "status", "updated_at"
+                        ])
+                    return HttpResponseRedirect(outbound_url)
+            except Exception as exc:
+                from .providers import ProviderError
+
+                detail = str(exc) if isinstance(exc, ProviderError) else "The upstream provider is temporarily unavailable."
+                errors.append(f"Survey provider could not continue: {detail}")
     else:
         errors = []
 
@@ -464,6 +504,96 @@ STATUS_PAGES = {
     "3": {"title": "Quota already filled", "message": "The required quota was filled before your response could be completed.", "tone": "warning"},
     "4": {"title": "Quality check unsuccessful", "message": "This response did not pass the survey's quality checks.", "tone": "danger"},
 }
+
+
+RFG_CALLBACK_IPS = {
+    "15.222.163.99", "3.97.223.177", "3.97.28.227", "3.230.105.121",
+    "52.21.20.32", "52.45.41.61",
+}
+RFG_STATUS_MAP = {
+    "1": SurveyAttempt.Status.COMPLETED,
+    "2": SurveyAttempt.Status.TERMINATED,
+    "3": SurveyAttempt.Status.OVER_QUOTA,
+    "4": SurveyAttempt.Status.TERMINATED,
+    "5": SurveyAttempt.Status.TERMINATED,
+    "7": SurveyAttempt.Status.TERMINATED,
+    "8": SurveyAttempt.Status.TERMINATED,
+    "9": SurveyAttempt.Status.OVER_QUOTA,
+    "10": SurveyAttempt.Status.QUALITY_TERMINATED,
+    "11": SurveyAttempt.Status.TERMINATED,
+    "12": SurveyAttempt.Status.TERMINATED,
+    "13": SurveyAttempt.Status.TERMINATED,
+    "19": SurveyAttempt.Status.TERMINATED,
+    **{str(code): SurveyAttempt.Status.QUALITY_TERMINATED for code in (*range(30, 45), *range(50, 54))},
+}
+
+
+class RFGCallbackAPIView(APIView):
+    """Receive RFG's server callback from documented RFG callback addresses."""
+
+    authentication_classes = []
+    permission_classes = [permissions.AllowAny]
+
+    @extend_schema(
+        tags=["Respondent callbacks"],
+        summary="Receive a verified Research For Good result callback",
+        description=(
+            "Updates the RID attempt, exit IP/time, LOI and allocation state. "
+            "Requests outside the configured RFG IP allowlist are rejected."
+        ),
+        parameters=[
+            OpenApiParameter("rid", OpenApiTypes.STR, required=True, description="Platform respondent ID"),
+            OpenApiParameter("result", OpenApiTypes.STR, required=True, description="RFG result code"),
+        ],
+        responses={200: RFGCallbackResponseSerializer},
+    )
+    def get(self, request):
+        rid = status_rid_from_request(request)
+        result = request.GET.get("result", "").strip()
+        attempt = SurveyAttempt.objects.select_related("survey__integration").filter(
+            rid=rid,
+            survey__integration__provider_code="rfg",
+        ).first()
+        if not attempt or result not in RFG_STATUS_MAP:
+            return Response({"detail": "Unknown callback."}, status=status.HTTP_400_BAD_REQUEST)
+
+        integration = attempt.survey.integration
+        config = integration.config or {}
+        if config.get("callback_security_mode", "ip") != "ip":
+            return Response(
+                {"detail": "Unsupported callback security mode."},
+                status=status.HTTP_503_SERVICE_UNAVAILABLE,
+            )
+        callback_ip = get_request_ip(request)
+        allowed = set(config.get("callback_ip_allowlist") or RFG_CALLBACK_IPS)
+        try:
+            verified_ip = bool(callback_ip and str(ipaddress.ip_address(callback_ip)) in allowed)
+        except ValueError:
+            verified_ip = False
+        if not verified_ip:
+            return Response({"detail": "Callback source is not trusted."}, status=status.HTTP_403_FORBIDDEN)
+
+        now = timezone.now()
+        with transaction.atomic():
+            locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
+            locked.status = RFG_STATUS_MAP[result]
+            locked.callback_at = locked.callback_at or now
+            locked.last_callback_at = now
+            locked.callback_ip = callback_ip
+            locked.callback_count += 1
+            locked.status_source = "rfg_callback"
+            locked.is_verified = True
+            locked.loi_seconds = locked.calculate_loi_seconds(now)
+            locked.upstream_transaction_data = {
+                **(locked.upstream_transaction_data or {}),
+                "rfg_callback": dict(request.GET.items()),
+            }
+            locked.save(update_fields=[
+                "status", "callback_at", "last_callback_at", "callback_ip", "callback_count",
+                "status_source", "is_verified", "loi_seconds", "upstream_transaction_data", "updated_at",
+            ])
+            finalize_attempt_capacity(locked)
+        return Response({"ok": True, "rid": rid, "status": locked.status})
 
 
 @require_http_methods(["GET"])
@@ -543,7 +673,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "local_id"
     filterset_class = SurveyFilter
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["local_id", "=source_id", "name", "company_name", "country", "country_code", "job_category"]
+    search_fields = ["local_id", "=source_key", "=source_id", "name", "company_name", "country", "country_code", "job_category"]
     ordering_fields = ["source_modified_at", "source_created_at", "cpi", "sample_size", "completes", "created_at"]
     ordering = ["-source_modified_at", "-created_at"]
     permission_classes = [HasFunctionPermission]
@@ -719,7 +849,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = SurveyAttemptFilter
     search_fields = [
-        "rid", "user_id", "survey__local_id", "=survey__source_id", "survey__name", "survey__company_name",
+        "rid", "user_id", "survey__local_id", "=survey__source_key", "=survey__source_id", "survey__name", "survey__company_name",
         "platform_user__username", "platform_user__first_name", "platform_user__last_name", "platform_user__email",
         "initiation_ip", "callback_ip", "entry_browser", "entry_device", "entry_os",
     ]
@@ -923,7 +1053,7 @@ def _attempt_csv_rows(queryset, requesting_user=None):
             vendor_profile.get_account_type_display() if vendor_profile else "",
             attempt.client_id, attempt.client.name if attempt.client else "", attempt.client_allocation_id,
             attempt.survey_allocation_id,
-            survey.local_id, survey.source_id, survey.name, survey.company_name, survey.country_code,
+            survey.local_id, survey.source_identifier, survey.name, survey.company_name, survey.country_code,
             survey.language_code, attempt.supplier_code,
             "" if hide_source_cpi else survey.cpi,
             "" if hide_source_cpi else attempt.source_cpi_snapshot,

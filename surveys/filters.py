@@ -30,7 +30,7 @@ class SurveyAttemptFilter(django_filters.FilterSet):
     status = CharInFilter(field_name="status", lookup_expr="in", help_text="Comma-separated attempt statuses")
     user = CharInFilter(field_name="platform_user_id", lookup_expr="in", help_text="Comma-separated platform user IDs")
     company = CharInFilter(field_name="survey__company_name", lookup_expr="in")
-    survey_id = django_filters.NumberFilter(field_name="survey__source_id")
+    survey_id = django_filters.CharFilter(field_name="survey__source_key", lookup_expr="iexact")
     internal_id = django_filters.CharFilter(field_name="survey__local_id", lookup_expr="iexact")
     initiated_from = django_filters.IsoDateTimeFilter(field_name="initiated_at", lookup_expr="gte")
     initiated_to = django_filters.IsoDateTimeFilter(field_name="initiated_at", lookup_expr="lte")

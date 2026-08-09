@@ -25,6 +25,8 @@ class TargetingQuestionSerializer(serializers.ModelSerializer):
 
 
 class SurveyListSerializer(serializers.ModelSerializer):
+    source_id = serializers.SerializerMethodField()
+    provider_code = serializers.SerializerMethodField()
     client_name = serializers.CharField(source="client.name", read_only=True, allow_null=True)
     display_company_name = serializers.SerializerMethodField()
     country_label = serializers.SerializerMethodField()
@@ -39,7 +41,7 @@ class SurveyListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Survey
         fields = [
-            "id", "local_id", "client", "client_name", "display_company_name", "source_id", "company_name", "name", "status", "sample_size", "completes", "remaining",
+            "id", "local_id", "client", "client_name", "display_company_name", "source_id", "provider_code", "company_name", "name", "status", "sample_size", "completes", "remaining",
             "starts", "cpi", "cpi_cut_percent", "vendor_pricing", "loi", "incidence_rate", "country", "country_code", "country_label",
             "language", "language_code", "group_type", "device_type", "entry_link", "start_link", "has_quota",
             "source_created_at", "source_modified_at", "source_created_display", "source_modified_display",
@@ -49,6 +51,13 @@ class SurveyListSerializer(serializers.ModelSerializer):
 
     def get_country_label(self, obj) -> str:
         return " ".join(part for part in [obj.country_code, obj.language_code] if part) or obj.country
+
+    @extend_schema_field({"oneOf": [{"type": "integer"}, {"type": "string"}]})
+    def get_source_id(self, obj):
+        return obj.source_identifier
+
+    def get_provider_code(self, obj) -> str:
+        return obj.integration.provider_code if obj.integration_id else getattr(obj.client, "provider_code", "innovatemr")
 
     def get_display_company_name(self, obj) -> str:
         request = self.context.get("request")
@@ -65,7 +74,7 @@ class SurveyListSerializer(serializers.ModelSerializer):
         return obj.raw_data.get("createdDate") or None
 
     def get_source_modified_display(self, obj) -> str | None:
-        return obj.raw_data.get("modifiedDate") or None
+        return obj.raw_data.get("modifiedDate") or obj.raw_data.get("lastModified") or None
 
     def _pricing(self, obj):
         request = self.context.get("request")
@@ -91,7 +100,7 @@ class SurveyListSerializer(serializers.ModelSerializer):
         if not obj.entry_link:
             return None
         query = urlencode({
-            "surveyId": obj.source_id,
+            "surveyId": obj.source_identifier,
             "supplierCode": obj.integration.supplier_code if obj.integration_id else settings.PUBLIC_SUPPLIER_CODE,
             "userId": request.user.pk,
             "code": obj.local_id,
@@ -134,6 +143,12 @@ class SyncTriggerResponseSerializer(serializers.Serializer):
     detail_failures = serializers.IntegerField()
 
 
+class RFGCallbackResponseSerializer(serializers.Serializer):
+    ok = serializers.BooleanField()
+    rid = serializers.CharField(max_length=10)
+    status = serializers.CharField()
+
+
 class UserHitDeviceCountsSerializer(serializers.Serializer):
     total = serializers.IntegerField(min_value=0)
     desktop = serializers.IntegerField(min_value=0)
@@ -173,7 +188,7 @@ class UserHitsResponseSerializer(serializers.Serializer):
 
 class SurveyAttemptSerializer(serializers.ModelSerializer):
     survey_local_id = serializers.CharField(source="survey.local_id", read_only=True)
-    survey_source_id = serializers.IntegerField(source="survey.source_id", read_only=True)
+    survey_source_id = serializers.SerializerMethodField()
     survey_name = serializers.CharField(source="survey.name", read_only=True)
     company_name = serializers.CharField(source="survey.company_name", read_only=True)
     country_code = serializers.CharField(source="survey.country_code", read_only=True)
@@ -208,6 +223,9 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
         if not obj.platform_user:
             return "Deleted user"
         return obj.platform_user.get_full_name() or obj.platform_user.username
+
+    def get_survey_source_id(self, obj) -> str:
+        return str(obj.survey.source_identifier)
 
     def get_vendor_name(self, obj) -> str | None:
         if not obj.vendor:

@@ -68,7 +68,18 @@ class Survey(models.Model):
         on_delete=models.PROTECT,
         related_name="surveys",
     )
-    source_id = models.PositiveBigIntegerField(db_index=True, help_text="Provider survey ID")
+    source_id = models.PositiveBigIntegerField(
+        null=True,
+        blank=True,
+        db_index=True,
+        help_text="Legacy numeric upstream survey ID when the provider uses one.",
+    )
+    source_key = models.CharField(
+        max_length=160,
+        blank=True,
+        db_index=True,
+        help_text="Provider survey identifier, including non-numeric IDs.",
+    )
     company_name = models.CharField(max_length=160, default="InnovateMR", db_index=True)
     name = models.CharField(max_length=500, blank=True)
     status = models.CharField(max_length=12, choices=Status.choices, default=Status.LIVE, db_index=True)
@@ -106,15 +117,25 @@ class Survey(models.Model):
         indexes = [models.Index(fields=["status", "country_code"])]
         constraints = [
             models.UniqueConstraint(fields=["integration", "source_id"], name="unique_integration_survey_source"),
+            models.UniqueConstraint(fields=["integration", "source_key"], name="unique_integration_survey_key"),
         ]
 
     def save(self, *args, **kwargs):
         if not self.local_id:
             self.local_id = LocalIdSequence.next_id()
+        if not self.source_key and self.source_id is not None:
+            self.source_key = str(self.source_id)
         super().save(*args, **kwargs)
 
     def __str__(self):
         return f"{self.local_id} · {self.name or self.source_id}"
+
+
+    @property
+    def source_identifier(self):
+        if self.source_id is not None and self.source_key in {"", str(self.source_id)}:
+            return self.source_id
+        return self.source_key or self.source_id
 
 
 class SurveyQuota(models.Model):

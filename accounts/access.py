@@ -14,6 +14,8 @@ EXTERNAL_VENDOR_FORBIDDEN_CODES = frozenset({
     "users.manage", "users.view", "users.create", "users.update", "users.delete",
     "respondents.create",
     "clients.manage", "vendors.manage", "allocations.manage",
+    "clients.integration.view", "clients.integration.manage", "clients.integration.test",
+    "clients.integration.preview", "clients.integration.sync",
     "organization.view", "organization.manage", "organization.clients.manage",
     "sync.run",
 })

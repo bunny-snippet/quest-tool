@@ -1,11 +1,15 @@
 from decimal import Decimal
+import ipaddress
+import re
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.utils import timezone
+from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
 from accounts.models import EmployeeProfile
+from accounts.access import has_function_access
 
 from .models import (
     AllocationReservation,
@@ -97,6 +101,7 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
         model = ClientIntegration
         fields = [
             "id", "client", "client_name", "name", "provider_code", "base_url", "credential_env_key",
+            "credential_env_keys", "config",
             "api_token", "has_credential", "masked_credential", "supplier_code", "scheduled_sync_enabled",
             "inventory_endpoint", "paged_inventory_endpoint", "quota_endpoint_template",
             "targeting_endpoint_template", "transaction_endpoint_template", "auth_header_name",
@@ -123,7 +128,64 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
             if field not in attrs and not getattr(self.instance, field, ""):
                 attrs[field] = value
 
-        if provider_key in {"biobrain", "voqall"} or "voqall.com" in base_url.lower():
+        if provider_key == "rfg":
+            attrs.setdefault("base_url", "https://api.researchforgood.com/API/")
+            credential_refs = attrs.get(
+                "credential_env_keys", getattr(self.instance, "credential_env_keys", {})
+            ) or {}
+            if set(credential_refs) != {"apid", "secret"}:
+                raise serializers.ValidationError({
+                    "credential_env_keys": "RFG requires apid and secret environment-variable mappings."
+                })
+            env_pattern = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+            if any(
+                not isinstance(value, str) or not env_pattern.fullmatch(value)
+                for value in credential_refs.values()
+            ):
+                raise serializers.ValidationError({
+                    "credential_env_keys": "Use environment-variable names here, never credential values."
+                })
+            config = attrs.get("config", getattr(self.instance, "config", {})) or {}
+            allowed_config = {
+                "country", "category", "allow_recontacts", "locale", "timeout_seconds",
+                "detail_refresh_batch", "callback_security_mode", "callback_ip_allowlist",
+            }
+            unexpected = set(config) - allowed_config
+            if unexpected:
+                raise serializers.ValidationError({
+                    "config": f"Unsupported RFG settings: {', '.join(sorted(unexpected))}."
+                })
+            country = str(config.get("country") or "")
+            if country and not re.fullmatch(r"[A-Za-z]{2}", country):
+                raise serializers.ValidationError({"config": "Country must be a two-letter ISO code."})
+            if config.get("category") not in {None, "", "B2B", "B2C"}:
+                raise serializers.ValidationError({"config": "Category must be B2B or B2C."})
+            if config.get("callback_security_mode", "ip") != "ip":
+                raise serializers.ValidationError({"config": "Only RFG's documented server-IP callback mode is supported."})
+            for address in config.get("callback_ip_allowlist") or []:
+                try:
+                    ipaddress.ip_address(address)
+                except ValueError as exc:
+                    raise serializers.ValidationError({"config": f"Invalid callback IP: {address}."}) from exc
+            try:
+                interval = int(attrs.get(
+                    "sync_interval_seconds", getattr(self.instance, "sync_interval_seconds", 600)
+                ))
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError({
+                    "sync_interval_seconds": "Sync interval must be a whole number."
+                }) from exc
+            if interval < 600:
+                raise serializers.ValidationError({
+                    "sync_interval_seconds": "RFG inventory sync must be at least 600 seconds."
+                })
+            if attrs.get("scheduled_sync_enabled", False) and getattr(
+                self.instance, "last_test_status", ""
+            ) != "success":
+                raise serializers.ValidationError({
+                    "scheduled_sync_enabled": "Test and verify this connection before scheduling it."
+                })
+        elif provider_key in {"biobrain", "voqall"} or "voqall.com" in base_url.lower():
             api_root = base_url[:-8] if base_url.lower().endswith("/surveys") else base_url
             current_inventory = attrs.get(
                 "inventory_endpoint", getattr(self.instance, "inventory_endpoint", "")
@@ -146,10 +208,10 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
             set_default("inventory_result_key", "result")
         return attrs
 
-    def get_has_credential(self, obj):
-        return bool(obj.encrypted_api_token or obj.credential_env_key)
+    def get_has_credential(self, obj) -> bool:
+        return bool(obj.encrypted_api_token or obj.credential_env_key or obj.credential_env_keys)
 
-    def get_masked_credential(self, obj):
+    def get_masked_credential(self, obj) -> str:
         return f"••••{obj.credential_last_four}" if obj.credential_last_four else ""
 
     def create(self, validated_data):
@@ -161,15 +223,61 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         token = validated_data.pop("api_token", None)
+        connection_fields = {"provider_code", "base_url", "credential_env_keys", "config"}
+        connection_changed = any(
+            field in validated_data and validated_data[field] != getattr(instance, field)
+            for field in connection_fields
+        )
         instance = super().update(instance, validated_data)
         if token is not None:
             set_integration_token(instance, token)
+        if connection_changed and instance.provider_code == "rfg":
+            instance.last_test_status = ""
+            instance.last_test_error = "Connection settings changed; test the connection again."
+            instance.scheduled_sync_enabled = False
+            instance.save(update_fields=[
+                "last_test_status", "last_test_error", "scheduled_sync_enabled", "updated_at"
+            ])
         return instance
+
+
+class ProviderCredentialFieldSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    label = serializers.CharField()
+
+
+class ProviderCatalogSerializer(serializers.Serializer):
+    code = serializers.CharField()
+    label = serializers.CharField()
+    default_base_url = serializers.URLField()
+    minimum_sync_interval_seconds = serializers.IntegerField(min_value=60)
+    credential_fields = ProviderCredentialFieldSerializer(many=True)
+
+
+class IntegrationActionResponseSerializer(serializers.Serializer):
+    detail = serializers.CharField()
+    result = serializers.JSONField(required=False)
+    task_id = serializers.CharField(required=False)
+
+
+class IntegrationPreviewRowSerializer(serializers.Serializer):
+    source_id = serializers.CharField()
+    name = serializers.CharField(allow_blank=True)
+    country = serializers.CharField(allow_blank=True)
+    cpi = serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True)
+    loi = serializers.IntegerField(allow_null=True)
+    status = serializers.CharField()
+    modified_at = serializers.DateTimeField(allow_null=True)
+
+
+class IntegrationPreviewSerializer(serializers.Serializer):
+    total_received = serializers.IntegerField(min_value=0)
+    results = IntegrationPreviewRowSerializer(many=True)
 
 
 class ClientSerializer(serializers.ModelSerializer):
     created_by = serializers.CharField(source="created_by.username", read_only=True, allow_null=True)
-    integrations = ClientIntegrationSerializer(many=True, read_only=True)
+    integrations = serializers.SerializerMethodField()
 
     class Meta:
         model = Client
@@ -178,6 +286,12 @@ class ClientSerializer(serializers.ModelSerializer):
             "created_by", "created_at", "updated_at", "integrations",
         ]
         read_only_fields = ["created_at", "updated_at"]
+
+    def get_integrations(self, obj) -> list[dict]:
+        request = self.context.get("request")
+        if not request or not has_function_access(request.user, "clients.integration.view"):
+            return []
+        return ClientIntegrationSerializer(obj.integrations.all(), many=True, context=self.context).data
 
 
 class OrganizationUnitSerializer(serializers.ModelSerializer):
@@ -414,7 +528,7 @@ class VendorSurveyAllocationSerializer(serializers.ModelSerializer):
     client = serializers.IntegerField(source="client_allocation.client_id", read_only=True)
     client_name = serializers.CharField(source="client_allocation.client.name", read_only=True)
     survey_local_id = serializers.CharField(source="survey.local_id", read_only=True)
-    survey_source_id = serializers.IntegerField(source="survey.source_id", read_only=True)
+    survey_source_id = serializers.SerializerMethodField()
     survey_name = serializers.CharField(source="survey.name", read_only=True)
     remaining_quantity = serializers.IntegerField(read_only=True)
     effective_cpi_cut_percent = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
@@ -433,6 +547,10 @@ class VendorSurveyAllocationSerializer(serializers.ModelSerializer):
 
     def get_vendor_name(self, obj) -> str:
         return obj.vendor.get_full_name() or obj.vendor.username
+
+    @extend_schema_field({"oneOf": [{"type": "integer"}, {"type": "string"}]})
+    def get_survey_source_id(self, obj):
+        return obj.survey.source_identifier
 
     def validate(self, attrs):
         attrs = super().validate(attrs)

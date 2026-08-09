@@ -1,6 +1,6 @@
 # Survey Workspace
 
-Django-based internal survey workspace that synchronizes live InnovateMR Supplier API inventory, stores it locally, and exposes responsive Projects UI plus a documented REST API.
+Django-based multi-client survey workspace that synchronizes upstream provider inventory, stores it locally, and exposes responsive Projects UI plus a documented REST API. InnovateMR remains supported and Research For Good Live Alert is available through the Client Catalog integration flow.
 
 Hostinger Ubuntu VPS deployment with MySQL, Nginx, Gunicorn, Redis and Celery is covered in [`deploy/README.md`](deploy/README.md).
 
@@ -8,6 +8,7 @@ Hostinger Ubuntu VPS deployment with MySQL, Nginx, Gunicorn, Redis and Celery is
 
 - Dashboard placeholder and responsive Projects workspace matching the supplied table reference.
 - Full and cursor-paged InnovateMR inventory ingestion.
+- Secure UI-driven Research For Good onboarding, HMAC-SHA1 API adapter, preview, per-client scheduled sync, targeting, deduplication and callback tracking.
 - Deterministic merge by `surveyId`; the payload with the newest `modifiedDate` wins.
 - Immutable 14-digit project IDs in `YYYYMM########` format, for example `20260800000001`.
 - Quota and survey-targeting/pre-screening persistence with stale-data refresh.
@@ -58,12 +59,11 @@ celery -A config worker --loglevel=info --pool=solo
 celery -A config beat --loglevel=info
 ```
 
-Beat schedules four independent jobs every minute by default:
+Beat schedules three independent dispatch/check jobs every minute by default:
 
-1. `surveys.sync_innovatemr_surveys` fetches both inventory endpoints, merges them, upserts current rows, and closes surveys no longer present.
-2. `surveys.refresh_stale_details` refreshes a bounded batch of quotas and targeting. `INNOVATEMR_DETAIL_REFRESH_BATCH` controls the batch size.
-3. `surveys.reconcile_pending_attempts` checks redirected attempts whose legacy client return URL has not called this application.
-4. `vendors.expire_allocation_reservations` releases capacity held by abandoned vendor attempts after the configured TTL.
+1. `surveys.dispatch_due_integrations` queues each active scheduled client integration only when its own interval is due. The worker synchronizes inventory and a bounded detail batch; RFG has a hard 600-second minimum.
+2. `surveys.reconcile_pending_attempts` checks redirected attempts whose legacy client return URL has not called this application.
+3. `vendors.expire_allocation_reservations` releases capacity held by abandoned vendor attempts after the configured TTL.
 
 Opening Quota or Pre-screening in the UI also refreshes that survey immediately when its cached details are older than its source `modifiedDate`. Cached details remain available during a temporary upstream outage.
 
@@ -86,6 +86,8 @@ Opening Quota or Pre-screening in the UI also refreshes that survey immediately 
 | `GET` | `/api/v1/vendors/reservations/` | Reservation lifecycle audit |
 | CRUD | `/api/v1/vendors/organization-units/` | Branch, Sub-branch and Shift hierarchy |
 | CRUD | `/api/v1/vendors/organization-client-access/` | Inherited unit-level client visibility |
+| CRUD | `/api/v1/vendors/integrations/` | Non-secret client integration metadata |
+| `GET/POST` | `/api/v1/vendors/integrations/{id}/preview/`, `test-connection/`, `sync-now/` | Provider onboarding and operations |
 | CRUD | `/api/v1/access/roles/` | Roles and their explicit function assignments |
 | CRUD | `/api/v1/access/functions/` | Function permission catalog |
 | CRUD | `/api/v1/access/users/` | Employee accounts, role and individual allow/deny overrides |
@@ -133,4 +135,4 @@ python manage.py spectacular --file schema.yml --validate
 python manage.py collectstatic --noinput
 ```
 
-See [architecture](docs/architecture.md) and [synchronization runbook](docs/synchronization.md) for the internal design and operations contract.
+See [architecture](docs/architecture.md), [client integrations](docs/client-integrations.md), and [synchronization runbook](docs/synchronization.md) for the internal design and operations contract.

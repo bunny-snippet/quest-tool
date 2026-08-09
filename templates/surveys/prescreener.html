@@ -36,6 +36,8 @@
         {% elif question.input_kind == "number" %}
           <label class="open-answer"><span>Your answer</span><input type="number" inputmode="numeric" name="{{ question.field_name }}" value="{{ question.current_value }}" {% if question.min_value != None %}min="{{ question.min_value }}"{% endif %} {% if question.max_value != None %}max="{{ question.max_value }}"{% endif %} placeholder="Enter a number" required></label>
           {% if question.min_value != None %}<small class="answer-hint">Accepted range: {{ question.min_value }}–{{ question.max_value }}</small>{% endif %}
+        {% elif question.input_kind == "date" %}
+          <label class="open-answer"><span>Your answer</span><input type="date" name="{{ question.field_name }}" value="{{ question.current_value }}" required></label>
         {% else %}
           <label class="open-answer"><span>Your answer</span><input type="text" name="{{ question.field_name }}" value="{{ question.current_value }}" placeholder="Type your answer" required></label>
         {% endif %}

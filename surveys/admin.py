@@ -17,16 +17,16 @@ class TargetingQuestionInline(admin.TabularInline):
 
 @admin.register(Survey)
 class SurveyAdmin(admin.ModelAdmin):
-    list_display = ["local_id", "client", "source_id", "company_name", "name", "country_code", "language_code", "completes", "sample_size", "status", "source_modified_at"]
-    search_fields = ["local_id", "source_id", "company_name", "name"]
-    list_filter = ["status", "client", "company_name", "country_code", "language_code", "has_quota"]
-    readonly_fields = ["local_id", "source_id", "raw_data", "created_at", "updated_at", "last_seen_at", "detail_synced_at"]
+    list_display = ["local_id", "client", "integration", "source_key", "company_name", "name", "country_code", "language_code", "completes", "sample_size", "status", "source_modified_at"]
+    search_fields = ["local_id", "source_key", "source_id", "company_name", "name"]
+    list_filter = ["status", "client", "integration", "company_name", "country_code", "language_code", "has_quota"]
+    readonly_fields = ["local_id", "source_id", "source_key", "raw_data", "created_at", "updated_at", "last_seen_at", "detail_synced_at"]
     inlines = [SurveyQuotaInline, TargetingQuestionInline]
 
 
 @admin.register(SyncRun)
 class SyncRunAdmin(admin.ModelAdmin):
-    list_display = ["id", "started_at", "status", "unique_surveys", "created", "updated", "closed", "detail_failures"]
+    list_display = ["id", "integration", "started_at", "status", "unique_surveys", "created", "updated", "closed", "detail_failures"]
     readonly_fields = [field.name for field in SyncRun._meta.fields]
 
 
@@ -38,7 +38,7 @@ class SurveyAttemptAdmin(admin.ModelAdmin):
     ]
     search_fields = [
         "rid", "user_id", "platform_user__username", "platform_user__email", "survey__local_id",
-        "survey__source_id", "initiation_ip", "callback_ip",
+        "survey__source_key", "survey__source_id", "initiation_ip", "callback_ip",
     ]
     list_filter = ["status", "status_source", "supplier_code", "entry_device", "entry_browser", "is_verified", "initiated_at"]
     readonly_fields = [field.name for field in SurveyAttempt._meta.fields]

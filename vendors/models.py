@@ -51,6 +51,12 @@ class ClientIntegration(models.Model):
         blank=True,
         help_text="Environment-variable name containing the token. Secret values are never stored here.",
     )
+    credential_env_keys = models.JSONField(
+        default=dict,
+        blank=True,
+        help_text="Provider credential names mapped to environment-variable names; never secret values.",
+    )
+    config = models.JSONField(default=dict, blank=True, help_text="Non-secret provider configuration.")
     encrypted_api_token = models.TextField(blank=True, editable=False)
     credential_fingerprint = models.CharField(max_length=64, blank=True, editable=False)
     credential_last_four = models.CharField(max_length=4, blank=True, editable=False)
@@ -106,6 +112,20 @@ class ClientIntegration(models.Model):
 
     def __str__(self):
         return f"{self.client} · {self.name}"
+
+
+    def clean(self):
+        super().clean()
+        if self.provider_code == "rfg" and self.sync_interval_seconds < 600:
+            raise ValidationError({
+                "sync_interval_seconds": (
+                    "Research For Good inventory cannot be polled more often than every 10 minutes."
+                )
+            })
+        if self.provider_code == "rfg" and self.scheduled_sync_enabled and self.last_test_status != "success":
+            raise ValidationError({
+                "scheduled_sync_enabled": "Test and verify the connection before enabling scheduled sync."
+            })
 
 
 class OrganizationUnit(models.Model):

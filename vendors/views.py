@@ -35,6 +35,9 @@ from .models import (
 from .serializers import (
     AllocationReservationSerializer,
     ClientIntegrationSerializer,
+    IntegrationActionResponseSerializer,
+    IntegrationPreviewSerializer,
+    ProviderCatalogSerializer,
     ClientSerializer,
     OrganizationClientAccessSerializer,
     OrganizationManagementOptionsSerializer,
@@ -93,20 +96,21 @@ def vendor_management_page(request):
     })
 
 
-@function_permission_required("clients.view")
+@function_permission_required("clients.integration.view")
 def client_integrations_page(request):
     return render(request, "vendors/integrations.html", {
         "active_page": "client-integrations",
-        "can_manage_integrations": has_function_access(request.user, "clients.manage"),
+        "can_manage_integrations": has_function_access(request.user, "clients.integration.manage"),
     })
 
 
 @function_permission_required("organization.view")
 def organization_management_page(request):
     codes = effective_permission_codes(request.user)
+    owner_controlled = vendor_scope_user_id(request.user) is None
     can_view_structure = "organization.tab.structure" in codes
     can_view_client_access = "organization.tab.client_access" in codes
-    can_view_clients = request.user.is_superuser and "organization.tab.clients" in codes
+    can_view_clients = owner_controlled and "organization.tab.clients" in codes
     unit_columns = [
         name for name in ("path", "type", "members", "clients", "status", "actions")
         if f"organization.column.unit.{name}" in codes
@@ -132,7 +136,12 @@ def organization_management_page(request):
         "can_create_units": "organization.action.create_unit" in codes,
         "can_edit_units": "organization.action.edit_unit" in codes,
         "can_manage_unit_clients": "organization.action.assign_client" in codes,
-        "can_manage_clients": "clients.manage" in codes and request.user.is_superuser,
+        "can_manage_clients": owner_controlled and "clients.manage" in codes,
+        "can_view_integrations": owner_controlled and "clients.integration.view" in codes,
+        "can_manage_integrations": owner_controlled and "clients.integration.manage" in codes,
+        "can_test_integrations": owner_controlled and "clients.integration.test" in codes,
+        "can_preview_integrations": owner_controlled and "clients.integration.preview" in codes,
+        "can_sync_integrations": owner_controlled and "clients.integration.sync" in codes,
         "organization_unit_columns": unit_columns,
         "organization_access_columns": access_columns,
         "first_organization_tab": first_tab,
@@ -418,18 +427,47 @@ class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     queryset = ClientIntegration.objects.select_related("client", "created_by").all()
     serializer_class = ClientIntegrationSerializer
     permission_classes = [HasFunctionPermission]
-    view_permission = "clients.view"
-    manage_permission = "clients.manage"
+    view_permission = "clients.integration.view"
+    manage_permission = "clients.integration.manage"
     filter_backends = [DjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ["client", "provider_code", "scheduled_sync_enabled", "is_active"]
     search_fields = ["name", "client__name", "client__code"]
     vendor_scope_filter = "client__vendor_allocations__vendor_id"
 
+    def get_required_function_permission(self):
+        if self.action in {"list", "retrieve", "providers"}:
+            return "clients.integration.view"
+        return {
+            "test_connection": "clients.integration.test",
+            "preview": "clients.integration.preview",
+            "sync_now": "clients.integration.sync",
+        }.get(self.action, "clients.integration.manage")
+
+    @extend_schema(
+        tags=["Client integrations"],
+        summary="List installed upstream provider adapters",
+        responses=ProviderCatalogSerializer(many=True),
+    )
+    @action(detail=False, methods=["get"], url_path="providers")
+    def providers(self, request):
+        from surveys.providers import provider_catalog
+
+        return Response(provider_catalog())
+
     @action(detail=True, methods=["post"], url_path="test-connection")
     def test_connection(self, request, pk=None):
-        from surveys.integrations import InnovateMRClient
-
         integration = self.get_object()
+        if integration.provider_code == "rfg":
+            from surveys.provider_services import test_provider_connection
+            from surveys.providers import ProviderError
+
+            try:
+                result = test_provider_connection(integration)
+            except ProviderError as exc:
+                return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({"detail": "Connection verified.", "result": result})
+
+        from surveys.integrations import InnovateMRClient
         try:
             result = InnovateMRClient(integration=integration).test_connection()
             integration.last_test_status = "success"
@@ -444,11 +482,32 @@ class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
         integration.save(update_fields=["last_tested_at", "last_test_status", "last_test_error", "updated_at"])
         return Response(result, status=response_status)
 
+    @extend_schema(
+        tags=["Client integrations"],
+        summary="Preview provider inventory without storing it",
+        responses=IntegrationPreviewSerializer,
+    )
+    @action(detail=True, methods=["get"], url_path="preview")
+    def preview(self, request, pk=None):
+        from surveys.provider_services import provider_preview
+        from surveys.providers import ProviderError
+
+        try:
+            data = provider_preview(self.get_object(), request.query_params.get("limit", 10))
+        except (ProviderError, ValueError) as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        return Response(data)
+
     @action(detail=True, methods=["post"], url_path="sync-now")
     def sync_now(self, request, pk=None):
         from surveys.tasks import sync_client_integration_task
 
         integration = self.get_object()
+        if integration.provider_code == "rfg" and integration.last_test_status != "success":
+            return Response(
+                {"detail": "Test and verify the connection first."},
+                status=status.HTTP_409_CONFLICT,
+            )
         task = sync_client_integration_task.delay(integration.pk)
         return Response({"status": "queued", "task_id": task.id}, status=status.HTTP_202_ACCEPTED)
 

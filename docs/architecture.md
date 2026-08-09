@@ -25,7 +25,7 @@ flowchart LR
 
 ### `Survey`
 
-One row per InnovateMR `surveyId`. `source_id` is unique. `local_id` is an immutable, indexed 14-digit public identifier. `company_name` identifies the supplier source and supports future multi-supplier filtering. Core inventory fields are normalized for filters and reporting while `raw_data` preserves the complete upstream payload for future fields and debugging.
+One row per client/provider survey. `source_key` is the canonical string provider identifier and is unique together with its integration; `source_id` remains a nullable numeric compatibility field for InnovateMR and other numeric providers. `local_id` is an immutable, indexed 14-digit public identifier. Core inventory fields are normalized for filters and reporting while `raw_data` preserves the complete upstream payload for future fields and debugging.
 
 `source_created_at` and `source_modified_at` retain upstream timestamps. `created_at` and `updated_at` are database audit timestamps. `last_seen_at` records inventory presence. A missing survey is marked `closed`, not deleted.
 
@@ -67,7 +67,7 @@ For production volume, use PostgreSQL and Redis, run at least one dedicated work
 
 ## Security
 
-- The supplier token comes from process environment only and is sent in `x-access-token` over HTTPS.
+- Generic provider tokens are encrypted at rest or resolved from process environment and sent only to their configured HTTPS endpoint. RFG APID/secret values remain in environment variables and requests use timestamped HMAC-SHA1 authentication.
 - It is never serialized, rendered, logged intentionally, or stored in survey payloads.
 - Raw upstream errors are kept server-side.
 - Organization UI, component controls and REST actions use function-level permissions; querysets are additionally restricted to the current super-admin or internal-vendor workspace.

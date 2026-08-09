@@ -8,9 +8,15 @@
   const canCreateUnits = workspace.dataset.createUnits === 'true';
   const canEditUnits = workspace.dataset.editUnits === 'true';
   const canManageUnitClients = workspace.dataset.manageUnitClients === 'true';
+  const canViewClients = workspace.dataset.viewClients === 'true';
   const canManageClients = workspace.dataset.manageClients === 'true';
-  const state = { options: { owners: [], clients: [], client_eligibility: {} }, units: [], access: [], clients: [] };
-  const edit = { unit: null, access: null, client: null };
+  const canViewIntegrations = workspace.dataset.viewIntegrations === 'true';
+  const canManageIntegrations = workspace.dataset.manageIntegrations === 'true';
+  const canTestIntegrations = workspace.dataset.testIntegrations === 'true';
+  const canPreviewIntegrations = workspace.dataset.previewIntegrations === 'true';
+  const canSyncIntegrations = workspace.dataset.syncIntegrations === 'true';
+  const state = { options: { owners: [], clients: [], client_eligibility: {} }, units: [], access: [], clients: [], providers: [] };
+  const edit = { unit: null, access: null, client: null, integration: null, integrationClient: null };
   const unitColumns = new Set(JSON.parse($('#organizationUnitColumnAccess')?.textContent || '[]'));
   const accessColumns = new Set(JSON.parse($('#organizationClientColumnAccess')?.textContent || '[]'));
 
@@ -75,7 +81,7 @@
 
   function renderClients() {
     const node = $('#organizationClients'); if (!node) return;
-    node.innerHTML = state.clients.map((client) => `<article class="client-card"><header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.code)} · ${escapeHtml(client.provider_code)}</p></div>${stateBadge(client.is_active)}</header><footer><small>${escapeHtml(client.company_name_match || 'No company match')}</small>${actionButton('client', client.id, canManageClients)}</footer></article>`).join('') || '<div class="organization-empty">No clients yet.</div>';
+    node.innerHTML = state.clients.map((client) => { const integrations = canViewIntegrations ? (client.integrations || []).filter((item) => item.provider_code === 'rfg').map((item) => { const connectionStatus = item.last_test_status || 'draft'; return `<button class="integration-chip ${escapeHtml(connectionStatus)}" type="button" data-edit-integration="${item.id}" data-client-id="${client.id}"><span>${escapeHtml(item.name)}</span><small>${escapeHtml(connectionStatus)}</small></button>`; }).join('') : ''; return `<article class="client-card"><header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.code)} · ${escapeHtml(client.provider_code)}</p></div>${stateBadge(client.is_active)}</header>${canViewIntegrations ? `<div class="client-integrations">${integrations || '<small>No RFG integration configured.</small>'}</div>` : ''}<footer><small>${escapeHtml(client.company_name_match || 'No company match')}</small><div class="client-card-actions">${canManageIntegrations ? `<button class="unit-action" type="button" data-add-integration="${client.id}">Add RFG integration</button>` : ''}${actionButton('client', client.id, canManageClients)}</div></footer></article>`; }).join('') || '<div class="organization-empty">No clients yet.</div>';
   }
 
   function renderSummary() {
@@ -132,11 +138,32 @@
     $('#clientModalTitle').textContent = record ? 'Edit client' : 'Add client'; $('[data-client-submit]').textContent = record ? 'Save changes' : 'Create client'; $('[data-client-error]').hidden = true; openModal($('#clientModal'));
   }
 
+  const integrationForm = $('#integrationForm');
+  function allIntegrations() { return state.clients.flatMap((client) => (client.integrations || []).map((item) => ({ ...item, clientRecord: client }))); }
+  function populateProviders(selected = 'rfg') {
+    integrationForm.elements.provider_code.innerHTML = state.providers.map((provider) => option(provider.code, provider.label, provider.code === selected)).join('');
+    const provider = state.providers.find((item) => item.code === integrationForm.elements.provider_code.value) || state.providers[0];
+    if (provider && !integrationForm.elements.base_url.value) integrationForm.elements.base_url.value = provider.default_base_url;
+    if (provider) integrationForm.elements.sync_interval_seconds.min = provider.minimum_sync_interval_seconds;
+  }
+  function openIntegration(clientId, integrationId = null) {
+    if (!integrationForm) return;
+    edit.integrationClient = Number(clientId); edit.integration = integrationId ? Number(integrationId) : null; integrationForm.reset(); integrationForm.elements.is_active.checked = true; integrationForm.elements.sync_interval_seconds.value = 600;
+    const client = state.clients.find((item) => Number(item.id) === edit.integrationClient); const record = allIntegrations().find((item) => Number(item.id) === edit.integration);
+    $('[data-integration-client]').textContent = client?.name || 'Unknown client'; populateProviders(record?.provider_code || 'rfg');
+    if (record) { integrationForm.elements.name.value = record.name || ''; integrationForm.elements.provider_code.value = record.provider_code; integrationForm.elements.base_url.value = record.base_url || ''; integrationForm.elements.apid_env.value = record.credential_env_keys?.apid || ''; integrationForm.elements.secret_env.value = record.credential_env_keys?.secret || ''; integrationForm.elements.sync_interval_seconds.value = record.sync_interval_seconds || 600; integrationForm.elements.country.value = record.config?.country || ''; integrationForm.elements.is_active.checked = record.is_active; integrationForm.elements.scheduled_sync_enabled.checked = record.scheduled_sync_enabled; integrationForm.elements.scheduled_sync_enabled.disabled = record.last_test_status !== 'success'; }
+    else { integrationForm.elements.apid_env.value = 'RFG_APID'; integrationForm.elements.secret_env.value = 'RFG_SECRET'; integrationForm.elements.scheduled_sync_enabled.disabled = true; }
+    $$('input,select', integrationForm).forEach((field) => { if (!canManageIntegrations) field.disabled = true; });
+    $('[data-test-integration]').hidden = !canTestIntegrations; $('[data-preview-integration]').hidden = !canPreviewIntegrations; $('[data-sync-integration]').hidden = !canSyncIntegrations;
+    const connectionStatus = record?.last_test_status || 'draft'; const statusNode = $('[data-integration-status]'); statusNode.textContent = connectionStatus; statusNode.className = connectionStatus; $('[data-integration-actions]').hidden = !record || !(canTestIntegrations || canPreviewIntegrations || canSyncIntegrations); $('[data-integration-preview]').hidden = true; $('[data-integration-error]').hidden = true; $('#integrationModalTitle').textContent = record ? 'Manage integration' : 'Add integration'; if ($('[data-integration-submit]')) $('[data-integration-submit]').textContent = record ? 'Save settings' : 'Create integration'; openModal($('#integrationModal'));
+  }
+
   async function reload() {
     const requests = [api('/api/v1/vendors/organization-options/'), fetchAll('/api/v1/vendors/organization-units/'), fetchAll('/api/v1/vendors/organization-client-access/')];
-    if (canManageClients) requests.push(fetchAll('/api/v1/vendors/clients/'));
-    const [options, units, access, clients = []] = await Promise.all(requests);
-    Object.assign(state, { options, units, access, clients }); renderSummary(); renderStructure(); renderAccess(); renderClients();
+    if (canViewClients || canManageClients || canViewIntegrations) requests.push(fetchAll('/api/v1/vendors/clients/'));
+    if (canViewIntegrations) requests.push(api('/api/v1/vendors/integrations/providers/'));
+    const [options, units, access, clients = [], providers = []] = await Promise.all(requests);
+    Object.assign(state, { options, units, access, clients, providers }); renderSummary(); renderStructure(); renderAccess(); renderClients();
   }
 
   $$('[data-organization-tab]').forEach((button) => button.addEventListener('click', () => { $$('[data-organization-tab]').forEach((item) => item.classList.toggle('active', item === button)); $$('[data-organization-panel]').forEach((panel) => { const active = panel.dataset.organizationPanel === button.dataset.organizationTab; panel.hidden = !active; panel.classList.toggle('active', active); }); }));
@@ -144,10 +171,15 @@
   $('[data-create-client-access]')?.addEventListener('click', () => openClientAccess()); $('[data-create-client]')?.addEventListener('click', () => openClient());
   unitForm?.elements.workspace_owner.addEventListener('change', refreshParentOptions); unitForm?.elements.unit_type.addEventListener('change', refreshParentOptions); accessForm?.elements.organization_unit.addEventListener('change', refreshClientOptions);
   unitForm?.elements.name.addEventListener('input', () => { if (!edit.unit) unitForm.elements.code.value = slug(unitForm.elements.name.value); });
-  document.addEventListener('click', (event) => { const unit = event.target.closest('[data-edit-unit]'); const access = event.target.closest('[data-edit-client-access]'); const client = event.target.closest('[data-edit-client]'); if (unit) openUnit(unit.dataset.editUnit); if (access) openClientAccess(access.dataset.editClientAccess); if (client) openClient(client.dataset.editClient); });
+  document.addEventListener('click', (event) => { const unit = event.target.closest('[data-edit-unit]'); const access = event.target.closest('[data-edit-client-access]'); const client = event.target.closest('[data-edit-client]'); const addIntegration = event.target.closest('[data-add-integration]'); const integration = event.target.closest('[data-edit-integration]'); if (unit) openUnit(unit.dataset.editUnit); if (access) openClientAccess(access.dataset.editClientAccess); if (client) openClient(client.dataset.editClient); if (addIntegration) openIntegration(addIntegration.dataset.addIntegration); if (integration) openIntegration(integration.dataset.clientId, integration.dataset.editIntegration); });
   unitForm?.addEventListener('submit', async (event) => { event.preventDefault(); const box = $('[data-unit-error]'); box.hidden = true; const payload = { workspace_owner: Number(unitForm.elements.workspace_owner.value), unit_type: unitForm.elements.unit_type.value, parent: unitForm.elements.parent.value ? Number(unitForm.elements.parent.value) : null, name: unitForm.elements.name.value.trim(), code: unitForm.elements.code.value.trim(), description: unitForm.elements.description.value.trim(), is_active: unitForm.elements.is_active.checked }; try { await api(edit.unit ? `/api/v1/vendors/organization-units/${edit.unit}/` : '/api/v1/vendors/organization-units/', { method: edit.unit ? 'PATCH' : 'POST', body: JSON.stringify(payload) }); closeModals(); toast(edit.unit ? 'Organization unit updated.' : 'Organization unit created.'); await reload(); } catch (error) { box.textContent = error.message; box.hidden = false; } });
   accessForm?.addEventListener('submit', async (event) => { event.preventDefault(); const box = $('[data-client-access-error]'); box.hidden = true; const payload = { organization_unit: Number(accessForm.elements.organization_unit.value), client: Number(accessForm.elements.client.value), is_active: accessForm.elements.is_active.checked }; try { await api(edit.access ? `/api/v1/vendors/organization-client-access/${edit.access}/` : '/api/v1/vendors/organization-client-access/', { method: edit.access ? 'PATCH' : 'POST', body: JSON.stringify(payload) }); closeModals(); toast(edit.access ? 'Client visibility updated.' : 'Client assigned to organization.'); await reload(); } catch (error) { box.textContent = error.message; box.hidden = false; } });
   clientForm?.addEventListener('submit', async (event) => { event.preventDefault(); const box = $('[data-client-error]'); box.hidden = true; const payload = { name: clientForm.elements.name.value.trim(), code: clientForm.elements.code.value.trim(), provider_code: clientForm.elements.provider_code.value.trim(), company_name_match: clientForm.elements.company_name_match.value.trim(), is_active: clientForm.elements.is_active.checked }; try { await api(edit.client ? `/api/v1/vendors/clients/${edit.client}/` : '/api/v1/vendors/clients/', { method: edit.client ? 'PATCH' : 'POST', body: JSON.stringify(payload) }); closeModals(); toast(edit.client ? 'Client updated.' : 'Client created.'); await reload(); } catch (error) { box.textContent = error.message; box.hidden = false; } });
+  integrationForm?.elements.provider_code.addEventListener('change', () => { integrationForm.elements.base_url.value = ''; populateProviders(integrationForm.elements.provider_code.value); });
+  integrationForm?.addEventListener('submit', async (event) => { event.preventDefault(); const box = $('[data-integration-error]'); box.hidden = true; const payload = { client: edit.integrationClient, name: integrationForm.elements.name.value.trim(), provider_code: integrationForm.elements.provider_code.value, base_url: integrationForm.elements.base_url.value.trim(), credential_env_keys: { apid: integrationForm.elements.apid_env.value.trim(), secret: integrationForm.elements.secret_env.value.trim() }, config: { country: integrationForm.elements.country.value.trim().toUpperCase(), callback_security_mode: 'ip' }, sync_interval_seconds: Number(integrationForm.elements.sync_interval_seconds.value), scheduled_sync_enabled: integrationForm.elements.scheduled_sync_enabled.checked, is_active: integrationForm.elements.is_active.checked }; try { const saved = await api(edit.integration ? `/api/v1/vendors/integrations/${edit.integration}/` : '/api/v1/vendors/integrations/', { method: edit.integration ? 'PATCH' : 'POST', body: JSON.stringify(payload) }); edit.integration = saved.id; toast('Integration saved. Test the connection before scheduling sync.'); await reload(); openIntegration(edit.integrationClient, edit.integration); } catch (error) { box.textContent = error.message; box.hidden = false; } });
+  async function integrationAction(path, method = 'POST', reopen = true) { const box = $('[data-integration-error]'); box.hidden = true; try { const data = await api(`/api/v1/vendors/integrations/${edit.integration}/${path}/`, { method }); toast(data.detail || 'Request completed.'); if (reopen) { await reload(); openIntegration(edit.integrationClient, edit.integration); } return data; } catch (error) { box.textContent = error.message; box.hidden = false; return null; } }
+  $('[data-test-integration]')?.addEventListener('click', () => integrationAction('test-connection')); $('[data-sync-integration]')?.addEventListener('click', () => integrationAction('sync-now'));
+  $('[data-preview-integration]')?.addEventListener('click', async () => { const data = await integrationAction('preview', 'GET', false); if (!data) return; const node = $('[data-integration-preview]'); node.hidden = false; node.innerHTML = `<strong>${Number(data.total_received || 0)} upstream surveys</strong>${(data.results || []).map((row) => `<span><b>${escapeHtml(row.source_id)}</b>${escapeHtml(row.name || 'Untitled')} · ${escapeHtml(row.country || '—')} · CPI ${escapeHtml(row.cpi ?? '—')}</span>`).join('') || '<span>No surveys returned.</span>'}`; });
   $$('[data-close-organization-modal]').forEach((button) => button.addEventListener('click', closeModals)); backdrop?.addEventListener('click', closeModals); document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeModals(); });
   reload().catch((error) => { toast(error.message, true); if ($('#organizationTree')) $('#organizationTree').innerHTML = `<div class="organization-empty">${escapeHtml(error.message)}</div>`; });
 })();

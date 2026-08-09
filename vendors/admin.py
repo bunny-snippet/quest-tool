@@ -78,7 +78,7 @@ class VendorSurveyAllocationAdmin(admin.ModelAdmin):
     ]
     search_fields = [
         "client_allocation__vendor__username", "client_allocation__vendor__email",
-        "survey__local_id", "survey__source_id", "survey__name",
+        "survey__local_id", "survey__source_key", "survey__source_id", "survey__name",
     ]
     list_filter = ["client_allocation__client", "is_active"]
     readonly_fields = ["reserved_quantity", "consumed_quantity", "created_at", "updated_at"]

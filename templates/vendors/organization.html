@@ -2,7 +2,7 @@
 {% load static %}
 {% block title %}Organization · Survey Workspace{% endblock %}
 {% block header_title %}Organization{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'vendors/organization.css' %}?v=1">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'vendors/organization.css' %}?v=2">{% endblock %}
 {% block content %}
 <div class="csrf-source" hidden>{% csrf_token %}</div>
 {{ organization_unit_columns|json_script:"organizationUnitColumnAccess" }}
@@ -24,7 +24,13 @@
   data-create-units="{{ can_create_units|yesno:'true,false' }}"
   data-edit-units="{{ can_edit_units|yesno:'true,false' }}"
   data-manage-unit-clients="{{ can_manage_unit_clients|yesno:'true,false' }}"
-  data-manage-clients="{{ can_manage_clients|yesno:'true,false' }}">
+  data-view-clients="{{ can_view_clients|yesno:'true,false' }}"
+  data-manage-clients="{{ can_manage_clients|yesno:'true,false' }}"
+  data-view-integrations="{{ can_view_integrations|yesno:'true,false' }}"
+  data-manage-integrations="{{ can_manage_integrations|yesno:'true,false' }}"
+  data-test-integrations="{{ can_test_integrations|yesno:'true,false' }}"
+  data-preview-integrations="{{ can_preview_integrations|yesno:'true,false' }}"
+  data-sync-integrations="{{ can_sync_integrations|yesno:'true,false' }}">
   <nav class="organization-tabs" role="tablist">
     {% if can_view_structure %}<button class="{% if first_organization_tab == 'structure' %}active{% endif %}" type="button" data-organization-tab="structure">Structure</button>{% endif %}
     {% if can_view_client_access %}<button class="{% if first_organization_tab == 'client-access' %}active{% endif %}" type="button" data-organization-tab="client-access">Client access</button>{% endif %}
@@ -88,6 +94,25 @@
   </form>
 </section>{% endif %}
 
+{% if can_view_integrations %}<section class="organization-modal integration-modal" id="integrationModal" role="dialog" aria-modal="true" aria-labelledby="integrationModalTitle" hidden>
+  <form id="integrationForm">
+    <header><div><p class="eyebrow">Secure upstream connection</p><h2 id="integrationModalTitle">Add integration</h2></div><button type="button" data-close-organization-modal aria-label="Close">×</button></header>
+    <div class="organization-modal-body">
+      <div class="integration-client-banner"><span>Client</span><strong data-integration-client>—</strong><em data-integration-status>Draft</em></div>
+      <div class="organization-form-grid">
+        <label><span>Connection name</span><input name="name" maxlength="120" placeholder="RFG Live Alert" required></label><label><span>Provider</span><select name="provider_code" required></select></label>
+        <label class="wide"><span>API base URL</span><input name="base_url" type="url" maxlength="500" required></label>
+        <label><span>APID environment variable</span><input name="apid_env" maxlength="120" placeholder="RFG_APID" pattern="[A-Za-z_][A-Za-z0-9_]*" required><small>Name only—never paste the APID here.</small></label>
+        <label><span>Secret environment variable</span><input name="secret_env" maxlength="120" placeholder="RFG_SECRET" pattern="[A-Za-z_][A-Za-z0-9_]*" required><small>Name only—secret stays on the server.</small></label>
+        <label><span>Sync interval (seconds)</span><input name="sync_interval_seconds" type="number" min="600" step="60" value="600" required></label><label><span>Country (optional)</span><input name="country" maxlength="2" placeholder="US"></label>
+      </div>
+      <div class="integration-toggles"><label class="organization-toggle"><input name="is_active" type="checkbox" checked><span>Active integration</span><small>Disabling stops all provider activity.</small></label><label class="organization-toggle"><input name="scheduled_sync_enabled" type="checkbox"><span>Scheduled sync</span><small>Available after a successful connection test.</small></label></div>
+      <div class="integration-actions" data-integration-actions hidden><button type="button" data-test-integration>Test connection</button><button type="button" data-preview-integration>Preview inventory</button><button type="button" data-sync-integration>Sync now</button></div>
+      <div class="integration-preview" data-integration-preview hidden></div><div class="organization-error" data-integration-error hidden></div>
+    </div>
+    <footer><button class="organization-secondary" type="button" data-close-organization-modal>{% if can_manage_integrations %}Cancel{% else %}Close{% endif %}</button>{% if can_manage_integrations %}<button class="primary-button" type="submit"><span data-integration-submit>Save integration</span></button>{% endif %}</footer>
+  </form>
+</section>{% endif %}
 <div class="organization-toast" data-organization-toast aria-live="polite"></div>
 {% endblock %}
-{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=1" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=2" defer></script>{% endblock %}

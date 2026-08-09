@@ -299,12 +299,14 @@ def sync_surveys(client: InnovateMRClient | None = None, integration: ClientInte
         with transaction.atomic():
             source_client = integration.client if integration else None
             for source_id, payload in merged.items():
-                lookup = Survey.objects.filter(source_id=source_id)
+                source_key = str(source_id)
+                lookup = Survey.objects.filter(source_key=source_key)
                 lookup = lookup.filter(integration=integration) if integration else lookup.filter(integration__isnull=True)
                 existing = lookup.first()
                 values = _survey_values(payload, now)
                 values["client"] = source_client
                 values["integration"] = integration
+                values["source_key"] = source_key
                 if existing is None:
                     survey = Survey.objects.create(source_id=source_id, **values)
                     run.created += 1

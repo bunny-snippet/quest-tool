@@ -1,5 +1,7 @@
 # Synchronization runbook
 
+Client integrations are isolated by `(integration, source_key)`. Beat checks active scheduled integrations every minute; each integration's `sync_interval_seconds` controls actual provider calls. Research For Good enforces its documented 600-second minimum. See [client integrations](client-integrations.md).
+
 ## Upstream endpoints
 
 - `GET /supply/getAllocatedSurveys`

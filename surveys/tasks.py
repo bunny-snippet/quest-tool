@@ -10,6 +10,7 @@ from vendors.models import ClientIntegration
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .models import Survey, SurveyAttempt, SyncLease
 from .services import reconcile_attempt_status, replace_survey_details, sync_surveys
+from .provider_services import refresh_client_integration_details, sync_client_integration
 
 
 def _stale_surveys(integration, limit):
@@ -27,10 +28,14 @@ def dispatch_due_integrations_task():
     queued = []
     integrations = ClientIntegration.objects.filter(
         is_active=True, client__is_active=True, scheduled_sync_enabled=True,
-    ).only("id", "sync_interval_seconds", "last_sync_started_at")
+    ).only("id", "provider_code", "sync_interval_seconds", "last_sync_started_at")
     for integration in integrations:
+        interval_seconds = max(
+            integration.sync_interval_seconds,
+            600 if integration.provider_code == "rfg" else 60,
+        )
         due_at = (integration.last_sync_started_at or (now - timedelta(days=1))) + timedelta(
-            seconds=integration.sync_interval_seconds
+            seconds=interval_seconds
         )
         if due_at <= now:
             ClientIntegration.objects.filter(pk=integration.pk).update(
@@ -52,6 +57,24 @@ def sync_client_integration_task(integration_id):
     integration.last_sync_error = ""
     integration.save(update_fields=["last_sync_started_at", "last_sync_status", "last_sync_error", "updated_at"])
     try:
+        if integration.provider_code == "rfg":
+            run = sync_client_integration(integration, refresh_details=False)
+            details = refresh_client_integration_details(integration)
+            summary = {
+                "run_id": run.pk,
+                "status": run.status,
+                "created": run.created,
+                "updated": run.updated,
+                "unchanged": run.unchanged,
+                "closed": run.closed,
+                "details_refreshed": details["refreshed"],
+                "detail_failures": details["failures"],
+            }
+            integration.last_sync_status = (
+                "success" if run.status == "success" and not details["failures"] else "partial"
+            )
+            integration.last_sync_summary = summary
+            return summary
         api = InnovateMRClient(integration=integration)
         summary = sync_surveys(api, integration=integration).__dict__
         refreshed = failures = 0
@@ -111,7 +134,9 @@ def reconcile_pending_attempts_task():
     lookback = now - timedelta(hours=settings.INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS)
     pending = SurveyAttempt.objects.select_related("survey__integration").filter(
         status=SurveyAttempt.Status.REDIRECTED, callback_at__isnull=True, initiated_at__gte=lookback,
-    ).filter(Q(upstream_checked_at__isnull=True) | Q(upstream_checked_at__lte=retry_before)).order_by(
+    ).exclude(survey__integration__provider_code="rfg").filter(
+        Q(upstream_checked_at__isnull=True) | Q(upstream_checked_at__lte=retry_before)
+    ).order_by(
         "upstream_checked_at", "-initiated_at"
     )[: settings.INNOVATEMR_ATTEMPT_RECONCILE_BATCH]
     clients = {}
