@@ -262,7 +262,7 @@
     const percent = Math.min(100, Number(survey.progress_percent || 0));
     const cells = [];
     if (projectColumns.has('project_id')) cells.push(`<td><button class="id-link" data-copy="${escapeHtml(survey.local_id)}" title="Copy Project ID">${escapeHtml(survey.local_id)}</button></td>`);
-    if (projectColumns.has('survey')) cells.push(`<td><div class="survey-name"><strong>${escapeHtml(survey.name || 'Untitled survey')}</strong><span>${escapeHtml(survey.display_company_name || survey.company_name || 'InnovateMR')}</span></div></td>`);
+    if (projectColumns.has('survey')) cells.push(`<td><div class="survey-name"><strong>${escapeHtml(survey.name || 'Untitled survey')}</strong><span>${escapeHtml(survey.display_company_name || survey.company_name || 'Survey client')} &middot; Survey ID <b>${escapeHtml(survey.source_id ?? '—')}</b></span></div></td>`);
     if (projectColumns.has('market')) cells.push(`<td><span class="market-pill">${escapeHtml(survey.country_code || '—')} <i>${escapeHtml(survey.language_code || '')}</i></span><small class="country-name">${escapeHtml(survey.country || '')}</small></td>`);
     if (projectColumns.has('completes')) cells.push(`<td><div class="complete-value"><strong>${survey.completes.toLocaleString()} / ${survey.sample_size.toLocaleString()}</strong><span><i style="width:${percent}%"></i></span></div></td>`);
     if (projectColumns.has('cpi')) cells.push(`<td><strong class="cpi">${money(survey.cpi)}</strong></td>`);
@@ -282,7 +282,7 @@
     if (projectColumns.has('cpi')) metrics.push(`<span><small>CPI</small><b>${money(survey.cpi)}</b></span>`);
     if (projectColumns.has('loi_ir')) metrics.push(`<span><small>LOI / IR</small><b>${survey.loi ?? '—'}m · ${survey.incidence_rate ?? '—'}%</b></span>`);
     const bottom = `${projectColumns.has('modified') ? `<div class="source-timestamp"><small>Updated</small>${sourceTimestamp(survey.source_modified_display, survey.source_modified_at)}</div>` : ''}${projectColumns.has('entry_link') ? `<button class="copy-link" data-copy-link="${escapeHtml(survey.start_link)}">Copy link</button>` : ''}`;
-    return `<article class="survey-card"><div class="card-top"><div>${top}</div>${projectColumns.has('actions') ? `<button class="eye-button" data-action="${escapeHtml(survey.local_id)}" aria-label="View survey details">◉</button>` : ''}</div>${projectColumns.has('survey') ? `<h3>${escapeHtml(survey.name || 'Untitled survey')}</h3><p>${escapeHtml(survey.display_company_name || survey.company_name || 'Survey client')} · ${escapeHtml(String(survey.provider_code || 'provider').toUpperCase())} #${escapeHtml(survey.source_id)}</p>` : ''}${metrics.length ? `<div class="card-grid">${metrics.join('')}</div>` : ''}${bottom ? `<div class="card-bottom">${bottom}</div>` : ''}</article>`;
+    return `<article class="survey-card"><div class="card-top"><div>${top}</div>${projectColumns.has('actions') ? `<button class="eye-button" data-action="${escapeHtml(survey.local_id)}" aria-label="View survey details">◉</button>` : ''}</div>${projectColumns.has('survey') ? `<h3>${escapeHtml(survey.name || 'Untitled survey')}</h3><p>${escapeHtml(survey.display_company_name || survey.company_name || 'Survey client')} · Survey ID ${escapeHtml(survey.source_id ?? '—')}</p>` : ''}${metrics.length ? `<div class="card-grid">${metrics.join('')}</div>` : ''}${bottom ? `<div class="card-bottom">${bottom}</div>` : ''}</article>`;
   }
 
   function scheduleLoad() {

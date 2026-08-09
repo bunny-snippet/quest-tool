@@ -106,7 +106,7 @@
     <table class="survey-table">
       <thead><tr>
         {% if 'project_id' in project_columns %}<th>Project ID</th>{% endif %}
-        {% if 'survey' in project_columns %}<th>Survey</th>{% endif %}
+        {% if 'survey' in project_columns %}<th>Survey / ID</th>{% endif %}
         {% if 'market' in project_columns %}<th>Market</th>{% endif %}
         {% if 'completes' in project_columns %}<th>Completes</th>{% endif %}
         {% if 'cpi' in project_columns %}<th>CPI</th>{% endif %}
@@ -143,4 +143,4 @@
   <div class="drawer-content" id="drawerContent"></div>
 </aside>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=15" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/projects.js' %}?v=16" defer></script>{% endblock %}
