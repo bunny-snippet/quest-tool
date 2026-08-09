@@ -84,7 +84,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   const cards=document.getElementById('cards');
   let integrations=[],clients=[],providers=[],editingRecord=null;
   const fallbackProviders=[
-    {code:'rfg',label:'Research For Good',default_base_url:'https://api.researchforgood.com/API/',minimum_sync_interval_seconds:600},
+    {code:'rfg',label:'Research For Good',default_base_url:'https://api.researchforgood.com/API',minimum_sync_interval_seconds:600},
     {code:'innovatemr',label:'InnovateMR',default_base_url:'https://supplier.innovatemr.net/api/v2',minimum_sync_interval_seconds:60},
     {code:'biobrain',label:'BioBrain / Voqall',default_base_url:'https://partner-api.voqall.com/api/v1/surveys',minimum_sync_interval_seconds:60},
     {code:'custom',label:'Custom REST API',default_base_url:'',minimum_sync_interval_seconds:60}

@@ -25,7 +25,7 @@ from .base import (
 class ResearchForGoodProvider(SurveyProvider):
     code = "rfg"
     label = "Research For Good"
-    default_base_url = "https://api.researchforgood.com/API/"
+    default_base_url = "https://api.researchforgood.com/API"
     minimum_sync_interval_seconds = 600
     credential_fields = (("apid", "APID environment key"), ("secret", "Secret environment key"))
 
@@ -36,10 +36,18 @@ class ResearchForGoodProvider(SurveyProvider):
         self.secret = environment_value(refs.get("secret"), "RFG secret")
         if not re.fullmatch(r"[0-9a-fA-F]{32}", self.secret):
             raise ProviderConfigurationError("RFG secret must resolve to a 32-character hexadecimal value.")
-        self.base_url = (integration.base_url or self.default_base_url).rstrip("/") + "/"
+        # The documentation links to /API/, but the live endpoint returns 404
+        # for that path. RFG accepts signed POST requests at /API exactly.
+        self.base_url = (integration.base_url or self.default_base_url).rstrip("/")
         parsed_base = urlsplit(self.base_url)
-        if parsed_base.scheme != "https" or parsed_base.hostname != "api.researchforgood.com":
-            raise ProviderConfigurationError("RFG base URL must use https://api.researchforgood.com/.")
+        if (
+            parsed_base.scheme != "https"
+            or parsed_base.hostname != "api.researchforgood.com"
+            or parsed_base.path != "/API"
+            or parsed_base.query
+            or parsed_base.fragment
+        ):
+            raise ProviderConfigurationError("RFG base URL must be https://api.researchforgood.com/API.")
         self.timeout = int((integration.config or {}).get("timeout_seconds", 30))
         self.clock = clock or time.time
 

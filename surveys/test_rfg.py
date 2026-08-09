@@ -87,7 +87,8 @@ class ResearchForGoodIntegrationTests(TestCase):
         session = RecordingSession({"result": 0, "response": {"marker": "quest-tool-1700000000"}})
         provider = ResearchForGoodProvider(self.integration, session=session, clock=lambda: 1700000000)
         provider.test_connection()
-        _, kwargs = session.request
+        request_url, kwargs = session.request
+        self.assertEqual(request_url, "https://api.researchforgood.com/API")
         body = kwargs["data"].decode()
         expected = hmac.new(
             bytes.fromhex("00112233445566778899aabbccddeeff"),

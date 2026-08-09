@@ -12,7 +12,7 @@ Client onboarding uses a hybrid model: owners configure non-secret metadata in *
    | Field | Value |
    |---|---|
    | Integration name | A descriptive name such as `RFG Production` |
-   | Base URL | `https://api.researchforgood.com/API/` |
+   | Base URL | `https://api.researchforgood.com/API` (no trailing slash) |
    | APID environment variable | `RFG_APID` |
    | Secret environment variable | `RFG_SECRET` |
    | Country | Optional two-letter ISO code, for example `US` |

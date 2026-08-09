@@ -129,7 +129,7 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 attrs[field] = value
 
         if provider_key == "rfg":
-            attrs.setdefault("base_url", "https://api.researchforgood.com/API/")
+            attrs.setdefault("base_url", "https://api.researchforgood.com/API")
             credential_refs = attrs.get(
                 "credential_env_keys", getattr(self.instance, "credential_env_keys", {})
             ) or {}
