@@ -45,7 +45,7 @@
   </section>{% endif %}
 
   {% if can_view_client_access %}<section class="organization-panel {% if first_organization_tab == 'client-access' %}active{% endif %}" data-organization-panel="client-access" {% if first_organization_tab != 'client-access' %}hidden{% endif %}>
-    <header class="organization-panel-head"><div><h2>Client visibility</h2><p>A Branch grant is inherited by every Sub-branch and Shift below it. More specific unit grants add additional clients.</p></div>{% if can_manage_unit_clients %}<button class="primary-button compact" type="button" data-create-client-access>Assign client <span>+</span></button>{% endif %}</header>
+    <header class="organization-panel-head"><div><h2>Client visibility</h2><p>The nearest configured level wins: Shift grants override Sub-branch and Branch grants. A blank level inherits from its closest configured parent.</p></div>{% if can_manage_unit_clients %}<button class="primary-button compact" type="button" data-create-client-access>Assign client <span>+</span></button>{% endif %}</header>
     <div class="access-grid" id="organizationClientRows"><div class="organization-loading"><i></i>Loading client grants…</div></div>
   </section>{% endif %}
 

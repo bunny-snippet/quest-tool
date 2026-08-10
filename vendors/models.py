@@ -250,7 +250,7 @@ class OrganizationUnit(models.Model):
 
 
 class OrganizationClientAccess(models.Model):
-    """Explicit client visibility inherited by an organization unit's descendants."""
+    """Explicit client visibility with nearest-unit override inheritance."""
 
     organization_unit = models.ForeignKey(
         OrganizationUnit,

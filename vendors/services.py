@@ -10,7 +10,7 @@ from django.utils import timezone
 from accounts.models import EmployeeProfile
 from surveys.models import Survey, SurveyAttempt
 
-from .access import organization_unit_ancestor_ids, vendor_scope_user_id
+from .access import vendor_scope_user_id
 from .models import AllocationReservation, OrganizationClientAccess, VendorClientAllocation, VendorSurveyAllocation
 
 
@@ -64,7 +64,12 @@ def _available_quantity_q(prefix="") -> Q:
 
 
 def organization_client_ids_for_user(user) -> set[int] | None:
-    """Return explicit unit client grants, or ``None`` for a root/unassigned account."""
+    """Return the nearest explicit unit grant set for an assigned employee.
+
+    An exact Shift grant overrides broader Sub-branch/Branch grants. When the
+    Shift has no direct grants, the closest ancestor with grants is inherited.
+    Root and unassigned accounts remain unscoped for backward compatibility.
+    """
 
     if hasattr(user, "_organization_client_ids_cache"):
         return user._organization_client_ids_cache
@@ -81,18 +86,19 @@ def organization_client_ids_for_user(user) -> set[int] | None:
         if not current_unit.is_active:
             user._organization_client_ids_cache = set()
             return set()
+        direct_client_ids = set(
+            OrganizationClientAccess.objects.filter(
+                organization_unit=current_unit,
+                client__is_active=True,
+                is_active=True,
+            ).values_list("client_id", flat=True)
+        )
+        if direct_client_ids:
+            user._organization_client_ids_cache = direct_client_ids
+            return direct_client_ids
         current_unit = current_unit.parent
-    unit_ids = organization_unit_ancestor_ids(profile.organization_unit)
-    client_ids = set(
-        OrganizationClientAccess.objects.filter(
-            organization_unit_id__in=unit_ids,
-            organization_unit__is_active=True,
-            client__is_active=True,
-            is_active=True,
-        ).values_list("client_id", flat=True)
-    )
-    user._organization_client_ids_cache = client_ids
-    return client_ids
+    user._organization_client_ids_cache = set()
+    return set()
 
 
 def scope_surveys_for_user(queryset, user):

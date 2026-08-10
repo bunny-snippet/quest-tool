@@ -545,6 +545,38 @@ class OrganizationHierarchyTests(TestCase):
         with self.assertRaisesMessage(AllocationUnavailable, "not assigned"):
             resolve_vendor_survey_context(employee, self.survey_b)
 
+    def test_shift_client_grants_override_broader_branch_grants(self):
+        branch, _, shift = self.create_tree(self.owner, "shift-override")
+        OrganizationClientAccess.objects.bulk_create([
+            OrganizationClientAccess(
+                organization_unit=branch, client=self.client_a, created_by=self.owner,
+            ),
+            OrganizationClientAccess(
+                organization_unit=branch, client=self.client_b, created_by=self.owner,
+            ),
+            OrganizationClientAccess(
+                organization_unit=shift, client=self.client_a, created_by=self.owner,
+            ),
+        ])
+        employee = get_user_model().objects.create_user("shift-override-employee")
+        EmployeeProfile.objects.filter(user=employee).update(
+            organization_unit=shift,
+            created_by=self.owner,
+            role=Role.objects.get(slug="employee"),
+        )
+        api = APIClient()
+        api.force_authenticate(employee)
+
+        response = api.get(reverse("survey-list"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {row["source_id"] for row in response.data["results"]},
+            {self.survey_a.source_id},
+        )
+        with self.assertRaisesMessage(AllocationUnavailable, "not assigned"):
+            resolve_vendor_survey_context(employee, self.survey_b)
+
     def test_user_creation_assigns_team_leads_and_employees_to_shifts(self):
         branch, _, shift = self.create_tree(self.owner, "people")
         invalid = self.owner_api.post(reverse("access-user-list"), {
