@@ -42,6 +42,7 @@
     node.textContent = value == null ? '' : String(value);
     return node.innerHTML;
   }
+  const escapeAttr = (value) => escapeHtml(value).replaceAll('"', '&quot;').replaceAll("'", '&#39;');
 
   const selectedValues = (container) => container ? [...container.querySelectorAll('input:checked')].map((input) => input.value) : [];
 
@@ -229,8 +230,8 @@
 
   function rowTemplate(attempt) {
     const cells = [];
-    if (columns.has('project_id')) cells.push(`<td class="study-col-project"><strong class="study-project-id">${escapeHtml(attempt.survey_local_id)}</strong></td>`);
-    if (columns.has('survey_id')) cells.push(`<td class="study-col-survey"><strong class="study-survey-id">${escapeHtml(attempt.survey_source_id)}</strong></td>`);
+    if (columns.has('project_id')) cells.push(`<td class="study-col-project"><div class="study-id-stack"><strong class="study-project-id" title="${escapeAttr(attempt.survey_local_id)}">${escapeHtml(attempt.survey_local_id)}</strong><small class="study-secondary" title="${escapeAttr(attempt.client_name || attempt.company_name || 'Survey client')}">${escapeHtml(attempt.client_name || attempt.company_name || 'Survey client')}</small></div></td>`);
+    if (columns.has('survey_id')) cells.push(`<td class="study-col-survey"><div class="study-id-stack"><strong class="study-survey-id" title="${escapeAttr(attempt.survey_source_id)}">${escapeHtml(attempt.survey_source_id)}</strong><small class="study-secondary" title="${escapeAttr(attempt.buyer_id ? `Buyer ${attempt.buyer_id}` : 'Buyer ID unavailable')}">${attempt.buyer_id ? `Buyer ${escapeHtml(attempt.buyer_id)}` : 'Buyer ID unavailable'}</small></div></td>`);
     if (columns.has('country')) cells.push(`<td class="study-col-country"><span class="study-country"><b>${escapeHtml(attempt.country_code || '—')}</b><small>${escapeHtml(attempt.country || attempt.country_code || 'Unknown')}</small></span></td>`);
     if (columns.has('cpi')) cells.push(`<td class="study-col-cpi"><span class="study-cpi"><b>${attempt.source_cpi_snapshot == null ? '—' : formatMoney(attempt.source_cpi_snapshot, attempt.cpi_currency_snapshot || 'USD')}</b><small>${attempt.cpi_snapshot_source === 'legacy_survey' ? 'Legacy recovered' : 'At hit time'}</small></span></td>`);
     if (columns.has('respondent_id')) cells.push(`<td class="study-col-rid"><strong class="respondent-id">${escapeHtml(attempt.rid)}</strong></td>`);
@@ -247,8 +248,8 @@
   function cardTemplate(attempt) {
     if (!columns.size) return '<article class="survey-card study-card"><div class="column-denied">No Studies columns are assigned to your account.</div></article>';
     const head = `${columns.has('respondent_id') ? `<div><strong>${escapeHtml(attempt.rid)}</strong><span>Respondent ID</span></div>` : '<div></div>'}${columns.has('status') ? statusPill(attempt) : ''}`;
-    const survey = columns.has('survey_id') || columns.has('project_id') ? `<div class="study-card-survey">${columns.has('survey_id') ? `<span>Survey ${escapeHtml(attempt.survey_source_id)}</span>` : ''}${columns.has('project_id') ? `<strong>${escapeHtml(attempt.survey_local_id)}</strong>` : ''}</div>` : '';
-    const metrics = `${columns.has('user') ? `<span><small>User</small><b>${escapeHtml(attempt.user_name)}</b></span>` : ''}${columns.has('country') ? `<span><small>Country</small><b>${escapeHtml(attempt.country || attempt.country_code || '—')}</b></span>` : ''}${columns.has('cpi') ? `<span><small>Snapshot CPI</small><b>${attempt.source_cpi_snapshot == null ? '—' : formatMoney(attempt.source_cpi_snapshot, attempt.cpi_currency_snapshot || 'USD')}</b></span>` : ''}${columns.has('loi') ? `<span><small>LOI</small><b>${formatLoi(attempt.loi_seconds)}</b></span>` : ''}${columns.has('device') ? `<span><small>Device</small>${deviceBadge(attempt)}</span>` : ''}`;
+    const survey = columns.has('survey_id') || columns.has('project_id') ? `<div class="study-card-survey">${columns.has('survey_id') ? `<span>Survey ${escapeHtml(attempt.survey_source_id)} · ${attempt.buyer_id ? `Buyer ${escapeHtml(attempt.buyer_id)}` : 'Buyer ID unavailable'}</span>` : ''}${columns.has('project_id') ? `<strong>${escapeHtml(attempt.survey_local_id)}</strong><small>${escapeHtml(attempt.client_name || attempt.company_name || 'Survey client')}</small>` : ''}</div>` : '';
+    const metrics = `${columns.has('user') ? `<span><small>User</small><b>${escapeHtml(attempt.user_name)}</b></span>` : ''}${columns.has('country') ? `<span><small>Country</small><b>${escapeHtml(attempt.country || attempt.country_code || '—')}</b></span>` : ''}${columns.has('cpi') ? `<span><small>CPI</small><b>${attempt.source_cpi_snapshot == null ? '—' : formatMoney(attempt.source_cpi_snapshot, attempt.cpi_currency_snapshot || 'USD')}</b></span>` : ''}${columns.has('loi') ? `<span><small>LOI</small><b>${formatLoi(attempt.loi_seconds)}</b></span>` : ''}${columns.has('device') ? `<span><small>Device</small>${deviceBadge(attempt)}</span>` : ''}`;
     const times = columns.has('start') || columns.has('end') ? `<div class="study-card-times">${columns.has('start') ? `<time><small>Start</small><b>${formatIst(attempt.initiated_at)} IST</b></time>` : ''}${columns.has('end') ? `<time><small>End</small><b>${formatIst(endTimestamp(attempt))} IST</b></time>` : ''}</div>` : '';
     return `<article class="survey-card study-card"><div class="study-card-head">${head}</div>${survey}${metrics ? `<div class="study-card-grid">${metrics}</div>` : ''}${columns.has('ip') ? `<div class="study-card-network">${ipPair(attempt)}</div>` : ''}${times}</article>`;
   }

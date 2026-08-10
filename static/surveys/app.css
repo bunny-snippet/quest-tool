@@ -201,3 +201,68 @@ html,body,.app-shell{max-width:100%;overflow-x:clip}.main-area{width:calc(100% -
   .study-summary-card header>span,
   .study-summary-card header>span::after{animation:none}
 }
+
+/* Stable Studies table geometry: no cell content may overlap its neighbour. */
+.studies-table-wrap{
+  width:100%;
+  max-width:100%;
+  overflow-x:auto!important;
+  overflow-y:hidden;
+  scrollbar-gutter:stable;
+}
+.studies-table{
+  width:100%!important;
+  min-width:1240px!important;
+  table-layout:fixed!important;
+}
+.studies-table .study-col-project{width:10.5%}
+.studies-table .study-col-survey{width:9%}
+.studies-table .study-col-country{width:6.5%}
+.studies-table .study-col-cpi{width:7.5%}
+.studies-table .study-col-rid{width:8.5%}
+.studies-table .study-col-user{width:10.5%}
+.studies-table .study-col-device{width:4.5%}
+.studies-table .study-col-ip{width:12.5%}
+.studies-table .study-col-loi{width:5%}
+.studies-table .study-col-status{width:7.5%}
+.studies-table .study-col-start,
+.studies-table .study-col-end{width:9%}
+.studies-table th,
+.studies-table td{
+  min-width:0;
+  overflow:hidden;
+  padding-inline:8px!important;
+}
+.studies-table td>*{max-width:100%}
+.studies-table .study-id-stack{
+  display:flex;
+  min-width:0;
+  max-width:100%;
+  flex-direction:column;
+  align-items:flex-start;
+}
+.studies-table .study-project-id,
+.studies-table .study-survey-id,
+.studies-table .respondent-id,
+.studies-table .study-user-name,
+.studies-table .study-secondary,
+.studies-table .study-country b,
+.studies-table .study-country small,
+.studies-table .study-cpi b,
+.studies-table .study-cpi small{
+  display:block;
+  width:100%;
+  max-width:100%;
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.studies-table .study-project-id,
+.studies-table .study-survey-id,
+.studies-table .respondent-id{font-size:10px}
+.studies-table .study-secondary{margin-top:4px;font-size:8px}
+@media(max-width:900px){
+  .studies-table-wrap{display:none}
+  .studies-cards{display:grid}
+}
