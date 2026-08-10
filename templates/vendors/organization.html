@@ -12,11 +12,11 @@
   {% if can_create_units %}<button class="primary-button" type="button" data-create-unit>Create unit <span>+</span></button>{% endif %}
 </section>
 
-{% if can_view_summary %}<section class="organization-overview" aria-label="Organization totals">
-  <article><span class="metric-icon branch">B</span><div><small>Branches</small><strong id="branchCount">—</strong><em>Workspace roots</em></div></article>
-  <article><span class="metric-icon shift">S</span><div><small>Shifts</small><strong id="shiftCount">—</strong><em>Team workspaces</em></div></article>
-  <article><span class="metric-icon people">T</span><div><small>Members</small><strong id="memberCount">—</strong><em>Assigned users</em></div></article>
-  <article><span class="metric-icon clients">C</span><div><small>Client grants</small><strong id="unitClientCount">—</strong><em>Inherited visibility rules</em></div></article>
+{% if organization_cards %}<section class="organization-overview" aria-label="Organization totals">
+  {% if 'branches' in organization_cards %}<article><span class="metric-icon branch">B</span><div><small>Branches</small><strong id="branchCount">—</strong><em>Workspace roots</em></div></article>{% endif %}
+  {% if 'shifts' in organization_cards %}<article><span class="metric-icon shift">S</span><div><small>Shifts</small><strong id="shiftCount">—</strong><em>Team workspaces</em></div></article>{% endif %}
+  {% if 'members' in organization_cards %}<article><span class="metric-icon people">T</span><div><small>Members</small><strong id="memberCount">—</strong><em>Assigned users</em></div></article>{% endif %}
+  {% if 'client_grants' in organization_cards %}<article><span class="metric-icon clients">C</span><div><small>Client grants</small><strong id="unitClientCount">—</strong><em>Inherited visibility rules</em></div></article>{% endif %}
 </section>{% endif %}
 
 <section class="organization-workspace"

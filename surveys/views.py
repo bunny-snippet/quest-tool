@@ -2,12 +2,13 @@ import csv
 import ipaddress
 import json
 import logging
+from decimal import Decimal
 from urllib.parse import quote, urlencode
 
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Count, Max, Min, Q
+from django.db.models import Count, Max, Min, Q, Sum
 from django.http import HttpResponseRedirect, StreamingHttpResponse
 from django.core.paginator import Paginator
 from django.shortcuts import render
@@ -98,6 +99,7 @@ PROJECT_FILTER_PERMISSIONS = {
 
 STUDY_COLUMN_PERMISSIONS = {
     "project_id": "studies.column.project_id", "survey_id": "studies.column.survey_id",
+    "country": "studies.column.country", "cpi": "studies.column.cpi",
     "respondent_id": "studies.column.respondent_id", "user": "studies.column.user",
     "device": "studies.column.device", "ip": "studies.column.ip", "loi": "studies.column.loi",
     "status": "studies.column.status", "start": "studies.column.start", "end": "studies.column.end",
@@ -105,8 +107,17 @@ STUDY_COLUMN_PERMISSIONS = {
 
 STUDY_FILTER_PERMISSIONS = {
     "search": "studies.filter.search", "user": "studies.filter.user",
-    "status": "studies.filter.status", "date": "studies.filter.date",
+    "status": "studies.filter.status", "country": "studies.filter.country", "date": "studies.filter.date",
     "clear": "studies.filters.clear",
+}
+
+STUDY_CARD_PERMISSIONS = {
+    "total": "studies.card.total", "initiated": "studies.card.initiated",
+    "completed": "studies.card.completed", "terminated": "studies.card.terminated",
+    "quota": "studies.card.quota", "security": "studies.card.security",
+    "conversion": "studies.card.conversion", "desktop": "studies.card.desktop",
+    "mobile": "studies.card.mobile", "tablet": "studies.card.tablet",
+    "revenue": "studies.card.revenue",
 }
 
 USER_HIT_COLUMN_PERMISSIONS = {
@@ -119,6 +130,11 @@ USER_HIT_FILTER_PERMISSIONS = {
     "search": "user_hits.filter.search", "branch": "user_hits.filter.branch",
     "sub_branch": "user_hits.filter.sub_branch", "shift": "user_hits.filter.shift", "user": "user_hits.filter.user",
     "date": "user_hits.filter.date", "clear": "user_hits.filters.clear",
+}
+
+USER_HIT_CARD_PERMISSIONS = {
+    "total_hits": "user_hits.card.total_hits", "completes": "user_hits.card.completes",
+    "conversion": "user_hits.card.conversion", "active_users": "user_hits.card.active_users",
 }
 
 TERM_REASON_FIELD_PERMISSIONS = {
@@ -145,6 +161,13 @@ TERM_REASON_FILTER_PERMISSIONS = {
     "status": "termination_reasons.filter.status",
     "client": "termination_reasons.filter.client",
     "clear": "termination_reasons.filters.clear",
+}
+
+TERM_REASON_CARD_PERMISSIONS = {
+    "total": "termination_reasons.card.total",
+    "terminated": "termination_reasons.card.terminated",
+    "quota": "termination_reasons.card.quota",
+    "quality": "termination_reasons.card.quality",
 }
 
 UNSUCCESSFUL_STATUS_LABELS = {
@@ -231,9 +254,18 @@ def studies_page(request):
     else:
         tracked_users = get_user_model().objects.filter(pk__in=user_ids, survey_attempts__isnull=False)
     tracked_users = tracked_users.distinct().order_by("first_name", "last_name", "username")
+    visible_attempts = SurveyAttempt.objects.all()
+    if not request.user.is_superuser:
+        visible_attempts = visible_attempts.filter(platform_user_id__in=user_ids)
+    countries = list(
+        visible_attempts.exclude(survey__country_code="")
+        .values("survey__country_code", "survey__country")
+        .distinct().order_by("survey__country_code")
+    )
     return render(request, "surveys/studies.html", {
         "active_page": "studies",
         "tracked_users": tracked_users,
+        "study_countries": countries,
         "attempt_statuses": [
             ("initiated,redirected", "Initiated"),
             (SurveyAttempt.Status.COMPLETED, "Completed"),
@@ -244,6 +276,7 @@ def studies_page(request):
         "study_filters": _component_access(codes, STUDY_FILTER_PERMISSIONS),
         "study_columns": _permitted_columns(codes, STUDY_COLUMN_PERMISSIONS),
         "study_column_count": max(1, len(_permitted_columns(codes, STUDY_COLUMN_PERMISSIONS))),
+        "study_cards": _permitted_columns(codes, STUDY_CARD_PERMISSIONS),
         "can_export": "attempts.export" in codes,
         "can_change_study_page_size": "studies.control.page_size" in codes,
         "can_paginate_studies": "studies.control.pagination" in codes,
@@ -258,7 +291,7 @@ def user_hits_page(request):
         "hit_filters": _component_access(codes, USER_HIT_FILTER_PERMISSIONS),
         "hit_columns": _permitted_columns(codes, USER_HIT_COLUMN_PERMISSIONS),
         "hit_column_count": max(1, len(_permitted_columns(codes, USER_HIT_COLUMN_PERMISSIONS))),
-        "can_view_hit_summary": "user_hits.summary" in codes,
+        "hit_cards": _permitted_columns(codes, USER_HIT_CARD_PERMISSIONS),
         "can_change_hit_page_size": "user_hits.control.page_size" in codes,
         "can_paginate_hits": "user_hits.control.pagination" in codes,
         **user_hit_filter_options(request.user),
@@ -503,7 +536,7 @@ def termination_reasons_page(request):
         "reason_columns": columns,
         "reason_column_count": max(1, len(columns)),
         "reason_filters": filters_access,
-        "can_view_reason_summary": "termination_reasons.summary" in codes,
+        "reason_cards": _permitted_columns(codes, TERM_REASON_CARD_PERMISSIONS),
         "can_paginate_reasons": "termination_reasons.control.pagination" in codes,
         "can_view_reason_details": "termination_reasons.action.details" in codes,
         "detail_attempt": detail_attempt,
@@ -1252,7 +1285,10 @@ class SyncRunViewSet(viewsets.ReadOnlyModelViewSet):
     list=extend_schema(
         tags=["Survey attempts"],
         summary="List respondent survey attempts",
-        description="Staff-only audit data for initiated pre-screeners, redirects, callbacks, IPs and measured LOI.",
+        description=(
+            "Staff-only audit data for initiated pre-screeners, redirects, callbacks, IPs, measured LOI, "
+            "survey country and the CPI snapshot frozen when the respondent entered."
+        ),
     ),
     retrieve=extend_schema(
         tags=["Survey attempts"],
@@ -1274,8 +1310,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     ordering_fields = ["initiated_at", "callback_at", "loi_seconds", "status"]
     ordering = ["-initiated_at"]
 
-    @staticmethod
-    def _filtered_summary(queryset):
+    def _filtered_summary(self, queryset):
         completed_filter = Q(status=SurveyAttempt.Status.COMPLETED)
         summary = queryset.aggregate(
             total=Count("id"),
@@ -1287,16 +1322,34 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             desktop=Count("id", filter=completed_filter & Q(entry_device__icontains="desktop")),
             mobile=Count("id", filter=completed_filter & (Q(entry_device__icontains="mobile") | Q(entry_device__icontains="phone"))),
             tablet=Count("id", filter=completed_filter & (Q(entry_device__icontains="tablet") | Q(entry_device__iexact="tab"))),
+            total_revenue=Sum("source_cpi_snapshot", filter=completed_filter, default=Decimal("0.00")),
+            revenue_currency=Max("cpi_currency_snapshot", filter=completed_filter),
         )
         completed = summary["completed"]
         classified = summary["desktop"] + summary["mobile"] + summary["tablet"]
+        card_access = _component_access(
+            effective_permission_codes(self.request.user), STUDY_CARD_PERMISSIONS
+        )
+        visible = lambda card, value: value if card_access[card] else None
         return {
-            "total": summary["total"], "initiated": summary["initiated"], "completed": completed,
-            "terminated": summary["terminated"], "over_quota": summary["over_quota"],
-            "security_terminated": summary["security_terminated"],
-            "conversion_rate": round((completed / summary["total"] * 100), 2) if summary["total"] else 0.0,
+            "total": visible("total", summary["total"]),
+            "initiated": visible("initiated", summary["initiated"]),
+            "completed": visible("completed", completed),
+            "terminated": visible("terminated", summary["terminated"]),
+            "over_quota": visible("quota", summary["over_quota"]),
+            "security_terminated": visible("security", summary["security_terminated"]),
+            "conversion_rate": visible(
+                "conversion",
+                round((completed / summary["total"] * 100), 2) if summary["total"] else 0.0,
+            ),
+            "total_revenue": visible("revenue", summary["total_revenue"]),
+            "revenue_currency": visible(
+                "revenue", summary["revenue_currency"] or "USD"
+            ),
             "completed_devices": {
-                "desktop": summary["desktop"], "mobile": summary["mobile"], "tablet": summary["tablet"],
+                "desktop": visible("desktop", summary["desktop"]),
+                "mobile": visible("mobile", summary["mobile"]),
+                "tablet": visible("tablet", summary["tablet"]),
                 "unclassified": max(0, completed - classified),
             },
         }
@@ -1331,6 +1384,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             "studies.filter.search": ("search",),
             "studies.filter.user": ("user",),
             "studies.filter.status": ("status",),
+            "studies.filter.country": ("country",),
             "studies.filter.date": ("initiated_from", "initiated_to", "callback_from", "callback_to"),
         })
         return super().filter_queryset(queryset)
@@ -1346,6 +1400,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             OpenApiParameter("search", OpenApiTypes.STR, description="Search RID, user, survey, IP or client metadata."),
             OpenApiParameter("user", OpenApiTypes.STR, description="Comma-separated platform user IDs."),
             OpenApiParameter("status", OpenApiTypes.STR, description="Comma-separated attempt status codes."),
+            OpenApiParameter("country", OpenApiTypes.STR, description="Comma-separated survey country codes."),
             OpenApiParameter("company", OpenApiTypes.STR, description="Comma-separated survey company names."),
             OpenApiParameter("survey_id", OpenApiTypes.INT, description="Exact upstream survey ID."),
             OpenApiParameter("internal_id", OpenApiTypes.STR, description="Exact internal 14-digit project ID."),
@@ -1411,6 +1466,15 @@ class UserHitsAPIView(APIView):
             rows, summary = aggregate_user_hits(request.user, request.query_params)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        codes = effective_permission_codes(request.user)
+        if USER_HIT_CARD_PERMISSIONS["total_hits"] not in codes:
+            summary["hits"]["total"] = None
+        if USER_HIT_CARD_PERMISSIONS["completes"] not in codes:
+            summary["completes"]["total"] = None
+        if USER_HIT_CARD_PERMISSIONS["conversion"] not in codes:
+            summary["conversion_rate"] = None
+        if USER_HIT_CARD_PERMISSIONS["active_users"] not in codes:
+            summary["active_users"] = None
         paginator = SurveyPagination()
         page = paginator.paginate_queryset(rows, request, view=self)
         response = paginator.get_paginated_response(page)

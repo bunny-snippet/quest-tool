@@ -12,11 +12,11 @@
   </div>
 </section>
 
-{% if can_view_hit_summary %}<section class="hit-overview" aria-label="Filtered user hit totals">
-  <article><span class="overview-icon hits" aria-hidden="true">↗</span><div><small>Total hits</small><strong id="totalHitCount">—</strong><em id="hitDayCount">Across selected dates</em></div></article>
-  <article><span class="overview-icon completes" aria-hidden="true">✓</span><div><small>Completes</small><strong id="totalCompleteCount">—</strong><em>Successful survey outcomes</em></div></article>
-  <article><span class="overview-icon conversion" aria-hidden="true">%</span><div><small>Conversion</small><strong id="conversionRate">—</strong><em>Completes divided by hits</em></div></article>
-  <article><span class="overview-icon users" aria-hidden="true">◎</span><div><small>Active users</small><strong id="activeUserCount">—</strong><em>Users matching filters</em></div></article>
+{% if hit_cards %}<section class="hit-overview" aria-label="Filtered user hit totals">
+  {% if 'total_hits' in hit_cards %}<article><span class="overview-icon hits" aria-hidden="true">↗</span><div><small>Total hits</small><strong id="totalHitCount">—</strong><em id="hitDayCount">Across selected dates</em></div></article>{% endif %}
+  {% if 'completes' in hit_cards %}<article><span class="overview-icon completes" aria-hidden="true">✓</span><div><small>Completes</small><strong id="totalCompleteCount">—</strong><em>Successful survey outcomes</em></div></article>{% endif %}
+  {% if 'conversion' in hit_cards %}<article><span class="overview-icon conversion" aria-hidden="true">%</span><div><small>Conversion</small><strong id="conversionRate">—</strong><em>Completes divided by hits</em></div></article>{% endif %}
+  {% if 'active_users' in hit_cards %}<article><span class="overview-icon users" aria-hidden="true">◎</span><div><small>Active users</small><strong id="activeUserCount">—</strong><em>Users matching filters</em></div></article>{% endif %}
 </section>{% endif %}
 
 <section class="filter-panel user-hits-filters" aria-label="User hit filters">
@@ -94,4 +94,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/user_hits.js' %}?v=6" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/user_hits.js' %}?v=7" defer></script>{% endblock %}

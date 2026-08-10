@@ -296,7 +296,7 @@ class RFGCallbackResponseSerializer(serializers.Serializer):
 
 
 class UserHitDeviceCountsSerializer(serializers.Serializer):
-    total = serializers.IntegerField(min_value=0)
+    total = serializers.IntegerField(min_value=0, allow_null=True)
     desktop = serializers.IntegerField(min_value=0)
     mobile = serializers.IntegerField(min_value=0)
     tablet = serializers.IntegerField(min_value=0)
@@ -319,9 +319,9 @@ class UserHitRowSerializer(serializers.Serializer):
 class UserHitSummarySerializer(serializers.Serializer):
     hits = UserHitDeviceCountsSerializer()
     completes = UserHitDeviceCountsSerializer()
-    active_users = serializers.IntegerField(min_value=0)
+    active_users = serializers.IntegerField(min_value=0, allow_null=True)
     days = serializers.IntegerField(min_value=0)
-    conversion_rate = serializers.FloatField(min_value=0)
+    conversion_rate = serializers.FloatField(min_value=0, allow_null=True)
 
 
 class UserHitsResponseSerializer(serializers.Serializer):
@@ -337,6 +337,7 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     survey_source_id = serializers.SerializerMethodField()
     survey_name = serializers.CharField(source="survey.name", read_only=True)
     company_name = serializers.CharField(source="survey.company_name", read_only=True)
+    country = serializers.CharField(source="survey.country", read_only=True)
     country_code = serializers.CharField(source="survey.country_code", read_only=True)
     language_code = serializers.CharField(source="survey.language_code", read_only=True)
     user_name = serializers.SerializerMethodField()
@@ -352,7 +353,7 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     class Meta:
         model = SurveyAttempt
         fields = [
-            "rid", "survey_local_id", "survey_source_id", "survey_name", "company_name", "country_code",
+            "rid", "survey_local_id", "survey_source_id", "survey_name", "company_name", "country", "country_code",
             "language_code", "platform_user", "user_id", "user_name", "username", "user_email", "vendor",
             "vendor_name", "client", "client_name", "client_allocation", "survey_allocation", "supplier_code",
             "source_cpi_snapshot", "cpi_cut_percent_snapshot", "payable_cpi_snapshot", "cpi_currency_snapshot",
@@ -390,20 +391,22 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
 
 
 class SurveyAttemptCompletedDeviceSummarySerializer(serializers.Serializer):
-    desktop = serializers.IntegerField()
-    mobile = serializers.IntegerField()
-    tablet = serializers.IntegerField()
+    desktop = serializers.IntegerField(allow_null=True)
+    mobile = serializers.IntegerField(allow_null=True)
+    tablet = serializers.IntegerField(allow_null=True)
     unclassified = serializers.IntegerField()
 
 
 class SurveyAttemptSummarySerializer(serializers.Serializer):
-    total = serializers.IntegerField()
-    initiated = serializers.IntegerField()
-    completed = serializers.IntegerField()
-    terminated = serializers.IntegerField()
-    over_quota = serializers.IntegerField()
-    security_terminated = serializers.IntegerField()
-    conversion_rate = serializers.FloatField()
+    total = serializers.IntegerField(allow_null=True)
+    initiated = serializers.IntegerField(allow_null=True)
+    completed = serializers.IntegerField(allow_null=True)
+    terminated = serializers.IntegerField(allow_null=True)
+    over_quota = serializers.IntegerField(allow_null=True)
+    security_terminated = serializers.IntegerField(allow_null=True)
+    conversion_rate = serializers.FloatField(allow_null=True)
+    total_revenue = serializers.DecimalField(max_digits=18, decimal_places=2, allow_null=True)
+    revenue_currency = serializers.CharField(allow_null=True)
     completed_devices = SurveyAttemptCompletedDeviceSummarySerializer()
 
 

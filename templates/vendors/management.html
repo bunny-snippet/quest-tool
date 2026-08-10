@@ -13,11 +13,11 @@
   {% if can_create_vendor %}<a class="primary-button" href="{% url 'access-control' %}?open=user">Create vendor <span>+</span></a>{% endif %}
 </section>
 
-{% if can_view_vendor_summary %}<section class="vendor-overview" aria-label="Vendor overview">
-  <article><span class="vendor-metric-icon vendors">V</span><div><small>Vendors</small><strong id="vendorCount">—</strong><em>Internal and external</em></div></article>
-  <article><span class="vendor-metric-icon clients">C</span><div><small>Client grants</small><strong id="allocationCount">—</strong><em>Active assignments</em></div></article>
-  <article><span class="vendor-metric-icon capacity">Q</span><div><small>Available quantity</small><strong id="remainingQuantity">—</strong><em>Across visible clients</em></div></article>
-  <article><span class="vendor-metric-icon rules">P</span><div><small>Allocated projects</small><strong id="surveyRuleCount">—</strong><em>Visible project caps</em></div></article>
+{% if vendor_cards %}<section class="vendor-overview" aria-label="Vendor overview">
+  {% if 'vendors' in vendor_cards %}<article><span class="vendor-metric-icon vendors">V</span><div><small>Vendors</small><strong id="vendorCount">—</strong><em>Internal and external</em></div></article>{% endif %}
+  {% if 'client_grants' in vendor_cards %}<article><span class="vendor-metric-icon clients">C</span><div><small>Client grants</small><strong id="allocationCount">—</strong><em>Active assignments</em></div></article>{% endif %}
+  {% if 'quantity' in vendor_cards %}<article><span class="vendor-metric-icon capacity">Q</span><div><small>Available quantity</small><strong id="remainingQuantity">—</strong><em>Across visible clients</em></div></article>{% endif %}
+  {% if 'projects' in vendor_cards %}<article><span class="vendor-metric-icon rules">P</span><div><small>Allocated projects</small><strong id="surveyRuleCount">—</strong><em>Visible project caps</em></div></article>{% endif %}
 </section>{% endif %}
 
 <section class="vendor-workspace" id="vendorWorkspace"

@@ -80,7 +80,10 @@ def vendor_management_page(request):
     ) if code in codes), "")
     return render(request, "vendors/management.html", {
         "active_page": "vendors",
-        "can_view_vendor_summary": "vendors.summary" in codes,
+        "vendor_cards": [
+            name for name in ("vendors", "client_grants", "quantity", "projects")
+            if f"vendors.card.{name}" in codes
+        ],
         "can_view_vendors": "vendors.tab.policies" in codes,
         "can_view_client_allocations": "vendors.tab.clients" in codes,
         "can_view_project_allocations": "vendors.tab.projects" in codes,
@@ -129,7 +132,10 @@ def organization_management_page(request):
     ) if available), "")
     return render(request, "vendors/organization.html", {
         "active_page": "organization",
-        "can_view_summary": "organization.summary" in codes,
+        "organization_cards": [
+            name for name in ("branches", "shifts", "members", "client_grants")
+            if f"organization.card.{name}" in codes
+        ],
         "can_view_structure": can_view_structure,
         "can_view_client_access": can_view_client_access,
         "can_view_clients": can_view_clients,

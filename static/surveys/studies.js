@@ -4,7 +4,8 @@
   const columnCount = Math.max(1, columns.size);
   const elements = {
     search: byId('studySearch'), userFilters: document.querySelector('[data-multi-filter="user"]'),
-    statusFilters: document.querySelector('[data-multi-filter="status"]'), dateField: byId('studyDateField'),
+    statusFilters: document.querySelector('[data-multi-filter="status"]'),
+    countryFilters: document.querySelector('[data-multi-filter="country"]'), dateField: byId('studyDateField'),
     from: byId('studyFromDateTime'), to: byId('studyToDateTime'), clear: byId('clearStudyFilters'),
     export: byId('exportStudies'), pageSize: byId('studyPageSize'), rows: byId('studyRows'),
     cards: byId('studyCards'), summary: byId('studySummary'), pageStatus: byId('studyPageStatus'),
@@ -16,10 +17,11 @@
       overQuota: byId('studyMetricQuota'), security: byId('studyMetricSecurity'),
       conversion: byId('studyMetricConversion'), desktop: byId('studyMetricDesktop'),
       mobile: byId('studyMetricMobile'), tablet: byId('studyMetricTablet'),
+      revenue: byId('studyMetricRevenue'),
     },
   };
   if (!elements.rows) return;
-  document.querySelector('.studies-table').style.minWidth = `${Math.max(520, columnCount * 124)}px`;
+  document.querySelector('.studies-table').style.minWidth = `${Math.max(680, columnCount * 96)}px`;
 
   const state = { page: 1, pages: 1, pageSize: 20, timer: null, controller: null };
   const statusTone = { initiated: 'initiate', redirected: 'initiate', '1': 'complete', '2': 'terminate', '3': 'quota', '4': 'quality' };
@@ -41,7 +43,7 @@
   function updateMultiLabel(container) {
     const checked = [...container.querySelectorAll('input:checked')];
     const button = container.querySelector('.multi-trigger');
-    const fallback = container.dataset.multiFilter === 'user' ? 'All users' : 'All statuses';
+    const fallback = { user: 'All users', status: 'All statuses', country: 'All countries' }[container.dataset.multiFilter] || 'All options';
     button.querySelector('span').textContent = checked.length === 0 ? fallback : checked.length === 1 ? checked[0].closest('label').innerText.trim() : `${checked.length} selected`;
     button.classList.toggle('has-value', checked.length > 0);
   }
@@ -79,9 +81,11 @@
     const search = elements.search?.value.trim();
     const users = selectedValues(elements.userFilters);
     const statuses = selectedValues(elements.statusFilters);
+    const countries = selectedValues(elements.countryFilters);
     if (search) params.set('search', search);
     if (users.length) params.set('user', users.join(','));
     if (statuses.length) params.set('status', statuses.join(','));
+    if (countries.length) params.set('country', countries.join(','));
     if (elements.dateField && elements.from?.value) params.set(`${elements.dateField.value}_from`, dateBoundary(elements.from.value));
     if (elements.dateField && elements.to?.value) params.set(`${elements.dateField.value}_to`, dateBoundary(elements.to.value, true));
     if (includePage) { params.set('page', state.page); params.set('page_size', state.pageSize); }
@@ -100,6 +104,33 @@
     if (seconds == null) return '—';
     const total = Number(seconds); const minutes = Math.floor(total / 60); const remainder = total % 60;
     return minutes ? `${minutes}m ${remainder}s` : `${remainder}s`;
+  }
+
+  function formatMoney(value, currency = 'USD') {
+    const amount = Number(value || 0);
+    try {
+      return new Intl.NumberFormat('en-IN', {
+        style: 'currency', currency: currency || 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2,
+      }).format(amount);
+    } catch (_) {
+      return `${currency || 'USD'} ${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+    }
+  }
+
+  function animateRevenue(value, currency) {
+    if (!elements.metrics.revenue || value == null) return;
+    const target = Number(value || 0);
+    const start = Number(elements.metrics.revenue.dataset.value || 0);
+    const started = performance.now();
+    const duration = 780;
+    elements.metrics.revenue.dataset.value = String(target);
+    const frame = (now) => {
+      const progress = Math.min(1, (now - started) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      elements.metrics.revenue.textContent = formatMoney(start + ((target - start) * eased), currency);
+      if (progress < 1) requestAnimationFrame(frame);
+    };
+    requestAnimationFrame(frame);
   }
 
   function deviceBadge(attempt) {
@@ -130,20 +161,23 @@
       if (elements.metrics[key]) elements.metrics[key].textContent = Number(value || 0).toLocaleString('en-IN');
     });
     if (elements.metrics.conversion) elements.metrics.conversion.textContent = `${Number(summary.conversion_rate || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}%`;
+    animateRevenue(summary.total_revenue, summary.revenue_currency || 'USD');
   }
 
   function rowTemplate(attempt) {
     const cells = [];
-    if (columns.has('project_id')) cells.push(`<td><strong class="study-project-id">${escapeHtml(attempt.survey_local_id)}</strong></td>`);
-    if (columns.has('survey_id')) cells.push(`<td><strong class="study-survey-id">${escapeHtml(attempt.survey_source_id)}</strong></td>`);
-    if (columns.has('respondent_id')) cells.push(`<td><strong class="respondent-id">${escapeHtml(attempt.rid)}</strong></td>`);
-    if (columns.has('user')) cells.push(`<td><strong class="study-user-name">${escapeHtml(attempt.user_name)}</strong><small class="study-secondary">${escapeHtml(attempt.user_email || attempt.username || `User #${attempt.user_id}`)}</small></td>`);
-    if (columns.has('device')) cells.push(`<td>${deviceBadge(attempt)}</td>`);
-    if (columns.has('ip')) cells.push(`<td>${ipPair(attempt)}</td>`);
-    if (columns.has('loi')) cells.push(`<td><strong class="study-loi">${formatLoi(attempt.loi_seconds)}</strong><small class="study-secondary">${attempt.loi_seconds == null ? 'Awaiting callback' : 'Actual duration'}</small></td>`);
-    if (columns.has('status')) cells.push(`<td>${statusPill(attempt)}</td>`);
-    if (columns.has('start')) cells.push(`<td>${timestampCell(attempt.initiated_at)}</td>`);
-    if (columns.has('end')) cells.push(`<td>${timestampCell(endTimestamp(attempt))}</td>`);
+    if (columns.has('project_id')) cells.push(`<td class="study-col-project"><strong class="study-project-id">${escapeHtml(attempt.survey_local_id)}</strong></td>`);
+    if (columns.has('survey_id')) cells.push(`<td class="study-col-survey"><strong class="study-survey-id">${escapeHtml(attempt.survey_source_id)}</strong></td>`);
+    if (columns.has('country')) cells.push(`<td class="study-col-country"><span class="study-country"><b>${escapeHtml(attempt.country_code || '—')}</b><small>${escapeHtml(attempt.country || attempt.country_code || 'Unknown')}</small></span></td>`);
+    if (columns.has('cpi')) cells.push(`<td class="study-col-cpi"><span class="study-cpi"><b>${attempt.source_cpi_snapshot == null ? '—' : formatMoney(attempt.source_cpi_snapshot, attempt.cpi_currency_snapshot || 'USD')}</b><small>At hit time</small></span></td>`);
+    if (columns.has('respondent_id')) cells.push(`<td class="study-col-rid"><strong class="respondent-id">${escapeHtml(attempt.rid)}</strong></td>`);
+    if (columns.has('user')) cells.push(`<td class="study-col-user"><strong class="study-user-name">${escapeHtml(attempt.user_name)}</strong><small class="study-secondary">${escapeHtml(attempt.user_email || attempt.username || `User #${attempt.user_id}`)}</small></td>`);
+    if (columns.has('device')) cells.push(`<td class="study-col-device">${deviceBadge(attempt)}</td>`);
+    if (columns.has('ip')) cells.push(`<td class="study-col-ip">${ipPair(attempt)}</td>`);
+    if (columns.has('loi')) cells.push(`<td class="study-col-loi"><strong class="study-loi">${formatLoi(attempt.loi_seconds)}</strong><small class="study-secondary">${attempt.loi_seconds == null ? 'Awaiting callback' : 'Actual duration'}</small></td>`);
+    if (columns.has('status')) cells.push(`<td class="study-col-status">${statusPill(attempt)}</td>`);
+    if (columns.has('start')) cells.push(`<td class="study-col-start">${timestampCell(attempt.initiated_at)}</td>`);
+    if (columns.has('end')) cells.push(`<td class="study-col-end">${timestampCell(endTimestamp(attempt))}</td>`);
     return `<tr>${cells.length ? cells.join('') : '<td><div class="column-denied">No Studies columns are assigned to your account.</div></td>'}</tr>`;
   }
 
@@ -151,7 +185,7 @@
     if (!columns.size) return '<article class="survey-card study-card"><div class="column-denied">No Studies columns are assigned to your account.</div></article>';
     const head = `${columns.has('respondent_id') ? `<div><strong>${escapeHtml(attempt.rid)}</strong><span>Respondent ID</span></div>` : '<div></div>'}${columns.has('status') ? statusPill(attempt) : ''}`;
     const survey = columns.has('survey_id') || columns.has('project_id') ? `<div class="study-card-survey">${columns.has('survey_id') ? `<span>Survey ${escapeHtml(attempt.survey_source_id)}</span>` : ''}${columns.has('project_id') ? `<strong>${escapeHtml(attempt.survey_local_id)}</strong>` : ''}</div>` : '';
-    const metrics = `${columns.has('user') ? `<span><small>User</small><b>${escapeHtml(attempt.user_name)}</b></span>` : ''}${columns.has('loi') ? `<span><small>LOI</small><b>${formatLoi(attempt.loi_seconds)}</b></span>` : ''}${columns.has('device') ? `<span><small>Device</small>${deviceBadge(attempt)}</span>` : ''}`;
+    const metrics = `${columns.has('user') ? `<span><small>User</small><b>${escapeHtml(attempt.user_name)}</b></span>` : ''}${columns.has('country') ? `<span><small>Country</small><b>${escapeHtml(attempt.country || attempt.country_code || '—')}</b></span>` : ''}${columns.has('cpi') ? `<span><small>Snapshot CPI</small><b>${attempt.source_cpi_snapshot == null ? '—' : formatMoney(attempt.source_cpi_snapshot, attempt.cpi_currency_snapshot || 'USD')}</b></span>` : ''}${columns.has('loi') ? `<span><small>LOI</small><b>${formatLoi(attempt.loi_seconds)}</b></span>` : ''}${columns.has('device') ? `<span><small>Device</small>${deviceBadge(attempt)}</span>` : ''}`;
     const times = columns.has('start') || columns.has('end') ? `<div class="study-card-times">${columns.has('start') ? `<time><small>Start</small><b>${formatIst(attempt.initiated_at)} IST</b></time>` : ''}${columns.has('end') ? `<time><small>End</small><b>${formatIst(endTimestamp(attempt))} IST</b></time>` : ''}</div>` : '';
     return `<article class="survey-card study-card"><div class="study-card-head">${head}</div>${survey}${metrics ? `<div class="study-card-grid">${metrics}</div>` : ''}${columns.has('ip') ? `<div class="study-card-network">${ipPair(attempt)}</div>` : ''}${times}</article>`;
   }

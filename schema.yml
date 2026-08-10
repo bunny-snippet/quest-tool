@@ -531,7 +531,8 @@ paths:
     get:
       operationId: api_v1_survey_attempts_list
       description: Staff-only audit data for initiated pre-screeners, redirects, callbacks,
-        IPs and measured LOI.
+        IPs, measured LOI, survey country and the CPI snapshot frozen when the respondent
+        entered.
       summary: List respondent survey attempts
       parameters:
       - in: query
@@ -551,6 +552,15 @@ paths:
           items:
             type: string
         description: Multiple values may be separated by commas.
+        explode: false
+        style: form
+      - in: query
+        name: country
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated survey country codes
         explode: false
         style: form
       - in: query
@@ -682,6 +692,11 @@ paths:
         schema:
           type: string
         description: Comma-separated survey company names.
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Comma-separated survey country codes.
       - in: query
         name: entry_ip
         schema:
@@ -5079,6 +5094,9 @@ components:
         company_name:
           type: string
           readOnly: true
+        country:
+          type: string
+          readOnly: true
         country_code:
           type: string
           readOnly: true
@@ -5250,6 +5268,7 @@ components:
       required:
       - client_name
       - company_name
+      - country
       - country_code
       - created_at
       - entry_ip
@@ -5272,10 +5291,13 @@ components:
       properties:
         desktop:
           type: integer
+          nullable: true
         mobile:
           type: integer
+          nullable: true
         tablet:
           type: integer
+          nullable: true
         unclassified:
           type: integer
       required:
@@ -5329,19 +5351,34 @@ components:
       properties:
         total:
           type: integer
+          nullable: true
         initiated:
           type: integer
+          nullable: true
         completed:
           type: integer
+          nullable: true
         terminated:
           type: integer
+          nullable: true
         over_quota:
           type: integer
+          nullable: true
         security_terminated:
           type: integer
+          nullable: true
         conversion_rate:
           type: number
           format: double
+          nullable: true
+        total_revenue:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,16}(?:\.\d{0,2})?$
+          nullable: true
+        revenue_currency:
+          type: string
+          nullable: true
         completed_devices:
           $ref: '#/components/schemas/SurveyAttemptCompletedDeviceSummary'
       required:
@@ -5350,9 +5387,11 @@ components:
       - conversion_rate
       - initiated
       - over_quota
+      - revenue_currency
       - security_terminated
       - terminated
       - total
+      - total_revenue
     SurveyDetail:
       type: object
       properties:
@@ -6132,6 +6171,7 @@ components:
         total:
           type: integer
           minimum: 0
+          nullable: true
         desktop:
           type: integer
           minimum: 0
@@ -6196,6 +6236,7 @@ components:
         active_users:
           type: integer
           minimum: 0
+          nullable: true
         days:
           type: integer
           minimum: 0
@@ -6203,6 +6244,7 @@ components:
           type: number
           format: double
           minimum: 0
+          nullable: true
       required:
       - active_users
       - completes

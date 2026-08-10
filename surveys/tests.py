@@ -23,6 +23,7 @@ from .services import (
     replace_survey_details,
     sync_surveys,
 )
+from .survey_flow import create_attempt
 
 
 def survey_payload(survey_id=12632, modified="09/11/2017, 11:50:27 pm PST", **overrides):
@@ -554,6 +555,7 @@ class StudiesTrackingTests(TestCase):
             source_id=555123,
             name="Consumer finance",
             company_name="InnovateMR",
+            country="United States",
             country_code="US",
             language_code="EN",
             cpi="2.50",
@@ -570,7 +572,8 @@ class StudiesTrackingTests(TestCase):
         }
         self.complete = SurveyAttempt.objects.create(
             rid="Aa1Bb2Cc3D", platform_user=self.kanik, user_id=str(self.kanik.pk),
-            status=SurveyAttempt.Status.COMPLETED, loi_seconds=82, callback_at=timezone.now(), **common,
+            status=SurveyAttempt.Status.COMPLETED, loi_seconds=82, callback_at=timezone.now(),
+            source_cpi_snapshot="2.50", payable_cpi_snapshot="2.50", cpi_currency_snapshot="USD", **common,
         )
         SurveyAttempt.objects.create(
             rid="Ee4Ff5Gg6H", platform_user=self.other, user_id=str(self.other.pk),
@@ -589,11 +592,16 @@ class StudiesTrackingTests(TestCase):
         self.assertNotContains(page, 'id="studyFromTime"')
         self.assertContains(page, "Export full CSV")
         self.assertContains(page, "Kanik Sharma")
-        self.assertContains(page, "<th>Device</th>", html=True)
-        self.assertContains(page, "<th>Start</th>", html=True)
-        self.assertContains(page, "<th>End</th>", html=True)
+        self.assertContains(page, "Snapshot CPI")
+        self.assertContains(page, 'data-multi-filter="country"')
+        self.assertContains(page, "Device</th>")
+        self.assertContains(page, "Start</th>")
+        self.assertContains(page, "End</th>")
         self.assertContains(page, 'id="studyMetricTotal"')
         self.assertContains(page, 'id="studyMetricConversion"')
+        self.assertContains(page, 'id="studyMetricRevenue"')
+        self.assertContains(page, 'class="sidebar-docs"')
+        self.assertNotContains(page, 'class="topbar"')
 
         response = self.api.get(reverse("survey-attempt-list"), {
             "user": self.kanik.pk,
@@ -607,6 +615,9 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(result["entry_ip"], "10.0.0.1")
         self.assertEqual(result["exit_ip"], "20.0.0.1")
         self.assertEqual(result["entry_device"], "Desktop")
+        self.assertEqual(result["country_code"], "US")
+        self.assertEqual(result["country"], "United States")
+        self.assertEqual(str(result["source_cpi_snapshot"]), "2.50")
         self.assertIsNotNone(result["initiated_at"])
         self.assertIsNotNone(result["callback_at"])
         self.assertEqual(response.data["summary"]["total"], 1)
@@ -614,6 +625,32 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(response.data["summary"]["conversion_rate"], 100.0)
         self.assertEqual(response.data["summary"]["completed_devices"]["desktop"], 1)
         self.assertEqual(response.data["summary"]["completed_devices"]["mobile"], 0)
+        self.assertEqual(float(response.data["summary"]["total_revenue"]), 2.50)
+        self.assertEqual(response.data["summary"]["revenue_currency"], "USD")
+
+    def test_country_filter_and_hit_time_cpi_snapshot_are_stable(self):
+        created = create_attempt(self.survey, self.kanik, "10.10.10.10")
+        self.assertEqual(str(created.source_cpi_snapshot), "2.50")
+        self.assertEqual(created.cpi_currency_snapshot, "USD")
+
+        self.survey.cpi = "9.99"
+        self.survey.save(update_fields=["cpi"])
+        created.refresh_from_db()
+        self.assertEqual(str(created.source_cpi_snapshot), "2.50")
+
+        canada = Survey.objects.create(
+            source_id=555124, name="Canada study", company_name="InnovateMR",
+            country="Canada", country_code="CA", cpi="4.00",
+        )
+        SurveyAttempt.objects.create(
+            rid="Cc1Aa2Nn3D", survey=canada, platform_user=self.kanik,
+            user_id=str(self.kanik.pk), status=SurveyAttempt.Status.INITIATED,
+            source_cpi_snapshot="4.00", cpi_currency_snapshot="USD",
+        )
+        response = self.api.get(reverse("survey-attempt-list"), {"country": "CA"})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["country_code"], "CA")
 
     def test_summary_tracks_all_outcomes_and_completed_device_types(self):
         SurveyAttempt.objects.create(
@@ -669,6 +706,11 @@ class StudiesTrackingTests(TestCase):
             function=AccessFunction.objects.get(code="attempts.view"),
             effect=UserFunctionOverride.Effect.ALLOW,
         )
+        UserFunctionOverride.objects.create(
+            user=viewer,
+            function=AccessFunction.objects.get(code="studies.card.total"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
         own_attempt = SurveyAttempt.objects.create(
             rid="Ii7Jj8Kk9L", survey=self.survey, platform_user=viewer, user_id=str(viewer.pk),
             status=SurveyAttempt.Status.INITIATED,
@@ -686,8 +728,11 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(page.status_code, 200)
         self.assertNotContains(page, "Export full CSV")
         self.assertNotContains(page, 'id="studySearch"')
-        self.assertNotContains(page, "<th>Status</th>", html=True)
+        self.assertNotContains(page, "Status</th>")
+        self.assertContains(page, 'id="studyMetricTotal"')
+        self.assertNotContains(page, 'id="studyMetricCompleted"')
         self.assertEqual(scoped_api.get(reverse("survey-attempt-list"), {"status": "1"}).status_code, 403)
+        self.assertEqual(scoped_api.get(reverse("survey-attempt-list"), {"country": "US"}).status_code, 403)
 
     def test_team_lead_sees_lower_rank_employee_activity_across_own_branch_only(self):
         team_lead = get_user_model().objects.create_user(

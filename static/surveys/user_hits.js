@@ -95,10 +95,11 @@
   }
 
   function updateOverview(summary) {
-    if (!elements.totalHits) return;
-    elements.totalHits.textContent = number(summary.hits.total); elements.totalCompletes.textContent = number(summary.completes.total);
-    elements.conversion.textContent = `${Number(summary.conversion_rate || 0).toLocaleString('en-IN')}%`;
-    elements.activeUsers.textContent = number(summary.active_users); elements.dayCount.textContent = `${number(summary.days)} selected ${Number(summary.days) === 1 ? 'day' : 'days'}`;
+    if (elements.totalHits) elements.totalHits.textContent = number(summary.hits.total);
+    if (elements.totalCompletes) elements.totalCompletes.textContent = number(summary.completes.total);
+    if (elements.conversion) elements.conversion.textContent = `${Number(summary.conversion_rate || 0).toLocaleString('en-IN')}%`;
+    if (elements.activeUsers) elements.activeUsers.textContent = number(summary.active_users);
+    if (elements.dayCount) elements.dayCount.textContent = `${number(summary.days)} selected ${Number(summary.days) === 1 ? 'day' : 'days'}`;
   }
 
   async function loadHits() {

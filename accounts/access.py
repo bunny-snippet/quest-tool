@@ -20,12 +20,15 @@ EXTERNAL_VENDOR_FORBIDDEN_CODES = frozenset({
     "termination_reasons.view", "termination_reasons.filter.rid", "termination_reasons.action.refresh",
     "termination_reasons.filter.status", "termination_reasons.filter.client", "termination_reasons.filters.clear",
     "termination_reasons.summary", "termination_reasons.control.pagination", "termination_reasons.action.details",
+    "termination_reasons.card.total", "termination_reasons.card.terminated",
+    "termination_reasons.card.quota", "termination_reasons.card.quality",
     "termination_reasons.column.rid", "termination_reasons.column.survey", "termination_reasons.column.client",
     "termination_reasons.column.respondent", "termination_reasons.column.status", "termination_reasons.column.ended",
     "termination_reasons.column.actions",
     "termination_reasons.field.status", "termination_reasons.field.reason",
     "termination_reasons.field.respondent", "termination_reasons.field.survey",
     "termination_reasons.field.timing", "termination_reasons.field.audit",
+    "studies.column.cpi", "studies.card.revenue",
     "sync.run",
 })
 

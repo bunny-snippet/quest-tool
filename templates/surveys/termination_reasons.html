@@ -9,11 +9,11 @@
   </div>
 </section>
 
-{% if can_view_reason_summary %}<section class="reason-overview" aria-label="Filtered outcome totals">
-  <article class="total"><span>Σ</span><div><small>Unsuccessful</small><strong>{{ summary.total }}</strong><em>Filtered outcomes</em></div></article>
-  <article class="terminated"><span>×</span><div><small>Terminated</small><strong>{{ summary.terminated }}</strong><em>Provider or client term</em></div></article>
-  <article class="quota"><span>Q</span><div><small>Quota full</small><strong>{{ summary.quota }}</strong><em>Quota outcomes</em></div></article>
-  <article class="quality"><span>!</span><div><small>Quality / security</small><strong>{{ summary.quality }}</strong><em>Quality outcomes</em></div></article>
+{% if reason_cards %}<section class="reason-overview" aria-label="Filtered outcome totals">
+  {% if 'total' in reason_cards %}<article class="total"><span>Σ</span><div><small>Unsuccessful</small><strong>{{ summary.total }}</strong><em>Filtered outcomes</em></div></article>{% endif %}
+  {% if 'terminated' in reason_cards %}<article class="terminated"><span>×</span><div><small>Terminated</small><strong>{{ summary.terminated }}</strong><em>Provider or client term</em></div></article>{% endif %}
+  {% if 'quota' in reason_cards %}<article class="quota"><span>Q</span><div><small>Quota full</small><strong>{{ summary.quota }}</strong><em>Quota outcomes</em></div></article>{% endif %}
+  {% if 'quality' in reason_cards %}<article class="quality"><span>!</span><div><small>Quality / security</small><strong>{{ summary.quality }}</strong><em>Quality outcomes</em></div></article>{% endif %}
 </section>{% endif %}
 
 <section class="filter-panel reason-list-filters" aria-label="Outcome filters">
