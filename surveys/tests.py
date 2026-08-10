@@ -40,6 +40,7 @@ def survey_payload(survey_id=12632, modified="09/11/2017, 11:50:27 pm PST", **ov
         "Language": "ENGLISH",
         "LanguageCode": "EN",
         "groupType": "Consumer",
+        "BuyerId": 3690,
         "deviceType": "All",
         "createdDate": "09/11/2017, 11:03:50 pm PST",
         "modifiedDate": modified,
@@ -95,6 +96,8 @@ class SurveySyncTests(TestCase):
         survey = Survey.objects.get(source_id=12632)
         self.assertEqual(summary.created, 1)
         self.assertEqual(survey.name, "Newest")
+        self.assertEqual(survey.buyer_id, "3690")
+        self.assertEqual(survey.survey_type, "B2C")
         self.assertEqual(survey.client, Client.objects.get(code="innovatemr"))
         self.assertEqual(len(survey.local_id), 14)
         self.assertTrue(survey.local_id.isdigit())
@@ -245,6 +248,20 @@ class SurveyAPITests(TestCase):
         })
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 2)
+
+    def test_buyer_and_survey_type_filters_are_server_side(self):
+        self.survey.buyer_id = "3690"
+        self.survey.group_type = "Consumer"
+        self.survey.survey_type = "B2C"
+        self.survey.save(update_fields=["buyer_id", "group_type", "survey_type"])
+        Survey.objects.create(source_id=9880, buyer_id="4417", group_type="Business", survey_type="B2B")
+
+        response = self.api.get(reverse("survey-list"), {"buyer_id": "3690", "survey_type": "B2C"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["buyer_id"], "3690")
+        self.assertEqual(response.data["results"][0]["survey_type"], "B2C")
 
     def test_cpi_range_and_sort_are_applied_server_side(self):
         UserFunctionOverride.objects.create(
@@ -552,6 +569,7 @@ class StudiesTrackingTests(TestCase):
         )
         self.other = get_user_model().objects.create_user(username="other", first_name="Other")
         self.survey = Survey.objects.create(
+            client=Client.objects.create(code="tracking-client", name="Tracking Client"),
             source_id=555123,
             name="Consumer finance",
             company_name="InnovateMR",
@@ -559,6 +577,8 @@ class StudiesTrackingTests(TestCase):
             country_code="US",
             language_code="EN",
             cpi="2.50",
+            buyer_id="3690",
+            survey_type="B2C",
             loi=10,
         )
         common = {
@@ -594,6 +614,8 @@ class StudiesTrackingTests(TestCase):
         self.assertContains(page, "Kanik Sharma")
         self.assertContains(page, "Snapshot CPI")
         self.assertContains(page, 'data-multi-filter="country"')
+        self.assertContains(page, 'data-multi-filter="client"')
+        self.assertContains(page, 'data-multi-filter="buyer_id"')
         self.assertContains(page, "Device</th>")
         self.assertContains(page, "Start</th>")
         self.assertContains(page, "End</th>")
@@ -628,6 +650,20 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(float(response.data["summary"]["total_revenue"]), 2.50)
         self.assertEqual(response.data["summary"]["revenue_currency"], "USD")
 
+    def test_client_buyer_and_project_deep_link_filters(self):
+        response = self.api.get(reverse("survey-attempt-list"), {
+            "client": str(self.survey.client_id),
+            "buyer_id": "3690",
+            "internal_id": self.survey.local_id,
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 2)
+
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("studies"), {"internal_id": self.survey.local_id})
+        self.assertContains(page, "Project filter")
+        self.assertContains(page, self.survey.local_id)
+
     def test_country_filter_and_hit_time_cpi_snapshot_are_stable(self):
         created = create_attempt(self.survey, self.kanik, "10.10.10.10")
         self.assertEqual(str(created.source_cpi_snapshot), "2.50")
@@ -651,6 +687,26 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["country_code"], "CA")
+
+    def test_team_lead_cpi_percentage_masks_study_snapshot_and_revenue(self):
+        role = Role.objects.get(slug="team-lead")
+        role.cpi_visibility_percent = "70.00"
+        role.save(update_fields=["cpi_visibility_percent"])
+        EmployeeProfile.objects.filter(user=self.kanik).update(role=role)
+        UserFunctionOverride.objects.create(
+            user=self.kanik,
+            function=AccessFunction.objects.get(code="studies.card.revenue"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        self.kanik = get_user_model().objects.get(pk=self.kanik.pk)
+        scoped_api = APIClient()
+        scoped_api.force_authenticate(self.kanik)
+
+        response = scoped_api.get(reverse("survey-attempt-list"), {"status": SurveyAttempt.Status.COMPLETED})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(str(response.data["results"][0]["source_cpi_snapshot"]), "1.75")
+        self.assertEqual(str(response.data["summary"]["total_revenue"]), "1.75")
 
     def test_summary_tracks_all_outcomes_and_completed_device_types(self):
         SurveyAttempt.objects.create(

@@ -129,6 +129,7 @@ class ResearchForGoodProvider(SurveyProvider):
         modified = self._datetime(payload.get("lastModified"))
         phone = int(payload.get("phoneSupported") or 0)
         tablet = int(payload.get("tabletSupported") or 0)
+        group_type = str(payload.get("category") or "").strip().upper()
         devices = ["Desktop"]
         if phone == 1:
             devices.append("Mobile")
@@ -151,6 +152,9 @@ class ResearchForGoodProvider(SurveyProvider):
                 "incidence_rate": self._money(payload.get("estimatedIR")),
                 "country": str(payload.get("country") or "").upper(),
                 "country_code": str(payload.get("country") or "").upper(),
+                "group_type": group_type,
+                "buyer_id": str(payload.get("buyerId") or payload.get("buyer_id") or "").strip(),
+                "survey_type": group_type if group_type in {"B2B", "B2C"} else group_type,
                 "device_type": ", ".join(devices),
                 "job_category": str(payload.get("category") or ""),
                 "is_pii_required": bool(payload.get("collectsPII")),

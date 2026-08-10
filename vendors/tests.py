@@ -27,6 +27,7 @@ from .services import (
     payable_cpi,
     reserve_attempt_capacity,
     resolve_vendor_survey_context,
+    survey_pricing_for_user,
 )
 from .tasks import expire_allocation_reservations_task
 
@@ -98,6 +99,18 @@ class VendorFoundationTests(TestCase):
         )
         with self.assertRaises(ValidationError):
             internal_policy.full_clean()
+
+    def test_employee_role_can_show_a_configured_cpi_percentage(self):
+        role = Role.objects.get(slug="team-lead")
+        role.cpi_visibility_percent = Decimal("70.00")
+        role.save(update_fields=["cpi_visibility_percent"])
+        EmployeeProfile.objects.filter(user=self.employee).update(role=role)
+        self.employee.employee_profile.refresh_from_db()
+
+        visible_cpi, applied_cut = survey_pricing_for_user(self.employee, self.survey)
+
+        self.assertEqual(visible_cpi, Decimal("7.00"))
+        self.assertEqual(applied_cut, Decimal("30.00"))
 
     def test_reservation_freezes_cpi_and_completion_consumes_both_limits(self):
         attempt = self.attempt("Ua1Bb2Cc3D")

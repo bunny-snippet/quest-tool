@@ -536,6 +536,15 @@ paths:
       summary: List respondent survey attempts
       parameters:
       - in: query
+        name: buyer_id
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated buyer/sub-client IDs
+        explode: false
+        style: form
+      - in: query
         name: callback_from
         schema:
           type: string
@@ -545,6 +554,15 @@ paths:
         schema:
           type: string
           format: date-time
+      - in: query
+        name: client
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated internal client IDs
+        explode: false
+        style: form
       - in: query
         name: company
         schema:
@@ -676,6 +694,11 @@ paths:
       summary: Export all filtered survey attempt data
       parameters:
       - in: query
+        name: buyer_id
+        schema:
+          type: string
+        description: Comma-separated buyer/sub-client IDs.
+      - in: query
         name: callback_from
         schema:
           type: string
@@ -687,6 +710,11 @@ paths:
           type: string
           format: date-time
         description: Exit timestamp upper bound (ISO 8601).
+      - in: query
+        name: client
+        schema:
+          type: string
+        description: Comma-separated internal client IDs.
       - in: query
         name: company
         schema:
@@ -771,6 +799,11 @@ paths:
         Date filters accept ISO-8601 timestamps.
       summary: List synchronized surveys
       parameters:
+      - in: query
+        name: buyer_id
+        schema:
+          type: string
+        description: Comma-separated buyer/sub-client IDs.
       - in: query
         name: client
         schema:
@@ -870,6 +903,11 @@ paths:
         description: 'Comma-separated statuses: live,closed'
         explode: false
         style: form
+      - in: query
+        name: survey_type
+        schema:
+          type: string
+        description: Comma-separated normalized audience types, for example B2B,B2C.
       tags:
       - Surveys
       security:
@@ -914,6 +952,15 @@ paths:
       summary: List a survey's quotas
       parameters:
       - in: query
+        name: buyer_id
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated provider buyer/sub-client IDs
+        explode: false
+        style: form
+      - in: query
         name: client
         schema:
           type: number
@@ -1018,6 +1065,15 @@ paths:
           items:
             type: string
         description: 'Comma-separated statuses: live,closed'
+        explode: false
+        style: form
+      - in: query
+        name: survey_type
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated normalized types, e.g. B2B,B2C
         explode: false
         style: form
       tags:
@@ -1040,6 +1096,15 @@ paths:
       summary: List pre-screening questions and accepted answers
       parameters:
       - in: query
+        name: buyer_id
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated provider buyer/sub-client IDs
+        explode: false
+        style: form
+      - in: query
         name: client
         schema:
           type: number
@@ -1146,6 +1211,15 @@ paths:
         description: 'Comma-separated statuses: live,closed'
         explode: false
         style: form
+      - in: query
+        name: survey_type
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated normalized types, e.g. B2B,B2C
+        explode: false
+        style: form
       tags:
       - Survey details
       security:
@@ -1166,6 +1240,11 @@ paths:
         project-column and link-copy permissions.
       summary: Export all filtered projects
       parameters:
+      - in: query
+        name: buyer_id
+        schema:
+          type: string
+        description: Comma-separated buyer/sub-client IDs.
       - in: query
         name: company
         schema:
@@ -1225,6 +1304,11 @@ paths:
         schema:
           type: string
         description: Comma-separated survey statuses.
+      - in: query
+        name: survey_type
+        schema:
+          type: string
+        description: Comma-separated normalized audience types, for example B2B,B2C.
       tags:
       - Surveys
       security:
@@ -4772,6 +4856,12 @@ components:
           maximum: 9223372036854775807
           minimum: 0
           format: int64
+        cpi_visibility_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          description: Percentage of CPI visible to employee accounts assigned this
+            role.
         is_active:
           type: boolean
         permission_codes:
@@ -5009,6 +5099,12 @@ components:
           maximum: 9223372036854775807
           minimum: 0
           format: int64
+        cpi_visibility_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          description: Percentage of CPI visible to employee accounts assigned this
+            role.
         is_system:
           type: boolean
           readOnly: true
@@ -5064,6 +5160,12 @@ components:
           maximum: 9223372036854775807
           minimum: 0
           format: int64
+        cpi_visibility_percent:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,3}(?:\.\d{0,2})?$
+          description: Percentage of CPI visible to employee accounts assigned this
+            role.
         is_active:
           type: boolean
         permission_codes:
@@ -5134,7 +5236,6 @@ components:
         client_name:
           type: string
           readOnly: true
-          nullable: true
         client_allocation:
           type: integer
           nullable: true
@@ -5144,12 +5245,19 @@ components:
         supplier_code:
           type: string
           maxLength: 40
+        buyer_id:
+          type: string
+          readOnly: true
         source_cpi_snapshot:
           type: string
           format: decimal
           pattern: ^-?\d{0,10}(?:\.\d{0,2})?$
           nullable: true
           readOnly: true
+        cpi_snapshot_source:
+          type: string
+          description: How the immutable source CPI snapshot was captured or recovered.
+          maxLength: 24
         cpi_cut_percent_snapshot:
           type: string
           format: decimal
@@ -5266,6 +5374,7 @@ components:
           format: date-time
           readOnly: true
       required:
+      - buyer_id
       - client_name
       - company_name
       - country
@@ -5491,6 +5600,14 @@ components:
         group_type:
           type: string
           maxLength: 80
+        buyer_id:
+          type: string
+          description: Provider buyer/sub-client identifier.
+          maxLength: 160
+        survey_type:
+          type: string
+          description: Normalized survey audience type, such as B2B or B2C.
+          maxLength: 20
         device_type:
           type: string
           maxLength: 80
@@ -5685,6 +5802,14 @@ components:
         group_type:
           type: string
           maxLength: 80
+        buyer_id:
+          type: string
+          description: Provider buyer/sub-client identifier.
+          maxLength: 160
+        survey_type:
+          type: string
+          description: Normalized survey audience type, such as B2B or B2C.
+          maxLength: 20
         device_type:
           type: string
           maxLength: 80

@@ -1,4 +1,5 @@
 from django.conf import settings
+from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models
 
 
@@ -23,6 +24,13 @@ class Role(models.Model):
     slug = models.SlugField(max_length=80, unique=True)
     description = models.TextField(blank=True)
     rank = models.PositiveSmallIntegerField(default=10)
+    cpi_visibility_percent = models.DecimalField(
+        max_digits=5,
+        decimal_places=2,
+        default=100,
+        validators=[MinValueValidator(0), MaxValueValidator(100)],
+        help_text="Percentage of CPI visible to employee accounts assigned this role.",
+    )
     is_system = models.BooleanField(default=False)
     is_active = models.BooleanField(default=True)
     created_by = models.ForeignKey(

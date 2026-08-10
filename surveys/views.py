@@ -93,6 +93,7 @@ PROJECT_COLUMN_PERMISSIONS = {
 PROJECT_FILTER_PERMISSIONS = {
     "search": "projects.filter.search", "country": "projects.filter.country",
     "status": "projects.filter.status", "client": "projects.filter.client",
+    "buyer": "projects.filter.buyer", "survey_type": "projects.filter.survey_type",
     "cpi": "projects.filter.cpi", "date": "projects.filter.date",
     "clear": "projects.filters.clear",
 }
@@ -107,7 +108,9 @@ STUDY_COLUMN_PERMISSIONS = {
 
 STUDY_FILTER_PERMISSIONS = {
     "search": "studies.filter.search", "user": "studies.filter.user",
-    "status": "studies.filter.status", "country": "studies.filter.country", "date": "studies.filter.date",
+    "status": "studies.filter.status", "country": "studies.filter.country",
+    "client": "studies.filter.client", "buyer": "studies.filter.buyer",
+    "project": "studies.filter.project", "date": "studies.filter.date",
     "clear": "studies.filters.clear",
 }
 
@@ -220,6 +223,19 @@ def projects_page(request):
         companies = visible_surveys.filter(client__isnull=False).values_list("client__name", flat=True).distinct().order_by("client__name")
     else:
         companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
+    buyer_rows = visible_surveys.exclude(buyer_id="").values(
+        "buyer_id", "client__name", "company_name"
+    ).distinct().order_by("buyer_id")
+    buyer_options = [
+        {
+            "value": row["buyer_id"],
+            "client_value": (row["client__name"] if is_client_scoped_panel else row["company_name"]) or "",
+        }
+        for row in buyer_rows
+    ]
+    survey_types = list(
+        visible_surveys.exclude(survey_type="").values_list("survey_type", flat=True).distinct().order_by("survey_type")
+    )
     project_columns = _project_columns_for_user(request.user)
     project_filters = _component_access(codes, PROJECT_FILTER_PERMISSIONS)
     can_sort_cpi = project_filters["cpi"]
@@ -232,6 +248,7 @@ def projects_page(request):
             cpi_max = cpi_min + 1
     return render(request, "surveys/projects.html", {
         "active_page": "projects", "countries": countries, "companies": companies,
+        "buyer_options": buyer_options, "survey_types": survey_types,
         "company_filter_label": "Client",
         "company_filter_param": "client_name" if is_client_scoped_panel else "company",
         "company_filter_default": "All clients",
@@ -241,6 +258,7 @@ def projects_page(request):
         "can_export_projects": "projects.export" in codes,
         "can_change_project_page_size": "projects.control.page_size" in codes,
         "can_paginate_projects": "projects.control.pagination" in codes,
+        "can_open_project_studies": "attempts.view" in codes and "studies.filter.project" in codes,
         "can_sort_cpi": can_sort_cpi, "cpi_min_bound": cpi_min, "cpi_max_bound": cpi_max,
     })
 
@@ -262,10 +280,22 @@ def studies_page(request):
         .values("survey__country_code", "survey__country")
         .distinct().order_by("survey__country_code")
     )
+    study_clients = list(
+        visible_attempts.filter(survey__client__isnull=False)
+        .values("survey__client_id", "survey__client__name")
+        .distinct().order_by("survey__client__name")
+    )
+    study_buyers = list(
+        visible_attempts.exclude(survey__buyer_id="")
+        .values("survey__buyer_id", "survey__client_id")
+        .distinct().order_by("survey__buyer_id")
+    )
     return render(request, "surveys/studies.html", {
         "active_page": "studies",
         "tracked_users": tracked_users,
         "study_countries": countries,
+        "study_clients": study_clients,
+        "study_buyers": study_buyers,
         "attempt_statuses": [
             ("initiated,redirected", "Initiated"),
             (SurveyAttempt.Status.COMPLETED, "Completed"),
@@ -530,6 +560,7 @@ def termination_reasons_page(request):
         "status_filter": status_filter,
         "client_filter": client_filter,
         "client_options": client_options,
+        "term_reason_clients": client_options,
         "attempt_statuses": list(UNSUCCESSFUL_STATUS_LABELS.items()),
         "summary": summary,
         "page_obj": page_obj,
@@ -1108,6 +1139,8 @@ def survey_status(request):
             OpenApiParameter("ordering", OpenApiTypes.STR, description="One of source_modified_at, source_created_at, cpi, sample_size, completes, created_at; prefix '-' for descending."),
             OpenApiParameter("page", OpenApiTypes.INT, description="1-based result page."),
             OpenApiParameter("page_size", OpenApiTypes.INT, description="Rows per page (1–100, default 20)."),
+            OpenApiParameter("buyer_id", OpenApiTypes.STR, description="Comma-separated buyer/sub-client IDs."),
+            OpenApiParameter("survey_type", OpenApiTypes.STR, description="Comma-separated normalized audience types, for example B2B,B2C."),
         ],
     ),
     retrieve=extend_schema(
@@ -1121,7 +1154,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     lookup_field = "local_id"
     filterset_class = SurveyFilter
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
-    search_fields = ["local_id", "=source_key", "=source_id", "name", "company_name", "country", "country_code", "job_category"]
+    search_fields = ["local_id", "=source_key", "=source_id", "name", "company_name", "buyer_id", "survey_type", "country", "country_code", "job_category"]
     ordering_fields = ["source_modified_at", "source_created_at", "cpi", "sample_size", "completes", "created_at"]
     ordering = ["-source_modified_at", "-created_at"]
     permission_classes = [HasFunctionPermission]
@@ -1140,6 +1173,8 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
             "projects.filter.country": ("country",),
             "projects.filter.status": ("status",),
             "projects.filter.client": ("company", "client_name"),
+            "projects.filter.buyer": ("buyer_id",),
+            "projects.filter.survey_type": ("survey_type",),
             "projects.filter.date": ("created_from", "created_to", "modified_from", "modified_to"),
         })
         cpi_ordering = self.request.query_params.get("ordering", "").lstrip("-") == "cpi"
@@ -1163,6 +1198,8 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
             OpenApiParameter("country", OpenApiTypes.STR, description="Comma-separated country codes."),
             OpenApiParameter("status", OpenApiTypes.STR, description="Comma-separated survey statuses."),
             OpenApiParameter("company", OpenApiTypes.STR, description="Comma-separated client/company names."),
+            OpenApiParameter("buyer_id", OpenApiTypes.STR, description="Comma-separated buyer/sub-client IDs."),
+            OpenApiParameter("survey_type", OpenApiTypes.STR, description="Comma-separated normalized audience types, for example B2B,B2C."),
             OpenApiParameter("created_from", OpenApiTypes.DATETIME, description="Source-created timestamp lower bound."),
             OpenApiParameter("created_to", OpenApiTypes.DATETIME, description="Source-created timestamp upper bound."),
             OpenApiParameter("modified_from", OpenApiTypes.DATETIME, description="Source-modified timestamp lower bound."),
@@ -1327,6 +1364,12 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         )
         completed = summary["completed"]
         classified = summary["desktop"] + summary["mobile"] + summary["tablet"]
+        profile = getattr(self.request.user, "employee_profile", None)
+        role = getattr(profile, "role", None) if profile else None
+        if profile and profile.account_type == "employee" and role and not self.request.user.is_superuser:
+            summary["total_revenue"] = (
+                summary["total_revenue"] * role.cpi_visibility_percent / Decimal("100.00")
+            ).quantize(Decimal("0.01"))
         card_access = _component_access(
             effective_permission_codes(self.request.user), STUDY_CARD_PERMISSIONS
         )
@@ -1371,7 +1414,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         queryset = SurveyAttempt.objects.select_related(
-            "survey", "platform_user", "platform_user__employee_profile", "platform_user__employee_profile__role",
+            "survey", "survey__client", "survey__integration", "platform_user", "platform_user__employee_profile", "platform_user__employee_profile__role",
             "vendor", "vendor__employee_profile", "client", "client_allocation", "survey_allocation",
         ).all()
         if self.request.user.is_superuser:
@@ -1385,6 +1428,9 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             "studies.filter.user": ("user",),
             "studies.filter.status": ("status",),
             "studies.filter.country": ("country",),
+            "studies.filter.client": ("client",),
+            "studies.filter.buyer": ("buyer_id",),
+            "studies.filter.project": ("internal_id",),
             "studies.filter.date": ("initiated_from", "initiated_to", "callback_from", "callback_to"),
         })
         return super().filter_queryset(queryset)
@@ -1402,6 +1448,8 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             OpenApiParameter("status", OpenApiTypes.STR, description="Comma-separated attempt status codes."),
             OpenApiParameter("country", OpenApiTypes.STR, description="Comma-separated survey country codes."),
             OpenApiParameter("company", OpenApiTypes.STR, description="Comma-separated survey company names."),
+            OpenApiParameter("client", OpenApiTypes.STR, description="Comma-separated internal client IDs."),
+            OpenApiParameter("buyer_id", OpenApiTypes.STR, description="Comma-separated buyer/sub-client IDs."),
             OpenApiParameter("survey_id", OpenApiTypes.INT, description="Exact upstream survey ID."),
             OpenApiParameter("internal_id", OpenApiTypes.STR, description="Exact internal 14-digit project ID."),
             OpenApiParameter("entry_ip", OpenApiTypes.STR, description="Exact entry IP address."),
@@ -1502,11 +1550,11 @@ def _csv_safe(value):
 def _survey_csv_rows(queryset, request, columns):
     headers_by_column = {
         "project_id": ["Project ID"],
-        "survey": ["Survey ID", "Survey name", "Client"],
+        "survey": ["Survey ID", "Survey name", "Client", "Buyer ID"],
         "market": ["Country code", "Country", "Language code", "Language"],
         "completes": ["Sample size", "Completes", "Remaining", "Progress (%)"],
         "cpi": ["CPI"],
-        "loi_ir": ["LOI (minutes)", "Incidence rate (%)"],
+        "loi_ir": ["LOI (minutes)", "Incidence rate (%)", "Survey type"],
         "entry_link": ["Entry link"],
         "modified": ["Status", "Source created at", "Source modified at", "Record created at", "Record updated at"],
     }
@@ -1521,12 +1569,13 @@ def _survey_csv_rows(queryset, request, columns):
             "project_id": [data.get("local_id")],
             "survey": [
                 data.get("source_id"), data.get("name"),
-                data.get("display_company_name") or data.get("client_name") or data.get("company_name"),
+                data.get("client_name") or data.get("display_company_name") or data.get("company_name"),
+                data.get("buyer_id"),
             ],
             "market": [data.get("country_code"), data.get("country"), data.get("language_code"), data.get("language")],
             "completes": [data.get("sample_size"), data.get("completes"), data.get("remaining"), data.get("progress_percent")],
             "cpi": [data.get("cpi")],
-            "loi_ir": [data.get("loi"), data.get("incidence_rate")],
+            "loi_ir": [data.get("loi"), data.get("incidence_rate"), data.get("survey_type") or data.get("group_type")],
             "entry_link": [data.get("start_link")],
             "modified": [
                 data.get("status"), data.get("source_created_at"), data.get("source_modified_at"),
@@ -1542,8 +1591,8 @@ def _attempt_csv_rows(queryset, requesting_user=None):
         "Respondent ID (RID)", "Status code", "Status", "Status source", "Platform user ID", "Username", "Employee name",
         "Email", "Employee ID", "Account type", "Role", "Vendor ID", "Vendor name", "Vendor account type",
         "Client ID", "Client name", "Client allocation ID", "Survey allocation ID",
-        "Internal project ID", "Survey ID", "Survey name", "Company", "Country", "Language", "Supplier code",
-        "Current survey CPI", "Source CPI snapshot", "CPI cut snapshot (%)", "Payable CPI snapshot",
+        "Internal project ID", "Survey ID", "Survey name", "Company", "Buyer ID", "Survey type", "Country", "Language", "Supplier code",
+        "Current survey CPI", "Source CPI snapshot", "CPI snapshot source", "CPI cut snapshot (%)", "Payable CPI snapshot",
         "CPI currency snapshot", "Expected LOI (minutes)",
         "Actual LOI (seconds)", "Entry IP", "Exit IP", "Entry browser", "Exit browser", "Entry device",
         "Exit device", "Entry OS", "Exit OS", "Entry user agent", "Exit user agent", "Entry referrer",
@@ -1556,6 +1605,19 @@ def _attempt_csv_rows(queryset, requesting_user=None):
     writer = csv.writer(_CsvEcho())
     yield "\ufeff" + writer.writerow(headers)
     hide_source_cpi = is_external_vendor_scope(requesting_user)
+    requesting_profile = getattr(requesting_user, "employee_profile", None) if requesting_user else None
+    requesting_role = getattr(requesting_profile, "role", None) if requesting_profile else None
+    visible_percent = (
+        requesting_role.cpi_visibility_percent
+        if requesting_profile and requesting_profile.account_type == "employee" and requesting_role and not requesting_user.is_superuser
+        else Decimal("100.00")
+    )
+
+    def visible_cpi(value):
+        if hide_source_cpi or value is None:
+            return ""
+        return (Decimal(value) * visible_percent / Decimal("100.00")).quantize(Decimal("0.01"))
+
     for attempt in queryset.iterator(chunk_size=1000):
         user = attempt.platform_user
         profile = getattr(user, "employee_profile", None) if user else None
@@ -1574,11 +1636,11 @@ def _attempt_csv_rows(queryset, requesting_user=None):
             vendor_profile.get_account_type_display() if vendor_profile else "",
             attempt.client_id, attempt.client.name if attempt.client else "", attempt.client_allocation_id,
             attempt.survey_allocation_id,
-            survey.local_id, survey.source_identifier, survey.name, survey.company_name, survey.country_code,
+            survey.local_id, survey.source_identifier, survey.name, survey.company_name, survey.buyer_id, survey.survey_type or survey.group_type, survey.country_code,
             survey.language_code, attempt.supplier_code,
-            "" if hide_source_cpi else survey.cpi,
-            "" if hide_source_cpi else attempt.source_cpi_snapshot,
-            attempt.cpi_cut_percent_snapshot, attempt.payable_cpi_snapshot, attempt.cpi_currency_snapshot,
+            visible_cpi(survey.cpi),
+            visible_cpi(attempt.source_cpi_snapshot),
+            attempt.cpi_snapshot_source, attempt.cpi_cut_percent_snapshot, attempt.payable_cpi_snapshot, attempt.cpi_currency_snapshot,
             survey.loi, attempt.loi_seconds,
             attempt.initiation_ip, attempt.callback_ip, attempt.entry_browser, attempt.exit_browser,
             attempt.entry_device, attempt.exit_device, attempt.entry_os, attempt.exit_os,

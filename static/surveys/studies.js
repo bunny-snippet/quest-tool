@@ -5,7 +5,9 @@
   const elements = {
     search: byId('studySearch'), userFilters: document.querySelector('[data-multi-filter="user"]'),
     statusFilters: document.querySelector('[data-multi-filter="status"]'),
-    countryFilters: document.querySelector('[data-multi-filter="country"]'), dateField: byId('studyDateField'),
+    countryFilters: document.querySelector('[data-multi-filter="country"]'),
+    clientFilters: document.querySelector('[data-multi-filter="client"]'),
+    buyerFilters: document.querySelector('[data-multi-filter="buyer_id"]'), dateField: byId('studyDateField'),
     from: byId('studyFromDateTime'), to: byId('studyToDateTime'), clear: byId('clearStudyFilters'),
     export: byId('exportStudies'), pageSize: byId('studyPageSize'), rows: byId('studyRows'),
     cards: byId('studyCards'), summary: byId('studySummary'), pageStatus: byId('studyPageStatus'),
@@ -21,9 +23,12 @@
     },
   };
   if (!elements.rows) return;
-  document.querySelector('.studies-table').style.minWidth = `${Math.max(680, columnCount * 96)}px`;
+  document.querySelector('.studies-table').style.minWidth = `${Math.max(980, columnCount * 96)}px`;
 
-  const state = { page: 1, pages: 1, pageSize: 20, timer: null, controller: null };
+  const state = {
+    page: 1, pages: 1, pageSize: 20, timer: null, controller: null,
+    projectId: byId('studyProjectScope') ? (new URLSearchParams(window.location.search).get('internal_id') || '') : '',
+  };
   const statusTone = { initiated: 'initiate', redirected: 'initiate', '1': 'complete', '2': 'terminate', '3': 'quota', '4': 'quality' };
   const deviceIcons = {
     desktop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>',
@@ -43,7 +48,9 @@
   function updateMultiLabel(container) {
     const checked = [...container.querySelectorAll('input:checked')];
     const button = container.querySelector('.multi-trigger');
-    const fallback = { user: 'All users', status: 'All statuses', country: 'All countries' }[container.dataset.multiFilter] || 'All options';
+    const fallback = {
+      user: 'All users', status: 'All statuses', country: 'All countries', client: 'All clients', buyer_id: 'All buyer IDs',
+    }[container.dataset.multiFilter] || 'All options';
     button.querySelector('span').textContent = checked.length === 0 ? fallback : checked.length === 1 ? checked[0].closest('label').innerText.trim() : `${checked.length} selected`;
     button.classList.toggle('has-value', checked.length > 0);
   }
@@ -57,6 +64,18 @@
     });
   }
 
+  function updateStudyBuyerOptions() {
+    if (!elements.buyerFilters) return;
+    const clients = new Set(selectedValues(elements.clientFilters));
+    elements.buyerFilters.querySelectorAll('.multi-options label').forEach((option) => {
+      const matches = !clients.size || clients.has(option.dataset.clientId || '');
+      option.hidden = !matches;
+      const input = option.querySelector('input');
+      if (!matches && input?.checked) input.checked = false;
+    });
+    updateMultiLabel(elements.buyerFilters);
+  }
+
   document.querySelectorAll('.studies-filters .multi-select').forEach((container) => {
     const trigger = container.querySelector('.multi-trigger');
     const menu = container.querySelector('.multi-menu');
@@ -67,8 +86,14 @@
       menu.hidden = !shouldOpen;
       trigger.setAttribute('aria-expanded', String(shouldOpen));
     });
-    menu.addEventListener('change', () => { updateMultiLabel(container); scheduleLoad(); });
+    menu.addEventListener('change', () => {
+      updateMultiLabel(container);
+      if (container === elements.clientFilters) updateStudyBuyerOptions();
+      scheduleLoad();
+    });
+    updateMultiLabel(container);
   });
+  updateStudyBuyerOptions();
 
   function dateBoundary(dateTime, endOfMinute = false) {
     if (!dateTime) return '';
@@ -82,10 +107,15 @@
     const users = selectedValues(elements.userFilters);
     const statuses = selectedValues(elements.statusFilters);
     const countries = selectedValues(elements.countryFilters);
+    const clients = selectedValues(elements.clientFilters);
+    const buyers = selectedValues(elements.buyerFilters);
     if (search) params.set('search', search);
     if (users.length) params.set('user', users.join(','));
     if (statuses.length) params.set('status', statuses.join(','));
     if (countries.length) params.set('country', countries.join(','));
+    if (clients.length) params.set('client', clients.join(','));
+    if (buyers.length) params.set('buyer_id', buyers.join(','));
+    if (state.projectId) params.set('internal_id', state.projectId);
     if (elements.dateField && elements.from?.value) params.set(`${elements.dateField.value}_from`, dateBoundary(elements.from.value));
     if (elements.dateField && elements.to?.value) params.set(`${elements.dateField.value}_to`, dateBoundary(elements.to.value, true));
     if (includePage) { params.set('page', state.page); params.set('page_size', state.pageSize); }
@@ -169,7 +199,7 @@
     if (columns.has('project_id')) cells.push(`<td class="study-col-project"><strong class="study-project-id">${escapeHtml(attempt.survey_local_id)}</strong></td>`);
     if (columns.has('survey_id')) cells.push(`<td class="study-col-survey"><strong class="study-survey-id">${escapeHtml(attempt.survey_source_id)}</strong></td>`);
     if (columns.has('country')) cells.push(`<td class="study-col-country"><span class="study-country"><b>${escapeHtml(attempt.country_code || '—')}</b><small>${escapeHtml(attempt.country || attempt.country_code || 'Unknown')}</small></span></td>`);
-    if (columns.has('cpi')) cells.push(`<td class="study-col-cpi"><span class="study-cpi"><b>${attempt.source_cpi_snapshot == null ? '—' : formatMoney(attempt.source_cpi_snapshot, attempt.cpi_currency_snapshot || 'USD')}</b><small>At hit time</small></span></td>`);
+    if (columns.has('cpi')) cells.push(`<td class="study-col-cpi"><span class="study-cpi"><b>${attempt.source_cpi_snapshot == null ? '—' : formatMoney(attempt.source_cpi_snapshot, attempt.cpi_currency_snapshot || 'USD')}</b><small>${attempt.cpi_snapshot_source === 'legacy_survey' ? 'Legacy recovered' : 'At hit time'}</small></span></td>`);
     if (columns.has('respondent_id')) cells.push(`<td class="study-col-rid"><strong class="respondent-id">${escapeHtml(attempt.rid)}</strong></td>`);
     if (columns.has('user')) cells.push(`<td class="study-col-user"><strong class="study-user-name">${escapeHtml(attempt.user_name)}</strong><small class="study-secondary">${escapeHtml(attempt.user_email || attempt.username || `User #${attempt.user_id}`)}</small></td>`);
     if (columns.has('device')) cells.push(`<td class="study-col-device">${deviceBadge(attempt)}</td>`);
@@ -226,7 +256,18 @@
     if (elements.search) elements.search.value = ''; if (elements.dateField) elements.dateField.value = 'initiated';
     if (elements.from) elements.from.value = ''; if (elements.to) elements.to.value = '';
     document.querySelectorAll('.studies-filters .multi-select').forEach((container) => { container.querySelectorAll('input').forEach((input) => { input.checked = false; }); updateMultiLabel(container); });
+    state.projectId = '';
+    byId('studyProjectScope')?.remove();
+    window.history.replaceState({}, '', window.location.pathname);
+    updateStudyBuyerOptions();
     closeMultiSelects(); state.page = 1; loadAttempts();
+  });
+  byId('clearProjectScope')?.addEventListener('click', () => {
+    state.projectId = '';
+    byId('studyProjectScope')?.remove();
+    window.history.replaceState({}, '', window.location.pathname);
+    state.page = 1;
+    loadAttempts();
   });
   elements.first?.addEventListener('click', () => go(1)); elements.prev?.addEventListener('click', () => go(state.page - 1));
   elements.next?.addEventListener('click', () => go(state.page + 1)); elements.last?.addEventListener('click', () => go(state.pages));

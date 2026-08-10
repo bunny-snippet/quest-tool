@@ -159,6 +159,7 @@ def create_attempt(survey: Survey, platform_user, ip_address: str | None, client
                     user_id=str(platform_user.pk),
                     supplier_code=supplier_code_from_entry_link(survey.entry_link),
                     source_cpi_snapshot=survey.cpi,
+                    cpi_snapshot_source="captured",
                     payable_cpi_snapshot=survey.cpi,
                     cpi_currency_snapshot="USD",
                     initiation_ip=ip_address,

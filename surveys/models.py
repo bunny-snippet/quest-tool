@@ -95,6 +95,18 @@ class Survey(models.Model):
     language = models.CharField(max_length=80, blank=True)
     language_code = models.CharField(max_length=8, blank=True)
     group_type = models.CharField(max_length=80, blank=True)
+    buyer_id = models.CharField(
+        max_length=160,
+        blank=True,
+        db_index=True,
+        help_text="Provider buyer/sub-client identifier.",
+    )
+    survey_type = models.CharField(
+        max_length=20,
+        blank=True,
+        db_index=True,
+        help_text="Normalized survey audience type, such as B2B or B2C.",
+    )
     device_type = models.CharField(max_length=80, blank=True)
     entry_link = models.URLField(max_length=2000, blank=True)
     test_entry_link = models.URLField(max_length=2000, blank=True)
@@ -250,6 +262,11 @@ class SurveyAttempt(models.Model):
     user_id = models.CharField(max_length=160, db_index=True)
     supplier_code = models.CharField(max_length=40, blank=True)
     source_cpi_snapshot = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
+    cpi_snapshot_source = models.CharField(
+        max_length=24,
+        blank=True,
+        help_text="How the immutable source CPI snapshot was captured or recovered.",
+    )
     cpi_cut_percent_snapshot = models.DecimalField(max_digits=5, decimal_places=2, null=True, blank=True)
     payable_cpi_snapshot = models.DecimalField(max_digits=12, decimal_places=2, null=True, blank=True)
     cpi_currency_snapshot = models.CharField(max_length=3, blank=True)

@@ -1,4 +1,5 @@
 from urllib.parse import urlencode
+from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 from django.urls import reverse
@@ -188,7 +189,7 @@ class SurveyListSerializer(serializers.ModelSerializer):
         fields = [
             "id", "local_id", "client", "client_name", "display_company_name", "source_id", "provider_code", "company_name", "name", "status", "sample_size", "completes", "remaining",
             "starts", "cpi", "cpi_cut_percent", "vendor_pricing", "loi", "incidence_rate", "country", "country_code", "country_label",
-            "language", "language_code", "group_type", "device_type", "entry_link", "start_link", "has_quota",
+            "language", "language_code", "group_type", "buyer_id", "survey_type", "device_type", "entry_link", "start_link", "has_quota",
             "source_created_at", "source_modified_at", "source_created_display", "source_modified_display",
             "detail_synced_at", "quota_synced_at", "targeting_synced_at", "created_at", "updated_at",
             "progress_percent",
@@ -346,7 +347,8 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     status_label = serializers.SerializerMethodField()
     entry_ip = serializers.IPAddressField(source="initiation_ip", read_only=True, allow_null=True)
     exit_ip = serializers.IPAddressField(source="callback_ip", read_only=True, allow_null=True)
-    client_name = serializers.CharField(source="client.name", read_only=True, allow_null=True)
+    client_name = serializers.SerializerMethodField()
+    buyer_id = serializers.CharField(source="survey.buyer_id", read_only=True)
     vendor_name = serializers.SerializerMethodField()
     source_cpi_snapshot = serializers.SerializerMethodField()
 
@@ -356,7 +358,7 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
             "rid", "survey_local_id", "survey_source_id", "survey_name", "company_name", "country", "country_code",
             "language_code", "platform_user", "user_id", "user_name", "username", "user_email", "vendor",
             "vendor_name", "client", "client_name", "client_allocation", "survey_allocation", "supplier_code",
-            "source_cpi_snapshot", "cpi_cut_percent_snapshot", "payable_cpi_snapshot", "cpi_currency_snapshot",
+            "buyer_id", "source_cpi_snapshot", "cpi_snapshot_source", "cpi_cut_percent_snapshot", "payable_cpi_snapshot", "cpi_currency_snapshot",
             "status_label",
             "status", "initiated_at", "submitted_at", "redirected_at", "callback_at", "last_callback_at",
             "loi_seconds", "entry_ip", "exit_ip", "initiation_ip", "callback_ip", "entry_user_agent",
@@ -374,6 +376,10 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     def get_survey_source_id(self, obj) -> str:
         return str(obj.survey.source_identifier)
 
+    def get_client_name(self, obj) -> str:
+        client = obj.client or obj.survey.client
+        return client.name if client else obj.survey.company_name
+
     def get_vendor_name(self, obj) -> str | None:
         if not obj.vendor:
             return None
@@ -382,7 +388,16 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True))
     def get_source_cpi_snapshot(self, obj):
         request = self.context.get("request")
-        return None if request and is_external_vendor_scope(request.user) else obj.source_cpi_snapshot
+        if request and is_external_vendor_scope(request.user):
+            return None
+        value = obj.source_cpi_snapshot
+        profile = getattr(request.user, "employee_profile", None) if request else None
+        role = getattr(profile, "role", None) if profile else None
+        if value is not None and profile and profile.account_type == "employee" and role and not request.user.is_superuser:
+            return (Decimal(value) * role.cpi_visibility_percent / Decimal("100.00")).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+        return value
 
     def get_status_label(self, obj) -> str:
         if obj.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED}:

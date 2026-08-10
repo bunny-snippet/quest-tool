@@ -159,14 +159,14 @@
     $$('input[name="permission_codes"]', fieldset).forEach((input) => input.addEventListener('change', () => syncPermissionGroup(fieldset)));
   });
 
-  function resetRoleForm() { roleForm.reset(); roleForm.elements.rank.value = 10; roleForm.elements.is_active.checked = true; roleSlug = null; $('#roleModalTitle').textContent = 'Create role'; $('[data-role-submit]').textContent = 'Create role'; $('[data-role-error]').hidden = true; syncAllPermissionGroups(); }
+  function resetRoleForm() { roleForm.reset(); roleForm.elements.rank.value = 10; roleForm.elements.cpi_visibility_percent.value = 100; roleForm.elements.is_active.checked = true; roleSlug = null; $('#roleModalTitle').textContent = 'Create role'; $('[data-role-submit]').textContent = 'Create role'; $('[data-role-error]').hidden = true; syncAllPermissionGroups(); }
   $('[data-open-role]')?.addEventListener('click', () => { resetRoleForm(); showModal(roleModal); });
   roleForm?.elements.name.addEventListener('input', () => { if (!roleSlug) roleForm.elements.slug.value = roleForm.elements.name.value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); });
   $$('[data-edit-role]').forEach((button) => button.addEventListener('click', async () => {
     resetRoleForm(); roleSlug = button.dataset.editRole;
     try {
       const data = await api(`/api/v1/access/roles/${encodeURIComponent(roleSlug)}/`);
-      roleForm.elements.name.value = data.name; roleForm.elements.slug.value = data.slug; roleForm.elements.rank.value = data.rank; roleForm.elements.description.value = data.description || ''; roleForm.elements.is_active.checked = data.is_active;
+      roleForm.elements.name.value = data.name; roleForm.elements.slug.value = data.slug; roleForm.elements.rank.value = data.rank; roleForm.elements.cpi_visibility_percent.value = data.cpi_visibility_percent ?? 100; roleForm.elements.description.value = data.description || ''; roleForm.elements.is_active.checked = data.is_active;
       (data.effective_permission_codes || []).forEach((code) => { const input = $(`input[name="permission_codes"][value="${CSS.escape(code)}"]`, roleModal); if (input) input.checked = true; });
       syncAllPermissionGroups();
       $('#roleModalTitle').textContent = 'Edit role'; $('[data-role-submit]').textContent = 'Save role'; showModal(roleModal);
@@ -174,7 +174,7 @@
   }));
   roleForm?.addEventListener('submit', async (event) => {
     event.preventDefault(); const errorBox = $('[data-role-error]'); errorBox.hidden = true;
-    const payload = { name: roleForm.elements.name.value.trim(), slug: roleForm.elements.slug.value.trim(), rank: Number(roleForm.elements.rank.value), description: roleForm.elements.description.value.trim(), is_active: roleForm.elements.is_active.checked, permission_codes: $$('input[name="permission_codes"]:checked', roleModal).map((input) => input.value) };
+    const payload = { name: roleForm.elements.name.value.trim(), slug: roleForm.elements.slug.value.trim(), rank: Number(roleForm.elements.rank.value), cpi_visibility_percent: Number(roleForm.elements.cpi_visibility_percent.value), description: roleForm.elements.description.value.trim(), is_active: roleForm.elements.is_active.checked, permission_codes: $$('input[name="permission_codes"]:checked', roleModal).map((input) => input.value) };
     try {
       await api(roleSlug ? `/api/v1/access/roles/${encodeURIComponent(roleSlug)}/` : '/api/v1/access/roles/', { method: roleSlug ? 'PATCH' : 'POST', body: JSON.stringify(payload) });
       toast(roleSlug ? 'Role updated.' : 'Role created.'); closeModals(); setTimeout(() => location.reload(), 450);
@@ -185,6 +185,35 @@
   $$('[data-delete-user]').forEach((button) => button.addEventListener('click', () => requestDelete('user', button.dataset.deleteUser, button.dataset.label)));
   $$('[data-delete-role]').forEach((button) => button.addEventListener('click', () => requestDelete('role', button.dataset.deleteRole, button.dataset.label)));
   $('[data-confirm-delete]')?.addEventListener('click', async () => { if (!deleteTarget) return; const url = deleteTarget.type === 'user' ? `/api/v1/access/users/${deleteTarget.id}/` : `/api/v1/access/roles/${encodeURIComponent(deleteTarget.id)}/`; try { await api(url, { method: 'DELETE' }); toast(`${deleteTarget.type} deleted.`); closeModals(); setTimeout(() => location.reload(), 450); } catch (error) { closeModals(); toast(error.message, true); } });
+
+  function filterRoles() {
+    const term = ($('#roleSearchFilter')?.value || '').trim().toLowerCase();
+    $$('[data-role-card]').forEach((card) => { card.hidden = Boolean(term && !card.textContent.toLowerCase().includes(term)); });
+  }
+
+  function filterUsers() {
+    const term = ($('#userSearchFilter')?.value || '').trim().toLowerCase();
+    const role = $('#userRoleFilter')?.value || '';
+    const type = $('#userTypeFilter')?.value || '';
+    const status = $('#userStatusFilter')?.value || '';
+    $$('[data-user-row]').forEach((row) => {
+      const matches = (!term || row.textContent.toLowerCase().includes(term))
+        && (!role || row.dataset.role === role)
+        && (!type || row.dataset.accountType === type)
+        && (!status || row.dataset.status === status);
+      row.hidden = !matches;
+    });
+  }
+
+  $('#roleSearchFilter')?.addEventListener('input', filterRoles);
+  $('#clearRoleFilters')?.addEventListener('click', () => { $('#roleSearchFilter').value = ''; filterRoles(); });
+  ['#userSearchFilter', '#userRoleFilter', '#userTypeFilter', '#userStatusFilter'].forEach((selector) => {
+    $(selector)?.addEventListener(selector === '#userSearchFilter' ? 'input' : 'change', filterUsers);
+  });
+  $('#clearUserFilters')?.addEventListener('click', () => {
+    ['#userSearchFilter', '#userRoleFilter', '#userTypeFilter', '#userStatusFilter'].forEach((selector) => { if ($(selector)) $(selector).value = ''; });
+    filterUsers();
+  });
   $$('[data-close-modal]').forEach((button) => button.addEventListener('click', closeModals));
   backdrop?.addEventListener('click', closeModals);
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeModals(); });

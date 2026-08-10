@@ -87,6 +87,14 @@ def merge_inventory(*inventories: list[dict[str, Any]]) -> dict[int, dict[str, A
 
 
 def _survey_values(payload: dict[str, Any], seen_at: datetime) -> dict[str, Any]:
+    group_type = str(payload.get("groupType") or payload.get("surveyType") or "").strip()
+    normalized_group = "".join(character for character in group_type.upper() if character.isalnum())
+    if normalized_group in {"B2B", "BUSINESS", "BUSINESSTOBUSINESS"}:
+        survey_type = "B2B"
+    elif normalized_group in {"B2C", "CONSUMER", "BUSINESSTOCONSUMER"}:
+        survey_type = "B2C"
+    else:
+        survey_type = group_type[:20]
     return {
         "company_name": str(payload.get("_provider_name") or "InnovateMR"),
         "name": str(payload.get("surveyName") or ""),
@@ -102,7 +110,9 @@ def _survey_values(payload: dict[str, Any], seen_at: datetime) -> dict[str, Any]
         "country_code": str(payload.get("CountryCode") or "").upper(),
         "language": str(payload.get("Language") or ""),
         "language_code": str(payload.get("LanguageCode") or "").upper(),
-        "group_type": str(payload.get("groupType") or ""),
+        "group_type": group_type,
+        "buyer_id": str(payload.get("BuyerId") or payload.get("buyerId") or "").strip(),
+        "survey_type": survey_type,
         "device_type": str(payload.get("deviceType") or ""),
         "entry_link": str(payload.get("entryLink") or ""),
         "test_entry_link": str(payload.get("testEntryLink") or ""),

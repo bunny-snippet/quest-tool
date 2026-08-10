@@ -265,8 +265,26 @@ def resolve_vendor_survey_context(user, survey: Survey, *, require_capacity=True
 def survey_pricing_for_user(user, survey: Survey) -> tuple[Decimal | None, Decimal | None]:
     """Return request-visible CPI and applied cut without exposing source CPI to external vendors."""
 
+    def apply_employee_role_percentage(price, existing_cut):
+        profile = getattr(user, "employee_profile", None)
+        role = getattr(profile, "role", None) if profile else None
+        if (
+            not getattr(user, "is_superuser", False)
+            and profile
+            and profile.account_type == EmployeeProfile.AccountType.EMPLOYEE
+            and role
+        ):
+            visible_percent = min(Decimal("100.00"), max(Decimal("0.00"), role.cpi_visibility_percent))
+            role_cut = Decimal("100.00") - visible_percent
+            base_cut = existing_cut or Decimal("0.00")
+            combined_cut = Decimal("100.00") - (
+                (Decimal("100.00") - base_cut) * visible_percent / Decimal("100.00")
+            )
+            return payable_cpi(price, role_cut), combined_cut.quantize(MONEY_QUANTUM, rounding=ROUND_HALF_UP)
+        return price, existing_cut
+
     if not vendor_scope_user_id(user):
-        return survey.cpi, None
+        return apply_employee_role_percentage(survey.cpi, None)
     client_allocations = getattr(getattr(survey, "client", None), "request_vendor_allocations", None)
     survey_allocations = getattr(survey, "request_vendor_survey_allocations", None)
     if client_allocations:
@@ -275,9 +293,9 @@ def survey_pricing_for_user(user, survey: Survey) -> tuple[Decimal | None, Decim
         cut = survey_allocation.effective_cpi_cut_percent if survey_allocation else client_allocation.effective_cpi_cut_percent
         if client_allocation.vendor.employee_profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
             cut = Decimal("0.00")
-        return payable_cpi(survey.cpi, cut), cut
+        return apply_employee_role_percentage(payable_cpi(survey.cpi, cut), cut)
     context = resolve_vendor_survey_context(user, survey, require_capacity=False)
-    return context.payable_cpi, context.cpi_cut_percent
+    return apply_employee_role_percentage(context.payable_cpi, context.cpi_cut_percent)
 
 
 @transaction.atomic
@@ -357,6 +375,7 @@ def reserve_attempt_capacity(
         client_allocation=client_allocation,
         survey_allocation=locked_survey_allocation,
         source_cpi_snapshot=source_cpi,
+        cpi_snapshot_source="captured",
         cpi_cut_percent_snapshot=cut,
         payable_cpi_snapshot=final_cpi,
         cpi_currency_snapshot=(
