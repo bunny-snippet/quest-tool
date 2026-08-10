@@ -26,7 +26,7 @@
   document.querySelector('.studies-table').style.minWidth = `${Math.max(980, columnCount * 96)}px`;
 
   const state = {
-    page: 1, pages: 1, pageSize: 20, timer: null, controller: null,
+    page: 1, pages: 1, pageSize: Number(elements.pageSize?.value || 10), timer: null, controller: null,
     projectId: byId('studyProjectScope') ? (new URLSearchParams(window.location.search).get('internal_id') || '') : '',
   };
   const statusTone = { initiated: 'initiate', redirected: 'initiate', '1': 'complete', '2': 'terminate', '3': 'quota', '4': 'quality' };

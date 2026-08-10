@@ -95,7 +95,7 @@
 <section class="survey-panel studies-panel">
   <div class="panel-head">
     <div><h2>Respondent activity</h2><p id="studySummary">Loading tracked attempts…</p></div>
-    <div class="panel-tools">{% if can_change_study_page_size %}<label class="compact-select">Rows<select id="studyPageSize"><option>10</option><option selected>20</option><option>50</option><option>100</option></select></label>{% endif %}</div>
+    <div class="panel-tools">{% if can_change_study_page_size %}<label class="compact-select">Rows<select id="studyPageSize"><option selected>10</option><option>20</option><option>50</option><option>100</option></select></label>{% endif %}</div>
   </div>
   <div class="table-wrap studies-table-wrap">
     <table class="survey-table studies-table">
@@ -128,4 +128,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=12" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=13" defer></script>{% endblock %}
