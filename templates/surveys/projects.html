@@ -5,7 +5,7 @@
 {% block content %}
 {{ project_columns|json_script:"projectColumnAccess" }}
 <section class="page-intro">
-  <div><p class="eyebrow">Survey operations</p><h1>All surveys</h1><p>Live inventory synchronized securely from InnovateMR.</p></div>
+  <div><p class="eyebrow">Survey operations</p><h1>All surveys</h1></div>
   <div class="page-intro-actions">
     {% if can_export_projects %}<button class="primary-button export-button project-export-button" id="exportProjects" type="button"><span aria-hidden="true">↓</span> Export CSV</button>{% endif %}
     {% if can_sync %}<button class="primary-button sync-button" id="syncButton"><span class="sync-symbol">↻</span> Sync now</button>{% endif %}
