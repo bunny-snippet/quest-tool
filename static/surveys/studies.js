@@ -163,6 +163,41 @@
     requestAnimationFrame(frame);
   }
 
+  function animateMetric(element, value, { suffix = '', maximumFractionDigits = 0 } = {}) {
+    if (!element) return;
+    const target = Number(value || 0);
+    const start = Number(element.dataset.value || 0);
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    const render = (current) => {
+      element.textContent = `${Number(current).toLocaleString('en-IN', { maximumFractionDigits })}${suffix}`;
+    };
+    element.dataset.value = String(target);
+    if (element.metricAnimationFrame) cancelAnimationFrame(element.metricAnimationFrame);
+    element.classList.remove('metric-counting');
+    void element.offsetWidth;
+    element.classList.add('metric-counting');
+    if (reducedMotion || start === target) {
+      render(target);
+      element.classList.remove('metric-counting');
+      return;
+    }
+    const started = performance.now();
+    const duration = 680;
+    const frame = (now) => {
+      const progress = Math.min(1, (now - started) / duration);
+      const eased = 1 - Math.pow(1 - progress, 3);
+      render(start + ((target - start) * eased));
+      if (progress < 1) {
+        element.metricAnimationFrame = requestAnimationFrame(frame);
+      } else {
+        render(target);
+        element.metricAnimationFrame = null;
+        window.setTimeout(() => element.classList.remove('metric-counting'), 180);
+      }
+    };
+    element.metricAnimationFrame = requestAnimationFrame(frame);
+  }
+
   function deviceBadge(attempt) {
     const label = attempt.entry_device || 'Unknown'; const normalized = label.toLowerCase();
     const type = normalized.includes('mobile') || normalized.includes('phone') ? 'mobile' : normalized.includes('tablet') || normalized.includes('tab') ? 'tablet' : normalized.includes('desktop') || normalized.includes('computer') || normalized.includes('laptop') ? 'desktop' : 'unknown';
@@ -187,10 +222,8 @@
       security: summary.security_terminated, desktop: completedDevices.desktop,
       mobile: completedDevices.mobile, tablet: completedDevices.tablet,
     };
-    Object.entries(values).forEach(([key, value]) => {
-      if (elements.metrics[key]) elements.metrics[key].textContent = Number(value || 0).toLocaleString('en-IN');
-    });
-    if (elements.metrics.conversion) elements.metrics.conversion.textContent = `${Number(summary.conversion_rate || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}%`;
+    Object.entries(values).forEach(([key, value]) => animateMetric(elements.metrics[key], value));
+    animateMetric(elements.metrics.conversion, summary.conversion_rate, { suffix: '%', maximumFractionDigits: 2 });
     animateRevenue(summary.total_revenue, summary.revenue_currency || 'USD');
   }
 
