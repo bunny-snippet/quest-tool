@@ -350,6 +350,9 @@ class OrganizationUnitSerializer(serializers.ModelSerializer):
             "is_active": attrs.get("is_active", getattr(self.instance, "is_active", True)),
         }
         candidate = OrganizationUnit(pk=getattr(self.instance, "pk", None), **values)
+        if self.instance:
+            candidate._state.adding = False
+            candidate._state.db = self.instance._state.db
         try:
             candidate.full_clean(exclude=["created_by"])
         except DjangoValidationError as exc:
@@ -393,6 +396,9 @@ class OrganizationClientAccessSerializer(serializers.ModelSerializer):
             client=client,
             is_active=attrs.get("is_active", getattr(self.instance, "is_active", True)),
         )
+        if self.instance:
+            candidate._state.adding = False
+            candidate._state.db = self.instance._state.db
         try:
             candidate.full_clean(exclude=["created_by"])
         except DjangoValidationError as exc:

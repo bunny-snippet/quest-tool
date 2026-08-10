@@ -7,6 +7,7 @@
   const canManageUnits = workspace.dataset.manageUnits === 'true';
   const canCreateUnits = workspace.dataset.createUnits === 'true';
   const canEditUnits = workspace.dataset.editUnits === 'true';
+  const canDeleteUnits = workspace.dataset.deleteUnits === 'true';
   const canManageUnitClients = workspace.dataset.manageUnitClients === 'true';
   const canViewClients = workspace.dataset.viewClients === 'true';
   const canManageClients = workspace.dataset.manageClients === 'true';
@@ -51,9 +52,14 @@
   function stateBadge(active) { return `<span class="unit-state${active ? '' : ' inactive'}">${active ? 'Active' : 'Inactive'}</span>`; }
   function actionButton(type, id, allowed) { return allowed ? `<button class="unit-action" type="button" data-edit-${type}="${id}">Edit</button>` : ''; }
 
+  function unitActions(unit) {
+    if (!unitColumns.has('actions')) return '';
+    return `<div class="unit-actions">${actionButton('unit', unit.id, canEditUnits)}${canDeleteUnits ? `<button class="unit-action danger" type="button" data-delete-unit="${unit.id}">Delete</button>` : ''}</div>`;
+  }
+
   function unitLine(unit) {
     const identity = unitColumns.has('path') || unitColumns.has('type') ? `<div class="unit-identity">${unitColumns.has('type') ? `<span class="unit-level ${unit.unit_type}">${unit.unit_type === 'sub_branch' ? 'SB' : unit.unit_type === 'shift' ? 'SH' : 'BR'}</span>` : ''}${unitColumns.has('path') ? `<div><strong>${escapeHtml(unit.name)}</strong><small>${escapeHtml(unit.path)} · ${escapeHtml(unit.code)}</small></div>` : ''}</div>` : '<span></span>';
-    return `<div class="unit-line">${identity}${unitColumns.has('members') ? `<span class="unit-stat"><span>Members</span><b>${Number(unit.member_count || 0)}</b></span>` : ''}${unitColumns.has('clients') ? `<span class="unit-stat clients"><span>Clients</span><b>${Number(unit.client_count || 0)}</b></span>` : ''}${unitColumns.has('status') ? stateBadge(unit.is_active) : ''}${unitColumns.has('actions') ? actionButton('unit', unit.id, canEditUnits) : ''}</div>`;
+    return `<div class="unit-line">${identity}${unitColumns.has('members') ? `<span class="unit-stat"><span>Members</span><b>${Number(unit.member_count || 0)}</b></span>` : ''}${unitColumns.has('clients') ? `<span class="unit-stat clients"><span>Clients</span><b>${Number(unit.client_count || 0)}</b></span>` : ''}${unitColumns.has('status') ? stateBadge(unit.is_active) : ''}${unitActions(unit)}</div>`;
   }
 
   function unitNode(unit, byParent) {
@@ -112,6 +118,7 @@
     if (record) { unitForm.elements.workspace_owner.value = record.workspace_owner; unitForm.elements.workspace_owner.disabled = true; unitForm.elements.unit_type.value = record.unit_type; unitForm.elements.name.value = record.name; unitForm.elements.code.value = record.code; unitForm.elements.description.value = record.description || ''; unitForm.elements.is_active.checked = record.is_active; }
     else unitForm.elements.workspace_owner.disabled = false;
     refreshParentOptions(); if (record?.parent) unitForm.elements.parent.value = record.parent;
+    const deleteButton = $('[data-delete-current-unit]'); if (deleteButton) deleteButton.hidden = !record || !canDeleteUnits;
     $('#unitModalTitle').textContent = record ? 'Edit organization unit' : 'Create organization unit'; $('[data-unit-submit]').textContent = record ? 'Save changes' : 'Create unit'; $('[data-unit-error]').hidden = true; openModal($('#unitModal'));
   }
 
@@ -171,7 +178,14 @@
   $('[data-create-client-access]')?.addEventListener('click', () => openClientAccess()); $('[data-create-client]')?.addEventListener('click', () => openClient());
   unitForm?.elements.workspace_owner.addEventListener('change', refreshParentOptions); unitForm?.elements.unit_type.addEventListener('change', refreshParentOptions); accessForm?.elements.organization_unit.addEventListener('change', refreshClientOptions);
   unitForm?.elements.name.addEventListener('input', () => { if (!edit.unit) unitForm.elements.code.value = slug(unitForm.elements.name.value); });
-  document.addEventListener('click', (event) => { const unit = event.target.closest('[data-edit-unit]'); const access = event.target.closest('[data-edit-client-access]'); const client = event.target.closest('[data-edit-client]'); const addIntegration = event.target.closest('[data-add-integration]'); const integration = event.target.closest('[data-edit-integration]'); if (unit) openUnit(unit.dataset.editUnit); if (access) openClientAccess(access.dataset.editClientAccess); if (client) openClient(client.dataset.editClient); if (addIntegration) openIntegration(addIntegration.dataset.addIntegration); if (integration) openIntegration(integration.dataset.clientId, integration.dataset.editIntegration); });
+  async function deleteUnit(id) {
+    const record = state.units.find((unit) => Number(unit.id) === Number(id));
+    if (!record || !canDeleteUnits || !confirm(`Delete ${record.name} permanently?`)) return;
+    try { await api(`/api/v1/vendors/organization-units/${record.id}/`, { method: 'DELETE' }); closeModals(); toast('Organization unit deleted.'); await reload(); }
+    catch (error) { const box = $('[data-unit-error]'); if (!$('#unitModal').hidden) { box.textContent = error.message; box.hidden = false; } else toast(error.message, true); }
+  }
+  document.addEventListener('click', (event) => { const deleteButton = event.target.closest('[data-delete-unit]'); if (deleteButton) { deleteUnit(deleteButton.dataset.deleteUnit); return; } const unit = event.target.closest('[data-edit-unit]'); const access = event.target.closest('[data-edit-client-access]'); const client = event.target.closest('[data-edit-client]'); const addIntegration = event.target.closest('[data-add-integration]'); const integration = event.target.closest('[data-edit-integration]'); if (unit) { openUnit(unit.dataset.editUnit); return; } if (access) { openClientAccess(access.dataset.editClientAccess); return; } if (client) { openClient(client.dataset.editClient); return; } if (addIntegration) { openIntegration(addIntegration.dataset.addIntegration); return; } if (integration) openIntegration(integration.dataset.clientId, integration.dataset.editIntegration); });
+  $('[data-delete-current-unit]')?.addEventListener('click', () => deleteUnit(edit.unit));
   unitForm?.addEventListener('submit', async (event) => { event.preventDefault(); const box = $('[data-unit-error]'); box.hidden = true; const payload = { workspace_owner: Number(unitForm.elements.workspace_owner.value), unit_type: unitForm.elements.unit_type.value, parent: unitForm.elements.parent.value ? Number(unitForm.elements.parent.value) : null, name: unitForm.elements.name.value.trim(), code: unitForm.elements.code.value.trim(), description: unitForm.elements.description.value.trim(), is_active: unitForm.elements.is_active.checked }; try { await api(edit.unit ? `/api/v1/vendors/organization-units/${edit.unit}/` : '/api/v1/vendors/organization-units/', { method: edit.unit ? 'PATCH' : 'POST', body: JSON.stringify(payload) }); closeModals(); toast(edit.unit ? 'Organization unit updated.' : 'Organization unit created.'); await reload(); } catch (error) { box.textContent = error.message; box.hidden = false; } });
   accessForm?.addEventListener('submit', async (event) => { event.preventDefault(); const box = $('[data-client-access-error]'); box.hidden = true; const payload = { organization_unit: Number(accessForm.elements.organization_unit.value), client: Number(accessForm.elements.client.value), is_active: accessForm.elements.is_active.checked }; try { await api(edit.access ? `/api/v1/vendors/organization-client-access/${edit.access}/` : '/api/v1/vendors/organization-client-access/', { method: edit.access ? 'PATCH' : 'POST', body: JSON.stringify(payload) }); closeModals(); toast(edit.access ? 'Client visibility updated.' : 'Client assigned to organization.'); await reload(); } catch (error) { box.textContent = error.message; box.hidden = false; } });
   clientForm?.addEventListener('submit', async (event) => { event.preventDefault(); const box = $('[data-client-error]'); box.hidden = true; const payload = { name: clientForm.elements.name.value.trim(), code: clientForm.elements.code.value.trim(), provider_code: clientForm.elements.provider_code.value.trim(), company_name_match: clientForm.elements.company_name_match.value.trim(), is_active: clientForm.elements.is_active.checked }; try { await api(edit.client ? `/api/v1/vendors/clients/${edit.client}/` : '/api/v1/vendors/clients/', { method: edit.client ? 'PATCH' : 'POST', body: JSON.stringify(payload) }); closeModals(); toast(edit.client ? 'Client updated.' : 'Client created.'); await reload(); } catch (error) { box.textContent = error.message; box.hidden = false; } });

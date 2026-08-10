@@ -10,6 +10,13 @@
     cards: byId('studyCards'), summary: byId('studySummary'), pageStatus: byId('studyPageStatus'),
     pageInput: byId('studyPageInput'), totalPages: byId('studyTotalPages'), first: byId('studyFirstPage'),
     prev: byId('studyPrevPage'), next: byId('studyNextPage'), last: byId('studyLastPage'),
+    metrics: {
+      total: byId('studyMetricTotal'), initiated: byId('studyMetricInitiated'),
+      completed: byId('studyMetricCompleted'), terminated: byId('studyMetricTerminated'),
+      overQuota: byId('studyMetricQuota'), security: byId('studyMetricSecurity'),
+      conversion: byId('studyMetricConversion'), desktop: byId('studyMetricDesktop'),
+      mobile: byId('studyMetricMobile'), tablet: byId('studyMetricTablet'),
+    },
   };
   if (!elements.rows) return;
   document.querySelector('.studies-table').style.minWidth = `${Math.max(520, columnCount * 124)}px`;
@@ -111,6 +118,20 @@
   function timestampCell(value) { const stamp = formatIst(value, true); return `<div class="study-timestamp"><strong>${stamp.date}</strong><span>${stamp.time} IST</span></div>`; }
   function statusPill(attempt) { const label = ['initiated', 'redirected'].includes(attempt.status) ? 'Initiated' : (attempt.status_label || attempt.status); return `<span class="attempt-status ${statusTone[attempt.status] || 'neutral'}"><i></i>${escapeHtml(label)}</span>`; }
 
+  function updateOverview(summary = {}) {
+    const completedDevices = summary.completed_devices || {};
+    const values = {
+      total: summary.total, initiated: summary.initiated, completed: summary.completed,
+      terminated: summary.terminated, overQuota: summary.over_quota,
+      security: summary.security_terminated, desktop: completedDevices.desktop,
+      mobile: completedDevices.mobile, tablet: completedDevices.tablet,
+    };
+    Object.entries(values).forEach(([key, value]) => {
+      if (elements.metrics[key]) elements.metrics[key].textContent = Number(value || 0).toLocaleString('en-IN');
+    });
+    if (elements.metrics.conversion) elements.metrics.conversion.textContent = `${Number(summary.conversion_rate || 0).toLocaleString('en-IN', { maximumFractionDigits: 2 })}%`;
+  }
+
   function rowTemplate(attempt) {
     const cells = [];
     if (columns.has('project_id')) cells.push(`<td><strong class="study-project-id">${escapeHtml(attempt.survey_local_id)}</strong></td>`);
@@ -142,6 +163,7 @@
       const response = await fetch(`/api/v1/survey-attempts/?${filterParams()}`, { signal: state.controller.signal });
       const data = await response.json(); if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
       const results = data.results || []; const count = Number(data.count || 0);
+      updateOverview(data.summary);
       state.pages = Math.max(1, Math.ceil(count / state.pageSize));
       if (state.page > state.pages) { state.page = state.pages; return loadAttempts(); }
       elements.summary.innerHTML = count ? `<strong>${count.toLocaleString('en-IN')}</strong> filtered respondent ${count === 1 ? 'journey' : 'journeys'}` : 'No attempts match these filters';

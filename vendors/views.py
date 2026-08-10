@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.db.models.deletion import ProtectedError
 from django.db.models import Count, Q
 from django.shortcuts import render
 from django.utils import timezone
@@ -131,10 +132,13 @@ def organization_management_page(request):
         "can_view_client_access": can_view_client_access,
         "can_view_clients": can_view_clients,
         "can_manage_units": any(
-            code in codes for code in ("organization.action.create_unit", "organization.action.edit_unit")
+            code in codes for code in (
+                "organization.action.create_unit", "organization.action.edit_unit", "organization.action.delete_unit"
+            )
         ),
         "can_create_units": "organization.action.create_unit" in codes,
         "can_edit_units": "organization.action.edit_unit" in codes,
+        "can_delete_units": "organization.action.delete_unit" in codes,
         "can_manage_unit_clients": "organization.action.assign_client" in codes,
         "can_manage_clients": owner_controlled and "clients.manage" in codes,
         "can_view_integrations": owner_controlled and "clients.integration.view" in codes,
@@ -237,6 +241,8 @@ class OrganizationUnitViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
             return "organization.view"
         if self.action == "create":
             return "organization.action.create_unit"
+        if self.action == "destroy":
+            return "organization.action.delete_unit"
         return "organization.action.edit_unit"
 
     def get_queryset(self):
@@ -248,6 +254,22 @@ class OrganizationUnitViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
             member_count=Count("members", distinct=True),
             client_count=Count("client_access_rules", filter=Q(client_access_rules__is_active=True), distinct=True),
         )
+
+    def destroy(self, request, *args, **kwargs):
+        instance = self.get_object()
+        try:
+            instance.delete()
+        except ProtectedError:
+            return Response(
+                {
+                    "detail": (
+                        "This unit is still used by child units or client assignments. "
+                        "Move or delete those records first."
+                    )
+                },
+                status=status.HTTP_409_CONFLICT,
+            )
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 @extend_schema_view(

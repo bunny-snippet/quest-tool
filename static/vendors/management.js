@@ -445,9 +445,9 @@
     const policy = event.target.closest('[data-edit-policy]');
     const client = event.target.closest('[data-edit-client]');
     const survey = event.target.closest('[data-edit-survey]');
-    if (policy && canEditPolicy) openPolicy(policy.dataset.editPolicy);
-    if (client && canAllocateClient) openClientAllocation(client.dataset.editClient);
-    if (survey && canAllocateProject) openSurveyAllocation(survey.dataset.editSurvey);
+    if (policy && canEditPolicy) { event.preventDefault(); openPolicy(policy.dataset.editPolicy); return; }
+    if (client && canAllocateClient) { event.preventDefault(); openClientAllocation(client.dataset.editClient); return; }
+    if (survey && canAllocateProject) { event.preventDefault(); openSurveyAllocation(survey.dataset.editSurvey); return; }
     const revokeKey = event.target.closest('[data-revoke-api-key]');
     if (revokeKey && canRevokeApiKey && confirm('Revoke this API key permanently?')) {
       api(`/api/v1/vendors/api-keys/${revokeKey.dataset.revokeApiKey}/`, { method: 'DELETE' })

@@ -2,7 +2,7 @@
 {% load static %}
 {% block title %}Organization · Survey Workspace{% endblock %}
 {% block header_title %}Organization{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'vendors/organization.css' %}?v=2">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'vendors/organization.css' %}?v=3">{% endblock %}
 {% block content %}
 <div class="csrf-source" hidden>{% csrf_token %}</div>
 {{ organization_unit_columns|json_script:"organizationUnitColumnAccess" }}
@@ -23,6 +23,7 @@
   data-manage-units="{{ can_manage_units|yesno:'true,false' }}"
   data-create-units="{{ can_create_units|yesno:'true,false' }}"
   data-edit-units="{{ can_edit_units|yesno:'true,false' }}"
+  data-delete-units="{{ can_delete_units|yesno:'true,false' }}"
   data-manage-unit-clients="{{ can_manage_unit_clients|yesno:'true,false' }}"
   data-view-clients="{{ can_view_clients|yesno:'true,false' }}"
   data-manage-clients="{{ can_manage_clients|yesno:'true,false' }}"
@@ -66,7 +67,7 @@
       <label><span>Code</span><input name="code" maxlength="80" required pattern="[a-z0-9-]+" placeholder="gurgaon-morning"></label>
       <label class="wide"><span>Description</span><input name="description" maxlength="240" placeholder="Optional internal note"></label>
     </div><label class="organization-toggle"><input name="is_active" type="checkbox" checked><span>Active unit</span><small>Inactive units remain auditable but cannot receive new assignments.</small></label><div class="organization-error" data-unit-error hidden></div></div>
-    <footer><button class="organization-secondary" type="button" data-close-organization-modal>Cancel</button><button class="primary-button" type="submit"><span data-unit-submit>Create unit</span></button></footer>
+    <footer>{% if can_delete_units %}<button class="organization-danger" type="button" data-delete-current-unit hidden>Delete unit</button>{% endif %}<span class="organization-footer-spacer"></span><button class="organization-secondary" type="button" data-close-organization-modal>Cancel</button><button class="primary-button" type="submit"><span data-unit-submit>Create unit</span></button></footer>
   </form>
 </section>
 
@@ -115,4 +116,4 @@
 </section>{% endif %}
 <div class="organization-toast" data-organization-toast aria-live="polite"></div>
 {% endblock %}
-{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=3" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=4" defer></script>{% endblock %}

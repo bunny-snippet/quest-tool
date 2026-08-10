@@ -7,7 +7,7 @@ from urllib.parse import quote, urlencode
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import transaction
-from django.db.models import Max, Min
+from django.db.models import Count, Max, Min, Q
 from django.http import HttpResponseRedirect, StreamingHttpResponse
 from django.shortcuts import render
 from django.urls import reverse
@@ -46,6 +46,7 @@ from .serializers import (
     SurveyDetailSerializer,
     SurveyListSerializer,
     SurveyAttemptSerializer,
+    SurveyAttemptListResponseSerializer,
     SurveyQuotaSerializer,
     RFGCallbackResponseSerializer,
     SyncRunSerializer,
@@ -985,6 +986,45 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     ]
     ordering_fields = ["initiated_at", "callback_at", "loi_seconds", "status"]
     ordering = ["-initiated_at"]
+
+    @staticmethod
+    def _filtered_summary(queryset):
+        completed_filter = Q(status=SurveyAttempt.Status.COMPLETED)
+        summary = queryset.aggregate(
+            total=Count("id"),
+            initiated=Count("id", filter=Q(status__in=[SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED])),
+            completed=Count("id", filter=completed_filter),
+            terminated=Count("id", filter=Q(status=SurveyAttempt.Status.TERMINATED)),
+            over_quota=Count("id", filter=Q(status=SurveyAttempt.Status.OVER_QUOTA)),
+            security_terminated=Count("id", filter=Q(status=SurveyAttempt.Status.QUALITY_TERMINATED)),
+            desktop=Count("id", filter=completed_filter & Q(entry_device__icontains="desktop")),
+            mobile=Count("id", filter=completed_filter & (Q(entry_device__icontains="mobile") | Q(entry_device__icontains="phone"))),
+            tablet=Count("id", filter=completed_filter & (Q(entry_device__icontains="tablet") | Q(entry_device__iexact="tab"))),
+        )
+        completed = summary["completed"]
+        classified = summary["desktop"] + summary["mobile"] + summary["tablet"]
+        return {
+            "total": summary["total"], "initiated": summary["initiated"], "completed": completed,
+            "terminated": summary["terminated"], "over_quota": summary["over_quota"],
+            "security_terminated": summary["security_terminated"],
+            "conversion_rate": round((completed / summary["total"] * 100), 2) if summary["total"] else 0.0,
+            "completed_devices": {
+                "desktop": summary["desktop"], "mobile": summary["mobile"], "tablet": summary["tablet"],
+                "unclassified": max(0, completed - classified),
+            },
+        }
+
+    @extend_schema(tags=["Survey attempts"], summary="List visible survey attempts with filter-aware totals", responses={200: SurveyAttemptListResponseSerializer})
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        summary = self._filtered_summary(queryset)
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            serializer = self.get_serializer(page, many=True)
+            response = self.get_paginated_response(serializer.data)
+            response.data["summary"] = summary
+            return response
+        return Response({"count": queryset.count(), "next": None, "previous": None, "results": self.get_serializer(queryset, many=True).data, "summary": summary})
 
     def get_required_function_permission(self):
         return "attempts.export" if self.action == "export" else "attempts.view"

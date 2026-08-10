@@ -89,6 +89,7 @@ FUNCTION_CATALOG = (
     ("organization.clients.manage", "Manage unit client access", "Organization - Actions", "Assign eligible clients to Branch, Sub-branch or Shift units.", ADMIN_ROLES),
     ("organization.action.create_unit", "Create organization unit", "Organization - Actions", "Open and submit the Branch, Sub-branch or Shift creation modal.", ADMIN_ROLES),
     ("organization.action.edit_unit", "Edit organization unit", "Organization - Actions", "Edit or deactivate an organization unit.", ADMIN_ROLES),
+    ("organization.action.delete_unit", "Delete organization unit", "Organization - Actions", "Permanently delete an unused Branch, Sub-branch or Shift after confirmation.", ADMIN_ROLES),
     ("organization.action.assign_client", "Assign unit client", "Organization - Actions", "Create or edit a unit-level client visibility grant.", ADMIN_ROLES),
     ("organization.column.unit.path", "Show Unit path column", "Organization - Structure columns", "Display the full Branch / Sub-branch / Shift path.", ADMIN_ROLES),
     ("organization.column.unit.type", "Show Unit type column", "Organization - Structure columns", "Display the hierarchy level.", ADMIN_ROLES),

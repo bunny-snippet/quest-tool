@@ -631,7 +631,7 @@ paths:
           content:
             application/json:
               schema:
-                $ref: '#/components/schemas/PaginatedSurveyAttemptList'
+                $ref: '#/components/schemas/PaginatedSurveyAttemptListResponseList'
           description: ''
   /api/v1/survey-attempts/{rid}/:
     get:
@@ -4301,7 +4301,7 @@ components:
           type: array
           items:
             $ref: '#/components/schemas/Role'
-    PaginatedSurveyAttemptList:
+    PaginatedSurveyAttemptListResponseList:
       type: object
       required:
       - count
@@ -4323,7 +4323,7 @@ components:
         results:
           type: array
           items:
-            $ref: '#/components/schemas/SurveyAttempt'
+            $ref: '#/components/schemas/SurveyAttemptListResponse'
     PaginatedSurveyListList:
       type: object
       required:
@@ -5261,6 +5261,47 @@ components:
       - user_name
       - username
       - vendor_name
+    SurveyAttemptCompletedDeviceSummary:
+      type: object
+      properties:
+        desktop:
+          type: integer
+        mobile:
+          type: integer
+        tablet:
+          type: integer
+        unclassified:
+          type: integer
+      required:
+      - desktop
+      - mobile
+      - tablet
+      - unclassified
+    SurveyAttemptListResponse:
+      type: object
+      properties:
+        count:
+          type: integer
+        next:
+          type: string
+          format: uri
+          nullable: true
+        previous:
+          type: string
+          format: uri
+          nullable: true
+        results:
+          type: array
+          items:
+            $ref: '#/components/schemas/SurveyAttempt'
+        summary:
+          $ref: '#/components/schemas/SurveyAttemptSummary'
+      required:
+      - count
+      - next
+      - previous
+      - results
+      - summary
     SurveyAttemptStatusEnum:
       enum:
       - initiated
@@ -5277,6 +5318,35 @@ components:
         * `2` - Terminated
         * `3` - Over quota
         * `4` - Quality terminated
+    SurveyAttemptSummary:
+      type: object
+      properties:
+        total:
+          type: integer
+        initiated:
+          type: integer
+        completed:
+          type: integer
+        terminated:
+          type: integer
+        over_quota:
+          type: integer
+        security_terminated:
+          type: integer
+        conversion_rate:
+          type: number
+          format: double
+        completed_devices:
+          $ref: '#/components/schemas/SurveyAttemptCompletedDeviceSummary'
+      required:
+      - completed
+      - completed_devices
+      - conversion_rate
+      - initiated
+      - over_quota
+      - security_terminated
+      - terminated
+      - total
     SurveyDetail:
       type: object
       properties:

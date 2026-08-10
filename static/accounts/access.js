@@ -143,7 +143,23 @@
     } catch (error) { errorBox.textContent = error.message; errorBox.hidden = false; }
   });
 
-  function resetRoleForm() { roleForm.reset(); roleForm.elements.rank.value = 10; roleForm.elements.is_active.checked = true; roleSlug = null; $('#roleModalTitle').textContent = 'Create role'; $('[data-role-submit]').textContent = 'Create role'; $('[data-role-error]').hidden = true; }
+  function syncPermissionGroup(fieldset) {
+    const toggle = $('[data-permission-group-toggle]', fieldset);
+    const permissions = $$('input[name="permission_codes"]', fieldset);
+    const selected = permissions.filter((input) => input.checked).length;
+    toggle.checked = permissions.length > 0 && selected === permissions.length;
+    toggle.indeterminate = selected > 0 && selected < permissions.length;
+  }
+  function syncAllPermissionGroups() { $$('.role-permission-grid fieldset', roleModal).forEach(syncPermissionGroup); }
+  $$('.role-permission-grid fieldset', roleModal).forEach((fieldset) => {
+    $('[data-permission-group-toggle]', fieldset)?.addEventListener('change', (event) => {
+      $$('input[name="permission_codes"]', fieldset).forEach((input) => { input.checked = event.target.checked; });
+      syncPermissionGroup(fieldset);
+    });
+    $$('input[name="permission_codes"]', fieldset).forEach((input) => input.addEventListener('change', () => syncPermissionGroup(fieldset)));
+  });
+
+  function resetRoleForm() { roleForm.reset(); roleForm.elements.rank.value = 10; roleForm.elements.is_active.checked = true; roleSlug = null; $('#roleModalTitle').textContent = 'Create role'; $('[data-role-submit]').textContent = 'Create role'; $('[data-role-error]').hidden = true; syncAllPermissionGroups(); }
   $('[data-open-role]')?.addEventListener('click', () => { resetRoleForm(); showModal(roleModal); });
   roleForm?.elements.name.addEventListener('input', () => { if (!roleSlug) roleForm.elements.slug.value = roleForm.elements.name.value.toLowerCase().trim().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, ''); });
   $$('[data-edit-role]').forEach((button) => button.addEventListener('click', async () => {
@@ -152,6 +168,7 @@
       const data = await api(`/api/v1/access/roles/${encodeURIComponent(roleSlug)}/`);
       roleForm.elements.name.value = data.name; roleForm.elements.slug.value = data.slug; roleForm.elements.rank.value = data.rank; roleForm.elements.description.value = data.description || ''; roleForm.elements.is_active.checked = data.is_active;
       (data.effective_permission_codes || []).forEach((code) => { const input = $(`input[name="permission_codes"][value="${CSS.escape(code)}"]`, roleModal); if (input) input.checked = true; });
+      syncAllPermissionGroups();
       $('#roleModalTitle').textContent = 'Edit role'; $('[data-role-submit]').textContent = 'Save role'; showModal(roleModal);
     } catch (error) { toast(error.message, true); }
   }));

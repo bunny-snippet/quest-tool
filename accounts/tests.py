@@ -143,6 +143,8 @@ class FunctionAccessTests(TestCase):
         self.assertContains(page, "projects.column.completes")
         self.assertContains(page, "studies.filter.date")
         self.assertContains(page, "user_hits.column.completes")
+        self.assertContains(page, "Select entire group")
+        self.assertContains(page, "assigned functions")
 
 
 class DelegatedVendorTests(TestCase):

@@ -609,6 +609,40 @@ class OrganizationHierarchyTests(TestCase):
         self.assertEqual(response.status_code, 400)
         self.assertIn("parent", response.data)
 
+    def test_existing_branch_can_be_corrected_to_sub_branch_under_another_branch(self):
+        destination = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, unit_type=OrganizationUnit.UnitType.BRANCH,
+            name="Destination", code="destination", created_by=self.owner,
+        )
+        mistaken = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, unit_type=OrganizationUnit.UnitType.BRANCH,
+            name="Mistaken Branch", code="mistaken-branch", created_by=self.owner,
+        )
+        response = self.owner_api.patch(reverse("organization-unit-detail", args=[mistaken.pk]), {
+            "unit_type": OrganizationUnit.UnitType.SUB_BRANCH,
+            "parent": destination.pk,
+            "name": "Corrected Sub-branch",
+        }, format="json")
+        self.assertEqual(response.status_code, 200, response.data)
+        mistaken.refresh_from_db()
+        self.assertEqual(mistaken.unit_type, OrganizationUnit.UnitType.SUB_BRANCH)
+        self.assertEqual(mistaken.parent, destination)
+        self.assertEqual(mistaken.name, "Corrected Sub-branch")
+
+    def test_unused_unit_deletes_and_parent_with_children_returns_conflict(self):
+        unused = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, unit_type=OrganizationUnit.UnitType.BRANCH,
+            name="Unused", code="unused", created_by=self.owner,
+        )
+        deleted = self.owner_api.delete(reverse("organization-unit-detail", args=[unused.pk]))
+        self.assertEqual(deleted.status_code, 204)
+        self.assertFalse(OrganizationUnit.objects.filter(pk=unused.pk).exists())
+
+        branch, _, _ = self.create_tree(self.owner, "protected")
+        protected = self.owner_api.delete(reverse("organization-unit-detail", args=[branch.pk]))
+        self.assertEqual(protected.status_code, 409)
+        self.assertIn("child units", protected.data["detail"])
+
     def test_user_cannot_be_assigned_below_an_inactive_ancestor(self):
         branch, _, shift = self.create_tree(self.owner, "inactive")
         branch.is_active = False

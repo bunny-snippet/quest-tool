@@ -387,3 +387,29 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
         if obj.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED}:
             return "Initiated"
         return obj.get_status_display()
+
+
+class SurveyAttemptCompletedDeviceSummarySerializer(serializers.Serializer):
+    desktop = serializers.IntegerField()
+    mobile = serializers.IntegerField()
+    tablet = serializers.IntegerField()
+    unclassified = serializers.IntegerField()
+
+
+class SurveyAttemptSummarySerializer(serializers.Serializer):
+    total = serializers.IntegerField()
+    initiated = serializers.IntegerField()
+    completed = serializers.IntegerField()
+    terminated = serializers.IntegerField()
+    over_quota = serializers.IntegerField()
+    security_terminated = serializers.IntegerField()
+    conversion_rate = serializers.FloatField()
+    completed_devices = SurveyAttemptCompletedDeviceSummarySerializer()
+
+
+class SurveyAttemptListResponseSerializer(serializers.Serializer):
+    count = serializers.IntegerField()
+    next = serializers.URLField(allow_null=True)
+    previous = serializers.URLField(allow_null=True)
+    results = SurveyAttemptSerializer(many=True)
+    summary = SurveyAttemptSummarySerializer()

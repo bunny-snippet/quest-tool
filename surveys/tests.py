@@ -546,6 +546,8 @@ class StudiesTrackingTests(TestCase):
         self.assertContains(page, "<th>Device</th>", html=True)
         self.assertContains(page, "<th>Start</th>", html=True)
         self.assertContains(page, "<th>End</th>", html=True)
+        self.assertContains(page, 'id="studyMetricTotal"')
+        self.assertContains(page, 'id="studyMetricConversion"')
 
         response = self.api.get(reverse("survey-attempt-list"), {
             "user": self.kanik.pk,
@@ -561,6 +563,43 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(result["entry_device"], "Desktop")
         self.assertIsNotNone(result["initiated_at"])
         self.assertIsNotNone(result["callback_at"])
+        self.assertEqual(response.data["summary"]["total"], 1)
+        self.assertEqual(response.data["summary"]["completed"], 1)
+        self.assertEqual(response.data["summary"]["conversion_rate"], 100.0)
+        self.assertEqual(response.data["summary"]["completed_devices"]["desktop"], 1)
+        self.assertEqual(response.data["summary"]["completed_devices"]["mobile"], 0)
+
+    def test_summary_tracks_all_outcomes_and_completed_device_types(self):
+        SurveyAttempt.objects.create(
+            rid="Mm1Oo2Bb3L", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.COMPLETED, entry_device="Mobile phone",
+        )
+        SurveyAttempt.objects.create(
+            rid="Tt1Aa2Bb3C", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.COMPLETED, entry_device="Tablet",
+        )
+        SurveyAttempt.objects.create(
+            rid="Ii1Nn2Ii3T", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.REDIRECTED, entry_device="Desktop",
+        )
+        SurveyAttempt.objects.create(
+            rid="Qq1Uu2Oo3T", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.OVER_QUOTA, entry_device="Desktop",
+        )
+        SurveyAttempt.objects.create(
+            rid="Ss1Ee2Cc3U", survey=self.survey, platform_user=self.kanik, user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.QUALITY_TERMINATED, entry_device="Desktop",
+        )
+        response = self.api.get(reverse("survey-attempt-list"), {"user": self.kanik.pk})
+        self.assertEqual(response.status_code, 200)
+        summary = response.data["summary"]
+        self.assertEqual(summary["total"], 6)
+        self.assertEqual(summary["initiated"], 1)
+        self.assertEqual(summary["completed"], 3)
+        self.assertEqual(summary["over_quota"], 1)
+        self.assertEqual(summary["security_terminated"], 1)
+        self.assertEqual(summary["conversion_rate"], 50.0)
+        self.assertEqual(summary["completed_devices"], {"desktop": 1, "mobile": 1, "tablet": 1, "unclassified": 0})
 
     def test_filtered_csv_contains_full_backend_record_not_only_ui_columns(self):
         response = self.api.get(reverse("survey-attempt-export"), {

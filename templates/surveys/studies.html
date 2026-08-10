@@ -13,6 +13,19 @@
   {% if can_export %}<button class="primary-button export-button" id="exportStudies" type="button"><span aria-hidden="true">↓</span> Export full CSV</button>{% endif %}
 </section>
 
+<section class="study-overview" id="studyOverview" aria-label="Filtered study totals">
+  <article class="total"><span>H</span><div><small>Total hits</small><strong id="studyMetricTotal">—</strong><em>Filtered journeys</em></div></article>
+  <article class="initiated"><span>I</span><div><small>Initiated</small><strong id="studyMetricInitiated">—</strong><em>In progress</em></div></article>
+  <article class="completed"><span>✓</span><div><small>Completed</small><strong id="studyMetricCompleted">—</strong><em>Status 1</em></div></article>
+  <article class="terminated"><span>×</span><div><small>Terminated</small><strong id="studyMetricTerminated">—</strong><em>Status 2</em></div></article>
+  <article class="quota"><span>Q</span><div><small>Over quota</small><strong id="studyMetricQuota">—</strong><em>Status 3</em></div></article>
+  <article class="security"><span>!</span><div><small>Security</small><strong id="studyMetricSecurity">—</strong><em>Status 4</em></div></article>
+  <article class="conversion"><span>%</span><div><small>Conversion</small><strong id="studyMetricConversion">—</strong><em>Completed / hits</em></div></article>
+  <article class="desktop"><span aria-hidden="true">▣</span><div><small>Desktop completes</small><strong id="studyMetricDesktop">—</strong><em>Completed devices</em></div></article>
+  <article class="mobile"><span aria-hidden="true">▯</span><div><small>Mobile completes</small><strong id="studyMetricMobile">—</strong><em>Completed devices</em></div></article>
+  <article class="tablet"><span aria-hidden="true">▭</span><div><small>Tablet completes</small><strong id="studyMetricTablet">—</strong><em>Completed devices</em></div></article>
+</section>
+
 <section class="filter-panel studies-filters" aria-label="Study filters">
   {% if study_filters.search %}<div class="field search-field">
     <label for="studySearch">Search</label>
@@ -83,4 +96,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=7" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=8" defer></script>{% endblock %}

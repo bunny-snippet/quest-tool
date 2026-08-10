@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Manrope:wght@600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{% static 'surveys/app.css' %}?v=18">
+  <link rel="stylesheet" href="{% static 'surveys/app.css' %}?v=19">
   {% block extra_head %}{% endblock %}
 </head>
 <body>
@@ -53,7 +53,11 @@
       </nav>
 
       <div class="sidebar-foot">
-        <div class="workspace-card"><span>{{ request.user.username|first|upper }}</span><div><strong>{{ request.user.get_full_name|default:request.user.username }}</strong><small>{% if current_employee_profile.role %}{{ current_employee_profile.role.name }}{% else %}Employee{% endif %}</small></div></div>
+        <div class="workspace-card">
+          <span>{{ request.user.username|first|upper }}</span>
+          <div><strong>{{ request.user.get_full_name|default:request.user.username }}</strong><small>{% if current_employee_profile.role %}{{ current_employee_profile.role.name }}{% else %}Employee{% endif %}</small></div>
+          <form method="post" action="{% url 'logout' %}" class="sidebar-logout">{% csrf_token %}<button type="submit" aria-label="Logout" title="Logout"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 4H5v16h5M14 8l4 4-4 4M8 12h10"/></svg></button></form>
+        </div>
       </div>
     </aside>
 
@@ -62,11 +66,8 @@
     <main class="main-area">
       <header class="topbar">
         <button class="icon-button menu-button" id="menuButton" aria-label="Toggle navigation" aria-expanded="true"><span></span><span></span><span></span></button>
-        <div class="topbar-title">{% block header_title %}Workspace{% endblock %}</div>
         <div class="topbar-actions">
           {% if 'api_docs.view' in access_codes %}<a class="docs-link" href="{% url 'swagger-ui' %}">API docs</a>{% endif %}
-          <div class="avatar" title="{{ request.user.username }}">{{ request.user.username|first|upper }}</div>
-          <form method="post" action="{% url 'logout' %}" class="logout-form">{% csrf_token %}<button type="submit">Logout</button></form>
         </div>
       </header>
       <div class="content">{% block content %}{% endblock %}</div>
