@@ -1,4 +1,5 @@
 from django.contrib.auth import get_user_model
+from django.conf import settings
 from django.db.models.deletion import ProtectedError
 from django.db.models import Count, Q
 from django.shortcuts import render
@@ -503,6 +504,8 @@ class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
             result = InnovateMRClient(integration=integration).test_connection()
             integration.last_test_status = "success"
             integration.last_test_error = ""
+            integration.scheduled_sync_enabled = True
+            integration.sync_interval_seconds = settings.CLIENT_INTEGRATION_INNOVATEMR_SYNC_INTERVAL_SECONDS
             response_status = status.HTTP_200_OK
         except Exception as exc:
             integration.last_test_status = "failed"
@@ -510,7 +513,10 @@ class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
             result = {"ok": False, "error": integration.last_test_error}
             response_status = status.HTTP_400_BAD_REQUEST
         integration.last_tested_at = timezone.now()
-        integration.save(update_fields=["last_tested_at", "last_test_status", "last_test_error", "updated_at"])
+        integration.save(update_fields=[
+            "last_tested_at", "last_test_status", "last_test_error",
+            "scheduled_sync_enabled", "sync_interval_seconds", "updated_at",
+        ])
         return Response(result, status=response_status)
 
     @extend_schema(

@@ -116,10 +116,10 @@ class ClientIntegration(models.Model):
 
     def clean(self):
         super().clean()
-        if self.provider_code == "rfg" and self.sync_interval_seconds < 600:
+        if self.provider_code == "rfg" and self.sync_interval_seconds < 60:
             raise ValidationError({
                 "sync_interval_seconds": (
-                    "Research For Good inventory cannot be polled more often than every 10 minutes."
+                    "Research For Good inventory cannot be polled more often than every 60 seconds."
                 )
             })
         if self.provider_code == "rfg" and self.scheduled_sync_enabled and self.last_test_status != "success":

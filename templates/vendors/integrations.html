@@ -85,7 +85,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   const cards=document.getElementById('cards');
   let integrations=[],clients=[],providers=[],editingRecord=null;
   const fallbackProviders=[
-    {code:'rfg',label:'Research For Good',default_base_url:'https://api.researchforgood.com/API',minimum_sync_interval_seconds:600},
+    {code:'rfg',label:'Research For Good',default_base_url:'https://api.researchforgood.com/API',minimum_sync_interval_seconds:60},
     {code:'innovatemr',label:'InnovateMR',default_base_url:'https://supplier.innovatemr.net/api/v2',minimum_sync_interval_seconds:60},
     {code:'biobrain',label:'BioBrain / Voqall',default_base_url:'https://partner-api.voqall.com/api/v1/surveys',minimum_sync_interval_seconds:60},
     {code:'custom',label:'Custom REST API',default_base_url:'',minimum_sync_interval_seconds:60}
@@ -124,7 +124,8 @@ document.addEventListener('DOMContentLoaded',()=>{
         : `Credential: ${escapeHtml(item.credential_env_key||item.masked_credential||'not configured')}`;
       const strict=item.config?.enforce_local_targeting!==false;
       const flowControl=isRfg?`<div class="flow-mode"><div><strong data-flow-title="${item.id}">${strict?'Strict flow':'Relaxed flow'}</strong><small data-flow-copy="${item.id}">${strict?'Local mismatch terminates before RFG.':'RFG makes the final eligibility decision.'}</small></div>${canManage?`<label class="mode-switch" title="Toggle strict or relaxed targeting"><input type="checkbox" data-targeting-toggle="${item.id}" ${strict?'checked':''}><span></span></label>`:`<span class="badge">${strict?'Strict':'Relaxed'}</span>`}</div>`:'';
-      return `<article class="card"><span class="badge ${escapeHtml(item.last_sync_status)}">${item.is_active?'Active':'Inactive'} &middot; ${item.scheduled_sync_enabled?'Scheduled':'Manual'}</span><div class="card-provider">${escapeHtml(meta.label)}</div><h3>${escapeHtml(item.client_name)} &middot; ${escapeHtml(item.name)}</h3><div class="meta">Supplier ${escapeHtml(item.supplier_code)}<br>${contract}<br>${credentials} &middot; ${escapeHtml(item.survey_count)} surveys<br>Last test: ${escapeHtml(item.last_test_status||'never')} (${escapeHtml(fmt(item.last_tested_at))})<br>Last sync: ${escapeHtml(item.last_sync_status||'never')} (${escapeHtml(fmt(item.last_sync_finished_at))})${item.last_sync_error?`<br>${escapeHtml(item.last_sync_error)}`:''}</div>${flowControl}${canManage?`<div class="actions"><button class="secondary" data-edit="${item.id}">Edit</button><button class="secondary" data-test="${item.id}">Test connection</button><button class="primary" data-sync="${item.id}">Sync now</button></div>`:''}</article>`;
+      const automatic=item.provider_code==='innovatemr'||(isRfg&&item.last_test_status==='success');
+      return `<article class="card"><span class="badge ${escapeHtml(item.last_sync_status)}">${item.is_active?'Active':'Inactive'} &middot; ${automatic?'Automatic':item.scheduled_sync_enabled?'Scheduled':'Manual'}</span><div class="card-provider">${escapeHtml(meta.label)}</div><h3>${escapeHtml(item.client_name)} &middot; ${escapeHtml(item.name)}</h3><div class="meta">Supplier ${escapeHtml(item.supplier_code)}<br>${contract}<br>${credentials} &middot; ${escapeHtml(item.survey_count)} surveys<br>Last test: ${escapeHtml(item.last_test_status||'never')} (${escapeHtml(fmt(item.last_tested_at))})<br>Last sync: ${escapeHtml(item.last_sync_status||'never')} (${escapeHtml(fmt(item.last_sync_finished_at))})${item.last_sync_error?`<br>${escapeHtml(item.last_sync_error)}`:''}</div>${flowControl}${canManage?`<div class="actions"><button class="secondary" data-edit="${item.id}">Edit</button><button class="secondary" data-test="${item.id}">Test connection</button><button class="primary" data-sync="${item.id}">Sync now</button></div>`:''}</article>`;
     }).join(''):'<div class="card empty">No client integrations yet.</div>';
   }
 
@@ -134,10 +135,13 @@ document.addEventListener('DOMContentLoaded',()=>{
 
   function updateScheduleState(){
     const rfg=el('provider').value==='rfg';
+    const innovate=el('provider').value==='innovatemr';
     const verified=editingRecord?.provider_code==='rfg'&&editingRecord?.last_test_status==='success';
-    el('scheduled').disabled=rfg&&!verified;
-    if(rfg&&!verified){el('scheduled').checked=false;el('scheduleHelp').textContent='Save this RFG integration, run Test connection, then edit it again to enable scheduled sync.';el('scheduleHelp').className='schedule-help warning'}
-    else{el('scheduleHelp').textContent=rfg?'RFG inventory runs no more frequently than every 10 minutes.':'Scheduled sync uses the interval configured above.';el('scheduleHelp').className='schedule-help'}
+    el('scheduled').disabled=innovate||rfg;
+    if(innovate){el('scheduled').checked=true;el('scheduleHelp').textContent='InnovateMR inventory runs automatically every 150 seconds.';el('scheduleHelp').className='schedule-help'}
+    else if(rfg&&!verified){el('scheduled').checked=false;el('scheduleHelp').textContent='Test this RFG connection once; automatic 60-second sync starts after verification.';el('scheduleHelp').className='schedule-help warning'}
+    else if(rfg){el('scheduled').checked=true;el('scheduleHelp').textContent='RFG inventory runs automatically every 60 seconds.';el('scheduleHelp').className='schedule-help'}
+    else{el('scheduleHelp').textContent='Scheduled sync uses the interval configured above.';el('scheduleHelp').className='schedule-help'}
   }
 
   function configureProvider({applyDefaults=false}={}){
@@ -150,7 +154,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     el('providerNote').classList.toggle('hidden',!code);
     el('interval').min=String(meta.minimum_sync_interval_seconds||60);
     el('intervalLabel').textContent=`Sync interval (seconds, min ${meta.minimum_sync_interval_seconds||60})`;
-    el('intervalHelp').textContent=isRfg?'RFG Live Alert inventory must be polled at least 600 seconds apart.':`Minimum ${meta.minimum_sync_interval_seconds||60} seconds.`;
+    el('intervalHelp').textContent=isRfg?'RFG Live Alert inventory refreshes automatically every 60 seconds.':code==='innovatemr'?'InnovateMR inventory refreshes automatically every 150 seconds.':`Minimum ${meta.minimum_sync_interval_seconds||60} seconds.`;
     el('baseUrlHelp').textContent=isRfg?'Official RFG command endpoint. HMAC signing is handled by the backend adapter.':'Provider API root. Endpoint fields below may be relative to this URL.';
     if(isRfg){el('providerNoteTitle').textContent='RFG uses a signed command API.';el('providerNoteText').textContent=' APID and secret values stay in .env. Generic inventory, header, response-key and Advanced REST fields do not apply, so they are hidden.'}
     else if(code==='innovatemr'){el('providerNoteTitle').textContent='InnovateMR preset loaded.';el('providerNoteText').textContent=' You can review or override its inventory, quota, targeting and transaction endpoints.'}
@@ -158,7 +162,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     else{el('providerNoteTitle').textContent='Custom REST contract.';el('providerNoteText').textContent=' Enter only the endpoints and field mappings provided by this client. No InnovateMR values are inherited.'}
     if(applyDefaults&&code){
       el('baseUrl').value=meta.default_base_url||'';
-      el('interval').value=String(meta.minimum_sync_interval_seconds||60);
+      el('interval').value=String(code==='innovatemr'?150:isRfg?60:(meta.minimum_sync_interval_seconds||60));
       el('detailBatch').value='3';el('supplierCode').value='1000';
       if(isRfg){el('rfgApidEnv').value='RFG_APID';el('rfgSecretEnv').value='RFG_SECRET';el('rfgCountry').value='';el('rfgCategory').value='';el('rfgRecontacts').checked=false;el('rfgStrictTargeting').checked=true}
       else{Object.entries(presets[code]||presets.custom).forEach(([id,value])=>el(id).value=value);el('tokenEnv').value='';el('apiToken').value='';el('authPrefix').value='';el('fieldMapping').value=''}

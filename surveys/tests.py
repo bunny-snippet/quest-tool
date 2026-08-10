@@ -12,7 +12,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
-from vendors.models import Client, OrganizationUnit
+from vendors.models import Client, ClientIntegration, OrganizationUnit
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
@@ -117,6 +117,51 @@ class SurveySyncTests(TestCase):
         self.assertIsNotNone(survey.detail_synced_at)
         self.assertIsNotNone(survey.quota_synced_at)
         self.assertIsNotNone(survey.targeting_synced_at)
+
+    @override_settings(
+        CLIENT_INTEGRATION_INNOVATEMR_SYNC_INTERVAL_SECONDS=150,
+        CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS=60,
+    )
+    @patch("surveys.tasks.sync_client_integration_task.delay")
+    def test_dispatcher_automates_innovatemr_and_verified_rfg_at_fixed_intervals(self, delay):
+        from .tasks import dispatch_due_integrations_task
+
+        ClientIntegration.objects.all().delete()
+        now = timezone.now()
+        innovate_client = Client.objects.create(code="auto-innovate", name="Auto Innovate", provider_code="innovatemr")
+        rfg_client = Client.objects.create(code="auto-rfg", name="Auto RFG", provider_code="rfg")
+        custom_client = Client.objects.create(code="manual-custom", name="Manual Custom", provider_code="custom")
+        innovate = ClientIntegration.objects.create(
+            client=innovate_client, name="Innovate automatic", provider_code="innovatemr",
+            base_url="https://supplier.innovatemr.net/api/v2", sync_interval_seconds=999,
+            scheduled_sync_enabled=False, last_sync_started_at=now - timedelta(seconds=151),
+        )
+        rfg = ClientIntegration.objects.create(
+            client=rfg_client, name="RFG automatic", provider_code="rfg",
+            base_url="https://api.researchforgood.com/API", sync_interval_seconds=999,
+            scheduled_sync_enabled=False, last_test_status="success",
+            last_sync_started_at=now - timedelta(seconds=61),
+        )
+        ClientIntegration.objects.create(
+            client=custom_client, name="Custom manual", provider_code="custom",
+            base_url="https://example.test/api", sync_interval_seconds=60,
+            scheduled_sync_enabled=False, last_sync_started_at=now - timedelta(days=1),
+        )
+        ClientIntegration.objects.create(
+            client=rfg_client, name="RFG unverified", provider_code="rfg",
+            base_url="https://api.researchforgood.com/API", sync_interval_seconds=60,
+            scheduled_sync_enabled=False, last_test_status="",
+            last_sync_started_at=now - timedelta(days=1),
+        )
+
+        result = dispatch_due_integrations_task()
+
+        self.assertEqual(result["count"], 2)
+        self.assertEqual({call.args[0] for call in delay.call_args_list}, {innovate.pk, rfg.pk})
+        self.assertEqual(
+            set(ClientIntegration.objects.filter(last_sync_status="queued").values_list("pk", flat=True)),
+            {innovate.pk, rfg.pk},
+        )
 
 
 class InnovateMRClientTests(TestCase):

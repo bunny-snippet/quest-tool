@@ -27,7 +27,7 @@ class ResearchForGoodProvider(SurveyProvider):
     code = "rfg"
     label = "Research For Good"
     default_base_url = "https://api.researchforgood.com/API"
-    minimum_sync_interval_seconds = 600
+    minimum_sync_interval_seconds = 60
     credential_fields = (("apid", "APID environment key"), ("secret", "Secret environment key"))
 
     def __init__(self, integration, *, session=None, clock=None):

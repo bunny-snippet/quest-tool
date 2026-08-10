@@ -179,15 +179,15 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                     raise serializers.ValidationError({"config": f"Invalid callback IP: {address}."}) from exc
             try:
                 interval = int(attrs.get(
-                    "sync_interval_seconds", getattr(self.instance, "sync_interval_seconds", 600)
+                    "sync_interval_seconds", getattr(self.instance, "sync_interval_seconds", 60)
                 ))
             except (TypeError, ValueError) as exc:
                 raise serializers.ValidationError({
                     "sync_interval_seconds": "Sync interval must be a whole number."
                 }) from exc
-            if interval < 600:
+            if interval < 60:
                 raise serializers.ValidationError({
-                    "sync_interval_seconds": "RFG inventory sync must be at least 600 seconds."
+                    "sync_interval_seconds": "RFG inventory sync must be at least 60 seconds."
                 })
             if attrs.get("scheduled_sync_enabled", False) and getattr(
                 self.instance, "last_test_status", ""

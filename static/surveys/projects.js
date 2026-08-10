@@ -219,21 +219,24 @@
     return `${date}T${clock}:${seconds}+05:30`;
   }
 
-  async function loadSurveys() {
+  async function loadSurveys({ silent = false } = {}) {
     state.controller?.abort();
     state.controller = new AbortController();
-    els.rows.innerHTML = `<tr><td colspan="${visibleColumnCount}"><div class="table-loader"><i></i><span>Fetching survey inventory…</span></div></td></tr>`;
-    els.cards.innerHTML = '<div class="mobile-loading">Fetching surveys…</div>';
+    if (!silent) {
+      els.rows.innerHTML = `<tr><td colspan="${visibleColumnCount}"><div class="table-loader"><i></i><span>Fetching survey inventory…</span></div></td></tr>`;
+      els.cards.innerHTML = '<div class="mobile-loading">Fetching surveys…</div>';
+    }
     try {
       const response = await fetch(`/api/v1/surveys/?${queryString()}`, { signal: state.controller.signal });
       if (!response.ok) throw new Error(`Request failed (${response.status})`);
       const data = await response.json();
       state.results = data.results || [];
       state.pages = Math.max(1, Math.ceil(data.count / state.pageSize));
-      if (state.page > state.pages) { state.page = state.pages; return loadSurveys(); }
+      if (state.page > state.pages) { state.page = state.pages; return loadSurveys({ silent }); }
       render(data.count);
     } catch (error) {
       if (error.name === 'AbortError') return;
+      if (silent) return;
       els.rows.innerHTML = `<tr><td colspan="${visibleColumnCount}"><div class="error-state"><strong>Could not load surveys</strong><span>${escapeHtml(error.message)}</span><button id="retryLoad">Try again</button></div></td></tr>`;
       els.cards.innerHTML = '';
       $('retryLoad')?.addEventListener('click', loadSurveys);
@@ -433,4 +436,10 @@
 
   updateCpiControl();
   loadSurveys();
+  window.setInterval(() => {
+    if (!document.hidden) loadSurveys({ silent: true });
+  }, 30000);
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) loadSurveys({ silent: true });
+  });
 })();

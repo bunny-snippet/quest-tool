@@ -27,13 +27,18 @@ def dispatch_due_integrations_task():
     now = timezone.now()
     queued = []
     integrations = ClientIntegration.objects.filter(
-        is_active=True, client__is_active=True, scheduled_sync_enabled=True,
+        is_active=True, client__is_active=True,
+    ).filter(
+        Q(scheduled_sync_enabled=True)
+        | Q(provider_code="innovatemr")
+        | Q(provider_code="rfg", last_test_status="success")
     ).only("id", "provider_code", "sync_interval_seconds", "last_sync_started_at")
     for integration in integrations:
-        interval_seconds = max(
-            integration.sync_interval_seconds,
-            600 if integration.provider_code == "rfg" else 60,
-        )
+        interval_seconds = {
+            "innovatemr": settings.CLIENT_INTEGRATION_INNOVATEMR_SYNC_INTERVAL_SECONDS,
+            "rfg": settings.CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS,
+        }.get(integration.provider_code, integration.sync_interval_seconds)
+        interval_seconds = max(60, interval_seconds)
         due_at = (integration.last_sync_started_at or (now - timedelta(days=1))) + timedelta(
             seconds=interval_seconds
         )
@@ -102,7 +107,9 @@ def sync_client_integration_task(integration_id):
 
 @shared_task(name="surveys.sync_innovatemr_surveys")
 def sync_innovatemr_surveys_task():
-    integration = ClientIntegration.objects.filter(is_active=True, client__is_active=True).order_by("id").first()
+    integration = ClientIntegration.objects.filter(
+        is_active=True, client__is_active=True, provider_code="innovatemr"
+    ).order_by("id").first()
     if not integration:
         return {"status": "skipped", "reason": "no active integration"}
     return sync_client_integration_task(integration.pk)

@@ -1,6 +1,6 @@
 # Synchronization runbook
 
-Client integrations are isolated by `(integration, source_key)`. Beat checks active scheduled integrations every minute; each integration's `sync_interval_seconds` controls actual provider calls. Research For Good enforces its documented 600-second minimum. See [client integrations](client-integrations.md).
+Client integrations are isolated by `(integration, source_key)`. Beat checks due integrations every 30 seconds. Active InnovateMR integrations synchronize every 150 seconds; verified active Research For Good integrations synchronize every 60 seconds. Other providers continue to use their configured scheduled interval. The Projects page silently reloads normalized database inventory every 30 seconds, so users do not need to press Sync to see background updates. See [client integrations](client-integrations.md).
 
 ## Upstream endpoints
 

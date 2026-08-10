@@ -47,6 +47,8 @@ def test_provider_connection(integration: ClientIntegration) -> dict:
         last_tested_at=now,
         last_test_status="success",
         last_test_error="",
+        scheduled_sync_enabled=True,
+        sync_interval_seconds=60,
     )
     return result
 
