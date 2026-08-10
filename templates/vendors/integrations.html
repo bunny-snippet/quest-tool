@@ -64,7 +64,7 @@
           <div class="field"><label for="targetingKey">Targeting response key</label><input id="targetingKey" placeholder="data.questions"></div>
           <div class="field wide"><label for="transactionEndpoint">Transaction endpoint template</label><input id="transactionEndpoint" placeholder="/transactions/{survey_id}/{pid}"></div>
           <div class="field"><label for="transactionKey">Transaction response key</label><input id="transactionKey" placeholder="data.transactions"></div>
-          <div class="field full"><label for="fieldMapping">Custom field mapping (JSON)</label><textarea id="fieldMapping" rows="4" placeholder='{"surveyId":"id","surveyName":"title"}'></textarea><small>Canonical field name on the left, provider response field on the right.</small></div>
+          <div class="field full"><label for="fieldMapping">Custom field mapping (JSON)</label><textarea id="fieldMapping" rows="4" placeholder='{"surveyId":"id","surveyName":"title","outcome_status":"status","outcome_reason":"reason","outcome_category":"category"}'></textarea><small>Canonical field name on the left and provider response path on the right. Outcome Center supports the reserved keys outcome_status, outcome_reason and outcome_category.</small></div>
         </div>
       </details>
       <div class="checks"><label><input id="scheduled" type="checkbox"> Scheduled sync</label><label><input id="active" type="checkbox" checked> Active</label></div>

@@ -933,6 +933,107 @@ class TerminationReasonPageTests(TestCase):
         self.client.force_login(employee)
         self.assertEqual(self.client.get(reverse("termination-reasons")).status_code, 403)
 
+    def test_page_lists_every_unsuccessful_status_before_rid_search(self):
+        SurveyAttempt.objects.create(
+            rid="Quota1Ab2C",
+            survey=self.survey,
+            platform_user=self.respondent,
+            status=SurveyAttempt.Status.OVER_QUOTA,
+            callback_at=timezone.now(),
+        )
+        SurveyAttempt.objects.create(
+            rid="Quali1Ab2C",
+            survey=self.survey,
+            platform_user=self.respondent,
+            status=SurveyAttempt.Status.QUALITY_TERMINATED,
+            callback_at=timezone.now(),
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.get(reverse("termination-reasons"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["summary"]["total"], 3)
+        self.assertEqual(response.context["summary"]["terminated"], 1)
+        self.assertEqual(response.context["summary"]["quota"], 1)
+        self.assertEqual(response.context["summary"]["quality"], 1)
+        self.assertContains(response, self.attempt.rid)
+        self.assertContains(response, "Quota1Ab2C")
+        self.assertContains(response, "Quali1Ab2C")
+        self.assertContains(response, "Details", count=3)
+
+    def test_rfg_detail_uses_stored_provider_callback_reason(self):
+        client = Client.objects.create(code="reason-rfg", name="Research For Good", provider_code="rfg")
+        integration = ClientIntegration.objects.create(
+            client=client,
+            name="RFG reason test",
+            provider_code="rfg",
+            base_url="https://api.researchforgood.com/API",
+        )
+        survey = Survey.objects.create(
+            source_key="RFG-REASON-1",
+            name="RFG reason survey",
+            client=client,
+            integration=integration,
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="RfgSec1Ab2",
+            survey=survey,
+            platform_user=self.respondent,
+            status=SurveyAttempt.Status.QUALITY_TERMINATED,
+            callback_at=timezone.now(),
+            upstream_transaction_data={"rfg_callback": {"result": "10", "liveS": "2"}},
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.get(reverse("termination-reasons"), {"detail": attempt.rid})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Security termination")
+        self.assertContains(response, "Suspicious or proxy IP address")
+
+    def test_custom_provider_can_map_nested_outcome_fields(self):
+        client = Client.objects.create(code="reason-custom", name="Future Client", provider_code="custom")
+        integration = ClientIntegration.objects.create(
+            client=client,
+            name="Custom reason test",
+            provider_code="custom",
+            base_url="https://provider.example.test/api",
+            field_mapping={
+                "outcome_status": "provider.state",
+                "outcome_reason": "provider.explanation",
+                "outcome_category": "provider.group",
+            },
+        )
+        survey = Survey.objects.create(
+            source_key="CUSTOM-REASON-1",
+            name="Custom reason survey",
+            client=client,
+            integration=integration,
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="CstmRe1Ab2",
+            survey=survey,
+            platform_user=self.respondent,
+            status=SurveyAttempt.Status.TERMINATED,
+            callback_at=timezone.now(),
+            upstream_transaction_data={
+                "provider": {
+                    "state": "Rejected",
+                    "explanation": "Outside audience",
+                    "group": "Targeting",
+                }
+            },
+        )
+        self.client.force_login(self.owner)
+
+        response = self.client.get(reverse("termination-reasons"), {"detail": attempt.rid})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Rejected")
+        self.assertContains(response, "Outside audience")
+        self.assertContains(response, "Category: Targeting")
+
     def test_non_terminal_attempt_does_not_call_provider(self):
         self.attempt.status = SurveyAttempt.Status.REDIRECTED
         self.attempt.save(update_fields=["status"])

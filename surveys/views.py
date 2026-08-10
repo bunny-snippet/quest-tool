@@ -9,6 +9,7 @@ from django.contrib.auth import get_user_model
 from django.db import transaction
 from django.db.models import Count, Max, Min, Q
 from django.http import HttpResponseRedirect, StreamingHttpResponse
+from django.core.paginator import Paginator
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
@@ -129,11 +130,29 @@ TERM_REASON_FIELD_PERMISSIONS = {
     "audit": "termination_reasons.field.audit",
 }
 
-UNSUCCESSFUL_ATTEMPT_STATUSES = {
-    SurveyAttempt.Status.TERMINATED,
-    SurveyAttempt.Status.OVER_QUOTA,
-    SurveyAttempt.Status.QUALITY_TERMINATED,
+TERM_REASON_COLUMN_PERMISSIONS = {
+    "rid": "termination_reasons.column.rid",
+    "survey": "termination_reasons.column.survey",
+    "client": "termination_reasons.column.client",
+    "respondent": "termination_reasons.column.respondent",
+    "status": "termination_reasons.column.status",
+    "ended": "termination_reasons.column.ended",
+    "actions": "termination_reasons.column.actions",
 }
+
+TERM_REASON_FILTER_PERMISSIONS = {
+    "rid": "termination_reasons.filter.rid",
+    "status": "termination_reasons.filter.status",
+    "client": "termination_reasons.filter.client",
+    "clear": "termination_reasons.filters.clear",
+}
+
+UNSUCCESSFUL_STATUS_LABELS = {
+    SurveyAttempt.Status.TERMINATED: "Terminated",
+    SurveyAttempt.Status.OVER_QUOTA: "Quota full",
+    SurveyAttempt.Status.QUALITY_TERMINATED: "Quality / security",
+}
+UNSUCCESSFUL_ATTEMPT_STATUSES = set(UNSUCCESSFUL_STATUS_LABELS)
 
 
 def _project_columns_for_user(user):
@@ -246,13 +265,29 @@ def user_hits_page(request):
     })
 
 
+def _nested_outcome_value(payload, path):
+    value = payload
+    for part in str(path or "").split("."):
+        if not part:
+            continue
+        if not isinstance(value, dict):
+            return ""
+        value = value.get(part)
+    return value if value is not None else ""
+
+
 def _provider_outcome(attempt):
+    """Normalize cached outcome data while preserving each provider's exact wording.
+
+    RFG callbacks have a documented nested shape. Other providers may either use
+    the common status/reason keys below or define ``outcome_mapping`` paths in the
+    integration's non-secret config, so adding a client does not require changing
+    this page's UI.
+    """
+
     data = attempt.upstream_transaction_data or {}
-    provider_code = (
-        attempt.survey.integration.provider_code
-        if attempt.survey.integration_id
-        else "innovatemr"
-    )
+    integration = attempt.survey.integration if attempt.survey.integration_id else None
+    provider_code = (integration.provider_code if integration else "innovatemr").lower()
     if provider_code == "rfg":
         parameters = data.get("rfg_callback") or data.get("rfg_local_outcome") or {}
         outcome = data.get("rfg_outcome") or describe_rfg_outcome(parameters, attempt=attempt)
@@ -261,75 +296,192 @@ def _provider_outcome(attempt):
             "reason": outcome.get("reason") or parameters.get("ruledOutBy") or parameters.get("local_reason") or "",
             "category": parameters.get("ruledOutBy") or "",
         }
+
+    config_mapping = ((integration.config or {}).get("outcome_mapping") or {}) if integration else {}
+    field_mapping = (integration.field_mapping or {}) if integration else {}
+    mapping = {
+        "status": config_mapping.get("status") or field_mapping.get("outcome_status"),
+        "reason": config_mapping.get("reason") or field_mapping.get("outcome_reason"),
+        "category": config_mapping.get("category") or field_mapping.get("outcome_category"),
+    }
+    candidates = [data]
+    candidates.extend(
+        value for key in ("transaction", "outcome", "result")
+        if isinstance((value := data.get(key)), dict)
+    )
+
+    def mapped_or_common(canonical, common_keys):
+        mapped = _nested_outcome_value(data, mapping.get(canonical))
+        if mapped is not None and mapped != "":
+            return mapped
+        for candidate in candidates:
+            for key in common_keys:
+                value = candidate.get(key)
+                if value is not None and value != "":
+                    return value
+        return ""
+
     return {
-        "status": data.get("status") or "",
-        "reason": data.get("termReason") or data.get("term_reason") or "",
-        "category": (
-            data.get("termReasonCategory")
-            or data.get("termReasonCategoryCode")
-            or data.get("termCategory")
-            or ""
+        "status": mapped_or_common("status", ("status", "Status", "resultStatus", "outcome")),
+        "reason": mapped_or_common(
+            "reason", ("termReason", "term_reason", "reason", "ruledOutBy", "message", "description")
+        ),
+        "category": mapped_or_common(
+            "category", ("termReasonCategory", "termReasonCategoryCode", "termCategory", "reasonCategory")
         ),
     }
+
+
+def _refresh_provider_outcome(attempt, integration):
+    """Fetch one provider transaction without coupling custom clients to Innovate status rules."""
+
+    provider_code = (integration.provider_code if integration else "innovatemr").lower()
+    client = InnovateMRClient(integration=integration)
+    if provider_code == "innovatemr":
+        reconcile_attempt_status(client, attempt)
+        attempt.refresh_from_db()
+        return
+
+    survey_identifier = attempt.survey.source_id or attempt.survey.source_key
+    transactions = client.get_survey_transactions_by_pid(survey_identifier, attempt.rid)
+    if not transactions:
+        attempt.upstream_checked_at = timezone.now()
+        attempt.save(update_fields=["upstream_checked_at", "updated_at"])
+        return
+
+    respondent_keys = ("PID", "pid", "trackId", "rid", "RID", "respondentId")
+    transaction_row = next(
+        (
+            row for row in transactions
+            if any(str(row.get(key) or "") == attempt.rid for key in respondent_keys)
+        ),
+        transactions[0],
+    )
+    attempt.upstream_transaction_data = transaction_row
+    attempt.upstream_checked_at = timezone.now()
+    attempt.save(update_fields=["upstream_transaction_data", "upstream_checked_at", "updated_at"])
 
 
 @function_permission_required("termination_reasons.view")
 def termination_reasons_page(request):
     codes = effective_permission_codes(request.user)
-    rid = request.GET.get("rid", "").strip()
-    attempt = None
-    outcome = None
+    filters_access = _component_access(codes, TERM_REASON_FILTER_PERMISSIONS)
+    columns = _permitted_columns(codes, TERM_REASON_COLUMN_PERMISSIONS)
+    search = request.GET.get("search", "").strip()
+    status_filter = request.GET.get("status", "").strip()
+    client_filter = request.GET.get("client", "").strip()
+    detail_rid = (request.GET.get("detail") or request.GET.get("rid") or "").strip()
+    detail_attempt = None
+    detail_outcome = None
     lookup_error = ""
-    searched = bool(rid)
 
-    if searched and "termination_reasons.filter.rid" not in codes:
-        raise PermissionDenied("Your account cannot use the RID search filter.")
-    if searched and (len(rid) != 10 or not rid.isalnum()):
-        lookup_error = "Enter the exact 10-character RID containing only letters and numbers."
-    elif searched:
-        queryset = SurveyAttempt.objects.select_related(
-            "survey__integration__client", "platform_user"
-        )
-        attempt = queryset.filter(rid=rid).first()
-        if attempt is None:
-            lookup_error = "No survey attempt was found for this RID."
-        elif attempt.status not in UNSUCCESSFUL_ATTEMPT_STATUSES:
-            lookup_error = (
-                f"This RID is currently {attempt.get_status_display().lower()}. "
-                "A termination reason is available only after a terminated, quota or security outcome."
-            )
+    if search and not filters_access["rid"]:
+        raise PermissionDenied("Your account cannot use the RID filter.")
+    if status_filter and not filters_access["status"]:
+        raise PermissionDenied("Your account cannot use the status filter.")
+    if client_filter and not filters_access["client"]:
+        raise PermissionDenied("Your account cannot use the client filter.")
+    if detail_rid and "termination_reasons.action.details" not in codes:
+        raise PermissionDenied("Your account cannot open outcome details.")
+
+    base_queryset = SurveyAttempt.objects.select_related(
+        "survey__integration__client", "survey__client", "platform_user"
+    ).filter(status__in=UNSUCCESSFUL_ATTEMPT_STATUSES)
+    client_options = list(
+        base_queryset.filter(survey__client__isnull=False)
+        .values("survey__client_id", "survey__client__name")
+        .distinct().order_by("survey__client__name")
+    )
+    queryset = base_queryset
+    if search:
+        queryset = queryset.filter(rid__icontains=search)
+    if status_filter in UNSUCCESSFUL_ATTEMPT_STATUSES:
+        queryset = queryset.filter(status=status_filter)
+    if client_filter.isdigit():
+        queryset = queryset.filter(survey__client_id=int(client_filter))
+
+    summary = queryset.aggregate(
+        total=Count("id"),
+        terminated=Count("id", filter=Q(status=SurveyAttempt.Status.TERMINATED)),
+        quota=Count("id", filter=Q(status=SurveyAttempt.Status.OVER_QUOTA)),
+        quality=Count("id", filter=Q(status=SurveyAttempt.Status.QUALITY_TERMINATED)),
+    )
+    page_obj = Paginator(queryset.order_by("-callback_at", "-initiated_at"), 20).get_page(
+        request.GET.get("page", 1)
+    )
+    for row in page_obj.object_list:
+        row.reason_outcome = _provider_outcome(row)
+        row.reason_status_label = UNSUCCESSFUL_STATUS_LABELS.get(row.status, row.get_status_display())
+
+    if detail_rid:
+        if len(detail_rid) != 10 or not detail_rid.isalnum():
+            lookup_error = "The requested RID must contain exactly 10 letters and numbers."
         else:
-            outcome = _provider_outcome(attempt)
-            provider_code = (
-                attempt.survey.integration.provider_code
-                if attempt.survey.integration_id
-                else "innovatemr"
+            detail_attempt = base_queryset.filter(rid=detail_rid).first()
+            if detail_attempt is None:
+                non_terminal_attempt = SurveyAttempt.objects.select_related(
+                    "survey__integration__client", "survey__client", "platform_user"
+                ).filter(rid=detail_rid).first()
+                if non_terminal_attempt:
+                    lookup_error = (
+                        f"This RID is currently {non_terminal_attempt.get_status_display().lower()}; "
+                        "provider outcome details become available after a final unsuccessful status."
+                    )
+        if not lookup_error and detail_attempt is None:
+            lookup_error = "No survey attempt was found for this RID."
+        elif detail_attempt:
+            detail_attempt.reason_status_label = UNSUCCESSFUL_STATUS_LABELS.get(
+                detail_attempt.status, detail_attempt.get_status_display()
+            )
+            detail_outcome = _provider_outcome(detail_attempt)
+            integration = detail_attempt.survey.integration if detail_attempt.survey.integration_id else None
+            provider_code = (integration.provider_code if integration else "innovatemr").lower()
+            supports_lookup = provider_code == "innovatemr" or bool(
+                integration and integration.transaction_endpoint_template
             )
             if (
-                provider_code == "innovatemr"
+                supports_lookup
                 and "termination_reasons.action.refresh" in codes
-                and (not outcome["status"] or not outcome["reason"])
+                and (not detail_outcome["status"] or not detail_outcome["reason"])
             ):
                 try:
-                    reconcile_attempt_status(
-                        InnovateMRClient(integration=attempt.survey.integration), attempt
-                    )
-                    attempt.refresh_from_db()
-                    outcome = _provider_outcome(attempt)
+                    _refresh_provider_outcome(detail_attempt, integration)
+                    detail_outcome = _provider_outcome(detail_attempt)
                 except (InnovateMRAPIError, ValueError) as exc:
+                    provider_label = integration.client.name if integration else "InnovateMR"
                     lookup_error = (
-                        "The attempt was found, but InnovateMR could not return its detailed "
+                        f"The attempt was found, but {provider_label} could not return its detailed "
                         f"transaction yet: {exc}"
                     )
 
+    link_params = request.GET.copy()
+    for parameter in ("detail", "rid"):
+        link_params.pop(parameter, None)
+    detail_query = link_params.urlencode()
+    page_params = link_params.copy()
+    page_params.pop("page", None)
+    page_query = page_params.urlencode()
+
     return render(request, "surveys/termination_reasons.html", {
         "active_page": "termination-reasons",
-        "rid_query": rid,
-        "searched": searched,
-        "attempt": attempt,
-        "outcome": outcome,
+        "search_query": search,
+        "status_filter": status_filter,
+        "client_filter": client_filter,
+        "client_options": client_options,
+        "attempt_statuses": list(UNSUCCESSFUL_STATUS_LABELS.items()),
+        "summary": summary,
+        "page_obj": page_obj,
+        "reason_columns": columns,
+        "reason_column_count": max(1, len(columns)),
+        "reason_filters": filters_access,
+        "can_view_reason_summary": "termination_reasons.summary" in codes,
+        "can_paginate_reasons": "termination_reasons.control.pagination" in codes,
+        "can_view_reason_details": "termination_reasons.action.details" in codes,
+        "detail_attempt": detail_attempt,
+        "detail_outcome": detail_outcome,
+        "detail_query": detail_query,
+        "page_query": page_query,
         "lookup_error": lookup_error,
-        "can_search_reasons": "termination_reasons.filter.rid" in codes,
         "can_refresh_reasons": "termination_reasons.action.refresh" in codes,
         "reason_fields": _component_access(codes, TERM_REASON_FIELD_PERMISSIONS),
     })
