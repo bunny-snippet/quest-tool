@@ -112,11 +112,11 @@ def manageable_user_ids(user) -> set[int]:
 def activity_visible_user_ids(user) -> set[int]:
     """Return users whose tracking activity is visible to ``user``.
 
-    The explicit ``created_by`` tree remains the primary ownership boundary. In
-    addition, employee accounts at Team Lead rank or above can see lower-ranked
-    employee siblings in the same branch. This covers the common setup where an
-    admin creates both a Team Lead and that lead's employees, without exposing
-    another vendor, branch, or higher-level account.
+    Shift assignment determines the tracking boundary. A Team Lead (or a higher
+    employee role) assigned anywhere below a Branch can see lower-ranked
+    employees across every Sub-branch and Shift in that Branch. A normal
+    employee can only see their own tracking records, even when another user was
+    created beneath them. Vendor and super-admin workspace rules remain intact.
     """
     if not user or not user.is_authenticated:
         return set()
@@ -124,10 +124,10 @@ def activity_visible_user_ids(user) -> set[int]:
         from django.contrib.auth import get_user_model
         return set(get_user_model().objects.values_list("id", flat=True))
 
-    visible_ids = subordinate_user_ids(user)
-    visible_ids.add(user.id)
+    visible_ids = {user.id}
     profile = EmployeeProfile.objects.select_related(
-        "role", "organization_unit__workspace_owner"
+        "role", "organization_unit__workspace_owner",
+        "organization_unit__parent", "organization_unit__parent__parent",
     ).filter(user=user).first()
     if (
         not profile
@@ -139,6 +139,7 @@ def activity_visible_user_ids(user) -> set[int]:
 
     vendor_id = vendor_scope_user_id(user)
     if profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR and vendor_id:
+        visible_ids.update(subordinate_user_ids(user))
         visible_ids.update(
             EmployeeProfile.objects.filter(
                 organization_unit__workspace_owner_id=vendor_id,
@@ -150,7 +151,10 @@ def activity_visible_user_ids(user) -> set[int]:
         return visible_ids
 
     if profile.organization_unit_id:
-        unit_ids = organization_unit_descendant_ids(profile.organization_unit)
+        branch = profile.organization_unit
+        while branch.parent_id and branch.unit_type != "branch":
+            branch = branch.parent
+        unit_ids = organization_unit_descendant_ids(branch)
         visible_ids.update(
             EmployeeProfile.objects.filter(
                 organization_unit_id__in=unit_ids,
@@ -162,6 +166,7 @@ def activity_visible_user_ids(user) -> set[int]:
         return visible_ids
 
     if not profile.created_by_id:
+        visible_ids.update(subordinate_user_ids(user))
         return visible_ids
 
     lower_rank_peers = EmployeeProfile.objects.filter(
