@@ -91,6 +91,7 @@ FUNCTION_CATALOG = (
     ("organization.action.edit_unit", "Edit organization unit", "Organization - Actions", "Edit or deactivate an organization unit.", ADMIN_ROLES),
     ("organization.action.delete_unit", "Delete organization unit", "Organization - Actions", "Permanently delete an unused Branch, Sub-branch or Shift after confirmation.", ADMIN_ROLES),
     ("organization.action.assign_client", "Assign unit client", "Organization - Actions", "Create or edit a unit-level client visibility grant.", ADMIN_ROLES),
+    ("organization.action.remove_client", "Remove unit client access", "Organization - Actions", "Permanently remove a client visibility grant from a Branch, Sub-branch or Shift.", ADMIN_ROLES),
     ("organization.column.unit.path", "Show Unit path column", "Organization - Structure columns", "Display the full Branch / Sub-branch / Shift path.", ADMIN_ROLES),
     ("organization.column.unit.type", "Show Unit type column", "Organization - Structure columns", "Display the hierarchy level.", ADMIN_ROLES),
     ("organization.column.unit.members", "Show Members column", "Organization - Structure columns", "Display assigned user totals.", ADMIN_ROLES),

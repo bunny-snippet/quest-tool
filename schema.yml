@@ -2781,7 +2781,7 @@ paths:
           description: ''
     delete:
       operationId: api_v1_vendors_organization_client_access_destroy
-      summary: Deactivate a unit client grant
+      summary: Remove a unit client grant
       parameters:
       - in: path
         name: id
@@ -2997,7 +2997,7 @@ paths:
           description: ''
     delete:
       operationId: api_v1_vendors_organization_units_destroy
-      summary: Deactivate an organization unit
+      summary: Delete an unused organization unit
       parameters:
       - in: path
         name: id

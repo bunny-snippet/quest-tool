@@ -643,6 +643,22 @@ class OrganizationHierarchyTests(TestCase):
         self.assertEqual(protected.status_code, 409)
         self.assertIn("child units", protected.data["detail"])
 
+    def test_client_access_can_be_removed_before_deleting_unit(self):
+        branch = OrganizationUnit.objects.create(
+            workspace_owner=self.owner, unit_type=OrganizationUnit.UnitType.BRANCH,
+            name="Client Branch", code="client-branch", created_by=self.owner,
+        )
+        grant = OrganizationClientAccess.objects.create(
+            organization_unit=branch, client=self.client_a, created_by=self.owner,
+        )
+        blocked = self.owner_api.delete(reverse("organization-unit-detail", args=[branch.pk]))
+        self.assertEqual(blocked.status_code, 409)
+        removed = self.owner_api.delete(reverse("organization-client-access-detail", args=[grant.pk]))
+        self.assertEqual(removed.status_code, 204)
+        self.assertFalse(OrganizationClientAccess.objects.filter(pk=grant.pk).exists())
+        deleted = self.owner_api.delete(reverse("organization-unit-detail", args=[branch.pk]))
+        self.assertEqual(deleted.status_code, 204)
+
     def test_user_cannot_be_assigned_below_an_inactive_ancestor(self):
         branch, _, shift = self.create_tree(self.owner, "inactive")
         branch.is_active = False

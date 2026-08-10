@@ -25,6 +25,7 @@
   data-edit-units="{{ can_edit_units|yesno:'true,false' }}"
   data-delete-units="{{ can_delete_units|yesno:'true,false' }}"
   data-manage-unit-clients="{{ can_manage_unit_clients|yesno:'true,false' }}"
+  data-remove-unit-clients="{{ can_remove_unit_clients|yesno:'true,false' }}"
   data-view-clients="{{ can_view_clients|yesno:'true,false' }}"
   data-manage-clients="{{ can_manage_clients|yesno:'true,false' }}"
   data-view-integrations="{{ can_view_integrations|yesno:'true,false' }}"
@@ -78,7 +79,7 @@
       <label class="wide"><span>Organization unit</span><select name="organization_unit" required></select></label>
       <label class="wide"><span>Client</span><select name="client" required></select><small>Internal vendors can only route clients already allocated to their vendor account.</small></label>
     </div><label class="organization-toggle"><input name="is_active" type="checkbox" checked><span>Active visibility grant</span><small>Child units inherit every active ancestor grant.</small></label><div class="organization-error" data-client-access-error hidden></div></div>
-    <footer><button class="organization-secondary" type="button" data-close-organization-modal>Cancel</button><button class="primary-button" type="submit"><span data-client-access-submit>Assign client</span></button></footer>
+    <footer>{% if can_remove_unit_clients %}<button class="organization-danger" type="button" data-remove-current-client-access hidden>Remove access</button>{% endif %}<span class="organization-footer-spacer"></span><button class="organization-secondary" type="button" data-close-organization-modal>Cancel</button><button class="primary-button" type="submit"><span data-client-access-submit>Assign client</span></button></footer>
   </form>
 </section>
 
@@ -116,4 +117,4 @@
 </section>{% endif %}
 <div class="organization-toast" data-organization-toast aria-live="polite"></div>
 {% endblock %}
-{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=4" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=5" defer></script>{% endblock %}

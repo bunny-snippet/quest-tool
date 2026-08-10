@@ -140,6 +140,7 @@ def organization_management_page(request):
         "can_edit_units": "organization.action.edit_unit" in codes,
         "can_delete_units": "organization.action.delete_unit" in codes,
         "can_manage_unit_clients": "organization.action.assign_client" in codes,
+        "can_remove_unit_clients": "organization.action.remove_client" in codes,
         "can_manage_clients": owner_controlled and "clients.manage" in codes,
         "can_view_integrations": owner_controlled and "clients.integration.view" in codes,
         "can_manage_integrations": owner_controlled and "clients.integration.manage" in codes,
@@ -225,7 +226,7 @@ class OrganizationScopedMixin:
     retrieve=extend_schema(tags=["Organization hierarchy"], summary="Get an organization unit"),
     update=extend_schema(tags=["Organization hierarchy"], summary="Replace an organization unit"),
     partial_update=extend_schema(tags=["Organization hierarchy"], summary="Update an organization unit"),
-    destroy=extend_schema(tags=["Organization hierarchy"], summary="Deactivate an organization unit"),
+    destroy=extend_schema(tags=["Organization hierarchy"], summary="Delete an unused organization unit"),
 )
 class OrganizationUnitViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
     serializer_class = OrganizationUnitSerializer
@@ -278,7 +279,7 @@ class OrganizationUnitViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
     retrieve=extend_schema(tags=["Organization hierarchy"], summary="Get a unit client grant"),
     update=extend_schema(tags=["Organization hierarchy"], summary="Replace a unit client grant"),
     partial_update=extend_schema(tags=["Organization hierarchy"], summary="Update a unit client grant"),
-    destroy=extend_schema(tags=["Organization hierarchy"], summary="Deactivate a unit client grant"),
+    destroy=extend_schema(tags=["Organization hierarchy"], summary="Remove a unit client grant"),
 )
 class OrganizationClientAccessViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
     serializer_class = OrganizationClientAccessSerializer
@@ -290,7 +291,11 @@ class OrganizationClientAccessViewSet(OrganizationScopedMixin, viewsets.ModelVie
     ordering = ["organization_unit__workspace_owner_id", "organization_unit__name", "client__name"]
 
     def get_required_function_permission(self):
-        return "organization.view" if self.action in {"list", "retrieve"} else "organization.action.assign_client"
+        if self.action in {"list", "retrieve"}:
+            return "organization.view"
+        if self.action == "destroy":
+            return "organization.action.remove_client"
+        return "organization.action.assign_client"
 
     def get_queryset(self):
         return OrganizationClientAccess.objects.filter(
@@ -299,6 +304,10 @@ class OrganizationClientAccessViewSet(OrganizationScopedMixin, viewsets.ModelVie
             "organization_unit", "organization_unit__workspace_owner", "organization_unit__parent__parent",
             "client", "created_by",
         )
+
+    def destroy(self, request, *args, **kwargs):
+        self.get_object().delete()
+        return Response(status=status.HTTP_204_NO_CONTENT)
 
 
 class VendorManagementOptionsView(APIView):
