@@ -917,10 +917,48 @@ class TerminationReasonPageTests(TestCase):
         self.assertContains(response, "Pre Survey Termination")
         self.assertContains(response, "Off hours")
         self.assertContains(response, "Term Reasons")
+        self.assertEqual(response.context["detail_outcome"], {
+            "status": "Pre Survey Termination",
+            "reason": "Off hours",
+            "category": "",
+        })
         transaction_lookup.assert_called_once_with(self.survey.source_id, self.attempt.rid)
         self.attempt.refresh_from_db()
         self.assertEqual(self.attempt.upstream_transaction_data["termReason"], "Off hours")
         self.assertIsNotNone(self.attempt.upstream_checked_at)
+
+    def test_cached_innovate_transaction_renders_clean_fields_not_raw_json(self):
+        raw_transaction = {
+            "id": "TqU3aQwdQTeKvf3U5r2DPSE",
+            "ip": "49.145.217.139",
+            "CPI": "2.55",
+            "status": "Pre Survey Quality Termination",
+            "trackId": self.attempt.rid,
+            "termReason": "Selected threat potential score at joblevel does not allow the survey",
+            "verifyToken": "Pending",
+        }
+        self.attempt.status = SurveyAttempt.Status.QUALITY_TERMINATED
+        self.attempt.upstream_transaction_data = raw_transaction
+        self.attempt.save(update_fields=["status", "upstream_transaction_data"])
+        self.client.force_login(self.owner)
+
+        with patch("surveys.views.InnovateMRClient.get_survey_transactions_by_pid") as lookup:
+            response = self.client.get(
+                reverse("termination-reasons"), {"detail": self.attempt.rid}
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["detail_outcome"], {
+            "status": "Pre Survey Quality Termination",
+            "reason": "Selected threat potential score at joblevel does not allow the survey",
+            "category": "",
+        })
+        self.assertContains(response, "Pre Survey Quality Termination")
+        self.assertContains(
+            response, "Selected threat potential score at joblevel does not allow the survey"
+        )
+        self.assertNotContains(response, "TqU3aQwdQTeKvf3U5r2DPSE")
+        lookup.assert_not_called()
 
     def test_admin_role_has_page_by_default_and_employee_is_forbidden(self):
         admin_user = get_user_model().objects.create_user(username="reason-admin")
