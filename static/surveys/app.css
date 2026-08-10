@@ -312,7 +312,7 @@ html,body,.app-shell{max-width:100%;overflow-x:clip}.main-area{width:calc(100% -
   .page-studies .study-overview .revenue em{font-size:6px}
   .page-studies .revenue-spark{height:30px}
   .page-studies .studies-filters{
-    grid-template-columns:repeat(10,minmax(0,1fr));
+    grid-template-columns:repeat(13,minmax(0,1fr));
     gap:6px;
     margin-bottom:7px;
     padding:8px 9px;

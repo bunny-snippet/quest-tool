@@ -536,6 +536,15 @@ paths:
       summary: List respondent survey attempts
       parameters:
       - in: query
+        name: branch
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated organization Branch IDs or legacy labels
+        explode: false
+        style: form
+      - in: query
         name: buyer_id
         schema:
           type: array
@@ -628,12 +637,30 @@ paths:
         schema:
           type: string
       - in: query
+        name: shift
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated organization Shift IDs or legacy labels
+        explode: false
+        style: form
+      - in: query
         name: status
         schema:
           type: array
           items:
             type: string
         description: Comma-separated attempt statuses
+        explode: false
+        style: form
+      - in: query
+        name: sub_branch
+        schema:
+          type: array
+          items:
+            type: string
+        description: Comma-separated organization Sub-branch IDs or legacy labels
         explode: false
         style: form
       - in: query
@@ -693,6 +720,11 @@ paths:
         metadata, timestamps, answers and callback audit data.
       summary: Export all filtered survey attempt data
       parameters:
+      - in: query
+        name: branch
+        schema:
+          type: string
+        description: Comma-separated organization Branch IDs or legacy labels.
       - in: query
         name: buyer_id
         schema:
@@ -764,10 +796,20 @@ paths:
           type: string
         description: Search RID, user, survey, IP or client metadata.
       - in: query
+        name: shift
+        schema:
+          type: string
+        description: Comma-separated organization Shift IDs or legacy labels.
+      - in: query
         name: status
         schema:
           type: string
         description: Comma-separated attempt status codes.
+      - in: query
+        name: sub_branch
+        schema:
+          type: string
+        description: Comma-separated organization Sub-branch IDs or legacy labels.
       - in: query
         name: survey_id
         schema:

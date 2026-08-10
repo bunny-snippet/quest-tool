@@ -9,6 +9,10 @@
     first: byId('hitFirstPage'), prev: byId('hitPrevPage'), next: byId('hitNextPage'), last: byId('hitLastPage'),
     totalHits: byId('totalHitCount'), totalCompletes: byId('totalCompleteCount'), conversion: byId('conversionRate'),
     activeUsers: byId('activeUserCount'), dayCount: byId('hitDayCount'),
+    branchFilters: document.querySelector('[data-hit-filter="branch"]'),
+    subBranchFilters: document.querySelector('[data-hit-filter="sub_branch"]'),
+    shiftFilters: document.querySelector('[data-hit-filter="shift"]'),
+    userFilters: document.querySelector('[data-hit-filter="user"]'),
   };
   if (!elements.rows) return;
   document.querySelector('.user-hits-table').style.minWidth = `${Math.max(520, columnCount * 145)}px`;
@@ -39,14 +43,66 @@
     });
   }
 
+  function applyMenuVisibility(container) {
+    if (!container) return;
+    const needle = container.querySelector('[data-multi-search]')?.value.trim().toLocaleLowerCase() || '';
+    let visibleCount = 0;
+    container.querySelectorAll('.multi-options label').forEach((option) => {
+      const parentMatches = option.dataset.parentHidden !== 'true';
+      const searchMatches = !needle || option.innerText.toLocaleLowerCase().includes(needle);
+      option.hidden = !(parentMatches && searchMatches);
+      if (!option.hidden) visibleCount += 1;
+    });
+    const noResults = container.querySelector('.multi-no-results');
+    if (noResults) noResults.hidden = visibleCount > 0 || Boolean(container.querySelector('.filter-empty'));
+  }
+
+  function setParentVisibility(container, predicate) {
+    if (!container) return;
+    container.querySelectorAll('.multi-options label').forEach((option) => {
+      const matches = predicate(option);
+      option.dataset.parentHidden = String(!matches);
+      const input = option.querySelector('input');
+      if (!matches && input?.checked) input.checked = false;
+    });
+    applyMenuVisibility(container);
+    updateMultiLabel(container);
+  }
+
+  function updateHierarchyOptions() {
+    const branches = new Set(elements.branchFilters ? selectedValues(elements.branchFilters) : []);
+    setParentVisibility(elements.subBranchFilters, (option) => !branches.size || branches.has(option.dataset.branchValue || ''));
+    const subBranches = new Set(elements.subBranchFilters ? selectedValues(elements.subBranchFilters) : []);
+    setParentVisibility(elements.shiftFilters, (option) => (
+      (!branches.size || branches.has(option.dataset.branchValue || ''))
+      && (!subBranches.size || subBranches.has(option.dataset.subBranchValue || ''))
+    ));
+    const shifts = new Set(elements.shiftFilters ? selectedValues(elements.shiftFilters) : []);
+    setParentVisibility(elements.userFilters, (option) => (
+      (!branches.size || branches.has(option.dataset.branchValue || ''))
+      && (!subBranches.size || subBranches.has(option.dataset.subBranchValue || ''))
+      && (!shifts.size || shifts.has(option.dataset.shiftValue || ''))
+    ));
+  }
+
   document.querySelectorAll('.user-hits-filters .multi-select').forEach((container) => {
     const trigger = container.querySelector('.multi-trigger'); const menu = container.querySelector('.multi-menu');
     trigger.addEventListener('click', () => {
       const shouldOpen = !container.classList.contains('open'); closeMultiSelects(container);
       container.classList.toggle('open', shouldOpen); menu.hidden = !shouldOpen; trigger.setAttribute('aria-expanded', String(shouldOpen));
+      if (shouldOpen) window.setTimeout(() => menu.querySelector('[data-multi-search]')?.focus(), 0);
     });
-    menu.addEventListener('change', () => { updateMultiLabel(container); scheduleLoad(); });
+    menu.querySelector('[data-multi-search]')?.addEventListener('input', () => applyMenuVisibility(container));
+    menu.addEventListener('change', (event) => {
+      if (event.target.matches('[data-multi-search]')) return;
+      updateMultiLabel(container);
+      if ([elements.branchFilters, elements.subBranchFilters, elements.shiftFilters].includes(container)) updateHierarchyOptions();
+      scheduleLoad();
+    });
+    updateMultiLabel(container);
+    applyMenuVisibility(container);
   });
+  updateHierarchyOptions();
 
   function filterParams() {
     const params = new URLSearchParams({ page: state.page, page_size: state.pageSize });
@@ -133,7 +189,12 @@
   elements.pageSize?.addEventListener('change', () => { state.pageSize = Number(elements.pageSize.value); state.page = 1; loadHits(); });
   elements.clear?.addEventListener('click', () => {
     if (elements.search) elements.search.value = ''; if (elements.from) elements.from.value = ''; if (elements.to) elements.to.value = '';
-    document.querySelectorAll('.user-hits-filters .multi-select').forEach((container) => { container.querySelectorAll('input').forEach((input) => { input.checked = false; }); updateMultiLabel(container); });
+    document.querySelectorAll('.user-hits-filters .multi-select').forEach((container) => {
+      container.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
+      const searchInput = container.querySelector('[data-multi-search]'); if (searchInput) searchInput.value = '';
+      updateMultiLabel(container);
+    });
+    updateHierarchyOptions();
     closeMultiSelects(); state.page = 1; loadHits();
   });
   elements.first?.addEventListener('click', () => go(1)); elements.prev?.addEventListener('click', () => go(state.page - 1));

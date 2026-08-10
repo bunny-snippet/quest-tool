@@ -40,12 +40,47 @@
     <label for="studySearch">Search</label>
     <div class="field-control"><span aria-hidden="true">⌕</span><input id="studySearch" type="search" placeholder="RID, survey, user, IP, browser…" autocomplete="off"></div>
   </div>{% endif %}
+  {% if study_filters.branch %}<div class="field multi-field">
+    <label id="studyBranchLabel">Branch</label>
+    <div class="multi-select" data-multi-filter="branch">
+      <button class="multi-trigger" type="button" aria-labelledby="studyBranchLabel" aria-expanded="false"><span>All branches</span><i>⌄</i></button>
+      <div class="multi-menu" hidden>
+        <div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search branch…" aria-label="Search branches" autocomplete="off"></div>
+        <div class="multi-options">{% for branch in study_branches %}<label><input type="checkbox" value="{{ branch.value }}"><span>{{ branch.name }}</span></label>{% empty %}<span class="filter-empty">No branches available</span>{% endfor %}</div>
+        <p class="multi-no-results" hidden>No matching branch</p>
+      </div>
+    </div>
+  </div>{% endif %}
+  {% if study_filters.sub_branch %}<div class="field multi-field">
+    <label id="studySubBranchLabel">Sub-branch</label>
+    <div class="multi-select" data-multi-filter="sub_branch">
+      <button class="multi-trigger" type="button" aria-labelledby="studySubBranchLabel" aria-expanded="false"><span>All sub-branches</span><i>⌄</i></button>
+      <div class="multi-menu" hidden>
+        <div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search sub-branch…" aria-label="Search sub-branches" autocomplete="off"></div>
+        <div class="multi-options">{% for sub_branch in study_sub_branches %}<label data-branch-value="{{ sub_branch.branch_value }}"><input type="checkbox" value="{{ sub_branch.value }}"><span>{{ sub_branch.name }}</span></label>{% empty %}<span class="filter-empty">No sub-branches available</span>{% endfor %}</div>
+        <p class="multi-no-results" hidden>No matching sub-branch</p>
+      </div>
+    </div>
+  </div>{% endif %}
+  {% if study_filters.shift %}<div class="field multi-field">
+    <label id="studyShiftLabel">Shift</label>
+    <div class="multi-select" data-multi-filter="shift">
+      <button class="multi-trigger" type="button" aria-labelledby="studyShiftLabel" aria-expanded="false"><span>All shifts</span><i>⌄</i></button>
+      <div class="multi-menu" hidden>
+        <div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search shift…" aria-label="Search shifts" autocomplete="off"></div>
+        <div class="multi-options">{% for shift in study_shifts %}<label data-branch-value="{{ shift.branch_value }}" data-sub-branch-value="{{ shift.sub_branch_value }}"><input type="checkbox" value="{{ shift.value }}"><span>{{ shift.name }}</span></label>{% empty %}<span class="filter-empty">No shifts available</span>{% endfor %}</div>
+        <p class="multi-no-results" hidden>No matching shift</p>
+      </div>
+    </div>
+  </div>{% endif %}
   {% if study_filters.user %}<div class="field multi-field">
     <label id="studyUserLabel">User</label>
     <div class="multi-select" data-multi-filter="user">
       <button class="multi-trigger" type="button" aria-labelledby="studyUserLabel" aria-expanded="false"><span>All users</span><i>⌄</i></button>
       <div class="multi-menu" hidden>
-        {% for tracked_user in tracked_users %}<label><input type="checkbox" value="{{ tracked_user.pk }}"><span>{{ tracked_user.get_full_name|default:tracked_user.username }}</span></label>{% empty %}<span class="filter-empty">No tracked users yet</span>{% endfor %}
+        <div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search user…" aria-label="Search users" autocomplete="off"></div>
+        <div class="multi-options">{% for tracked_user in tracked_users %}<label data-branch-value="{{ tracked_user.branch_value }}" data-sub-branch-value="{{ tracked_user.sub_branch_value }}" data-shift-value="{{ tracked_user.shift_value }}"><input type="checkbox" value="{{ tracked_user.user_id }}"><span>{{ tracked_user.user_name }}</span></label>{% empty %}<span class="filter-empty">No authorized users available</span>{% endfor %}</div>
+        <p class="multi-no-results" hidden>No matching user</p>
       </div>
     </div>
   </div>{% endif %}
@@ -60,7 +95,11 @@
     <label id="studyCountryLabel">Country</label>
     <div class="multi-select" data-multi-filter="country">
       <button class="multi-trigger" type="button" aria-labelledby="studyCountryLabel" aria-expanded="false"><span>All countries</span><i>⌄</i></button>
-      <div class="multi-menu" hidden>{% for country in study_countries %}<label><input type="checkbox" value="{{ country.survey__country_code }}"><span>{{ country.survey__country|default:country.survey__country_code }} · {{ country.survey__country_code }}</span></label>{% empty %}<span class="filter-empty">No countries yet</span>{% endfor %}</div>
+      <div class="multi-menu" hidden>
+        <div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search country…" aria-label="Search countries" autocomplete="off"></div>
+        <div class="multi-options">{% for country in study_countries %}<label><input type="checkbox" value="{{ country.country_code }}"><span>{{ country.country|default:country.country_code }} · {{ country.country_code }}</span></label>{% empty %}<span class="filter-empty">No countries available</span>{% endfor %}</div>
+        <p class="multi-no-results" hidden>No matching country</p>
+      </div>
     </div>
   </div>{% endif %}
   {% if study_filters.client %}<div class="field multi-field">
@@ -128,4 +167,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=13" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/studies.js' %}?v=14" defer></script>{% endblock %}

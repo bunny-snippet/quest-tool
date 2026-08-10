@@ -3,7 +3,10 @@
   const columns = new Set(JSON.parse(byId('studyColumnAccess')?.textContent || '[]'));
   const columnCount = Math.max(1, columns.size);
   const elements = {
-    search: byId('studySearch'), userFilters: document.querySelector('[data-multi-filter="user"]'),
+    search: byId('studySearch'), branchFilters: document.querySelector('[data-multi-filter="branch"]'),
+    subBranchFilters: document.querySelector('[data-multi-filter="sub_branch"]'),
+    shiftFilters: document.querySelector('[data-multi-filter="shift"]'),
+    userFilters: document.querySelector('[data-multi-filter="user"]'),
     statusFilters: document.querySelector('[data-multi-filter="status"]'),
     countryFilters: document.querySelector('[data-multi-filter="country"]'),
     clientFilters: document.querySelector('[data-multi-filter="client"]'),
@@ -50,10 +53,53 @@
     const checked = [...container.querySelectorAll('input:checked')];
     const button = container.querySelector('.multi-trigger');
     const fallback = {
+      branch: 'All branches', sub_branch: 'All sub-branches', shift: 'All shifts',
       user: 'All users', status: 'All statuses', country: 'All countries', client: 'All clients', buyer_id: 'All buyer IDs',
     }[container.dataset.multiFilter] || 'All options';
     button.querySelector('span').textContent = checked.length === 0 ? fallback : checked.length === 1 ? checked[0].closest('label').innerText.trim() : `${checked.length} selected`;
     button.classList.toggle('has-value', checked.length > 0);
+  }
+
+  function applyMenuVisibility(container) {
+    if (!container) return;
+    const needle = container.querySelector('[data-multi-search]')?.value.trim().toLocaleLowerCase() || '';
+    let visibleCount = 0;
+    container.querySelectorAll('.multi-options label').forEach((option) => {
+      const parentMatches = option.dataset.parentHidden !== 'true';
+      const searchMatches = !needle || option.innerText.toLocaleLowerCase().includes(needle);
+      option.hidden = !(parentMatches && searchMatches);
+      if (!option.hidden) visibleCount += 1;
+    });
+    const noResults = container.querySelector('.multi-no-results');
+    if (noResults) noResults.hidden = visibleCount > 0 || Boolean(container.querySelector('.filter-empty'));
+  }
+
+  function setParentVisibility(container, predicate) {
+    if (!container) return;
+    container.querySelectorAll('.multi-options label').forEach((option) => {
+      const matches = predicate(option);
+      option.dataset.parentHidden = String(!matches);
+      const input = option.querySelector('input');
+      if (!matches && input?.checked) input.checked = false;
+    });
+    applyMenuVisibility(container);
+    updateMultiLabel(container);
+  }
+
+  function updateStudyHierarchyOptions() {
+    const branches = new Set(selectedValues(elements.branchFilters));
+    setParentVisibility(elements.subBranchFilters, (option) => !branches.size || branches.has(option.dataset.branchValue || ''));
+    const subBranches = new Set(selectedValues(elements.subBranchFilters));
+    setParentVisibility(elements.shiftFilters, (option) => (
+      (!branches.size || branches.has(option.dataset.branchValue || ''))
+      && (!subBranches.size || subBranches.has(option.dataset.subBranchValue || ''))
+    ));
+    const shifts = new Set(selectedValues(elements.shiftFilters));
+    setParentVisibility(elements.userFilters, (option) => (
+      (!branches.size || branches.has(option.dataset.branchValue || ''))
+      && (!subBranches.size || subBranches.has(option.dataset.subBranchValue || ''))
+      && (!shifts.size || shifts.has(option.dataset.shiftValue || ''))
+    ));
   }
 
   function closeMultiSelects(except = null) {
@@ -70,10 +116,11 @@
     const clients = new Set(selectedValues(elements.clientFilters));
     elements.buyerFilters.querySelectorAll('.multi-options label').forEach((option) => {
       const matches = !clients.size || clients.has(option.dataset.clientId || '');
-      option.hidden = !matches;
+      option.dataset.parentHidden = String(!matches);
       const input = option.querySelector('input');
       if (!matches && input?.checked) input.checked = false;
     });
+    applyMenuVisibility(elements.buyerFilters);
     updateMultiLabel(elements.buyerFilters);
   }
 
@@ -86,14 +133,20 @@
       container.classList.toggle('open', shouldOpen);
       menu.hidden = !shouldOpen;
       trigger.setAttribute('aria-expanded', String(shouldOpen));
+      if (shouldOpen) window.setTimeout(() => menu.querySelector('[data-multi-search]')?.focus(), 0);
     });
-    menu.addEventListener('change', () => {
+    menu.querySelector('[data-multi-search]')?.addEventListener('input', () => applyMenuVisibility(container));
+    menu.addEventListener('change', (event) => {
+      if (event.target.matches('[data-multi-search]')) return;
       updateMultiLabel(container);
+      if ([elements.branchFilters, elements.subBranchFilters, elements.shiftFilters].includes(container)) updateStudyHierarchyOptions();
       if (container === elements.clientFilters) updateStudyBuyerOptions();
       scheduleLoad();
     });
     updateMultiLabel(container);
+    applyMenuVisibility(container);
   });
+  updateStudyHierarchyOptions();
   updateStudyBuyerOptions();
 
   function dateBoundary(dateTime, endOfMinute = false) {
@@ -105,12 +158,18 @@
   function filterParams(includePage = true) {
     const params = new URLSearchParams({ ordering: '-initiated_at' });
     const search = elements.search?.value.trim();
+    const branches = selectedValues(elements.branchFilters);
+    const subBranches = selectedValues(elements.subBranchFilters);
+    const shifts = selectedValues(elements.shiftFilters);
     const users = selectedValues(elements.userFilters);
     const statuses = selectedValues(elements.statusFilters);
     const countries = selectedValues(elements.countryFilters);
     const clients = selectedValues(elements.clientFilters);
     const buyers = selectedValues(elements.buyerFilters);
     if (search) params.set('search', search);
+    if (branches.length) params.set('branch', branches.join(','));
+    if (subBranches.length) params.set('sub_branch', subBranches.join(','));
+    if (shifts.length) params.set('shift', shifts.join(','));
     if (users.length) params.set('user', users.join(','));
     if (statuses.length) params.set('status', statuses.join(','));
     if (countries.length) params.set('country', countries.join(','));
@@ -289,11 +348,15 @@
   elements.clear?.addEventListener('click', () => {
     if (elements.search) elements.search.value = ''; if (elements.dateField) elements.dateField.value = 'initiated';
     if (elements.from) elements.from.value = ''; if (elements.to) elements.to.value = '';
-    document.querySelectorAll('.studies-filters .multi-select').forEach((container) => { container.querySelectorAll('input').forEach((input) => { input.checked = false; }); updateMultiLabel(container); });
+    document.querySelectorAll('.studies-filters .multi-select').forEach((container) => {
+      container.querySelectorAll('input[type="checkbox"]').forEach((input) => { input.checked = false; });
+      const searchInput = container.querySelector('[data-multi-search]'); if (searchInput) searchInput.value = '';
+      updateMultiLabel(container);
+    });
     state.projectId = '';
     byId('studyProjectScope')?.remove();
     window.history.replaceState({}, '', window.location.pathname);
-    updateStudyBuyerOptions();
+    updateStudyHierarchyOptions(); updateStudyBuyerOptions();
     closeMultiSelects(); state.page = 1; loadAttempts();
   });
   byId('clearProjectScope')?.addEventListener('click', () => {

@@ -45,6 +45,9 @@ FUNCTION_CATALOG = (
 
     ("attempts.view", "View Studies page, sidebar and rows", "Studies - Page & navigation", "Open Studies, display its sidebar item and read respondent rows through the API.", TRACKING_ROLES),
     ("studies.filter.search", "Use Search filter", "Studies - Filters", "Search respondent, survey, user, network and browser data.", TRACKING_ROLES),
+    ("studies.filter.branch", "Use Branch filter", "Studies - Filters", "Filter Studies by one or more authorized organization branches.", TRACKING_ROLES),
+    ("studies.filter.sub_branch", "Use Sub-branch filter", "Studies - Filters", "Filter Studies by one or more authorized organization sub-branches.", TRACKING_ROLES),
+    ("studies.filter.shift", "Use Shift filter", "Studies - Filters", "Filter Studies by one or more authorized organization shifts.", TRACKING_ROLES),
     ("studies.filter.user", "Use User filter", "Studies - Filters", "Filter Studies by one or more users.", TRACKING_ROLES),
     ("studies.filter.status", "Use Status filter", "Studies - Filters", "Filter Studies by one or more outcomes.", TRACKING_ROLES),
     ("studies.filter.country", "Use Country filter", "Studies - Filters", "Filter Studies by one or more survey countries.", TRACKING_ROLES),

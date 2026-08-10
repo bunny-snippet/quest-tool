@@ -604,6 +604,13 @@ class StudiesTrackingTests(TestCase):
 
 
     def test_studies_page_and_filtered_api_show_compact_tracking_data(self):
+        get_user_model().objects.create_user(
+            username="idle-studies", first_name="Idle", last_name="Studies", email="idle-studies@example.test"
+        )
+        Survey.objects.create(
+            source_id=555999, name="Unused Canada inventory", company_name="InnovateMR",
+            country="Canada", country_code="CA", cpi="1.00",
+        )
         self.client.force_login(self.owner)
         page = self.client.get(reverse("studies"))
         self.assertContains(page, "Respondent activity")
@@ -612,7 +619,14 @@ class StudiesTrackingTests(TestCase):
         self.assertNotContains(page, 'id="studyFromTime"')
         self.assertContains(page, "Export full CSV")
         self.assertContains(page, "Kanik Sharma")
-        self.assertContains(page, "Snapshot CPI")
+        self.assertContains(page, "Idle Studies")
+        self.assertContains(page, "Canada · CA")
+        self.assertContains(page, '<th class="study-col-cpi">CPI</th>', html=True)
+        self.assertContains(page, 'data-multi-filter="branch"')
+        self.assertContains(page, 'data-multi-filter="sub_branch"')
+        self.assertContains(page, 'data-multi-filter="shift"')
+        self.assertContains(page, 'aria-label="Search users"')
+        self.assertContains(page, 'aria-label="Search countries"')
         self.assertContains(page, 'data-multi-filter="country"')
         self.assertContains(page, 'data-multi-filter="client"')
         self.assertContains(page, 'data-multi-filter="buyer_id"')
@@ -879,6 +893,15 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(studies.status_code, 200)
         self.assertEqual(studies.data["count"], 2)
         self.assertEqual({row["rid"] for row in studies.data["results"]}, {visible_attempt.rid, other_shift_attempt.rid})
+        branch_studies = lead_api.get(reverse("survey-attempt-list"), {"branch": str(delhi.pk)})
+        self.assertEqual(branch_studies.status_code, 200)
+        self.assertEqual(branch_studies.data["count"], 2)
+        sub_branch_studies = lead_api.get(reverse("survey-attempt-list"), {"sub_branch": str(delhi_support.pk)})
+        self.assertEqual(sub_branch_studies.status_code, 200)
+        self.assertEqual({row["rid"] for row in sub_branch_studies.data["results"]}, {other_shift_attempt.rid})
+        shift_studies = lead_api.get(reverse("survey-attempt-list"), {"shift": str(delhi_morning.pk)})
+        self.assertEqual(shift_studies.status_code, 200)
+        self.assertEqual({row["rid"] for row in shift_studies.data["results"]}, {visible_attempt.rid})
 
         hits = lead_api.get(reverse("user-hits-api"))
         self.assertEqual(hits.status_code, 200)
@@ -888,6 +911,12 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(morning_hit["branch"], "Delhi")
         self.assertEqual(morning_hit["sub_branch"], "Operations")
         self.assertEqual(morning_hit["shift"], "Morning")
+        branch_hits = lead_api.get(reverse("user-hits-api"), {"branch": str(delhi.pk)})
+        self.assertEqual(branch_hits.status_code, 200)
+        self.assertEqual(branch_hits.data["count"], 2)
+        shift_hits = lead_api.get(reverse("user-hits-api"), {"shift": str(delhi_morning.pk)})
+        self.assertEqual(shift_hits.status_code, 200)
+        self.assertEqual({row["user_id"] for row in shift_hits.data["results"]}, {employee.pk})
 
         second_lead_api = APIClient()
         second_lead_api.force_authenticate(second_team_lead)
@@ -1227,6 +1256,9 @@ class UserHitsTests(TestCase):
         self.api.force_authenticate(self.owner)
 
     def test_page_and_api_aggregate_user_day_device_counts(self):
+        idle_user = get_user_model().objects.create_user(
+            username="idle-hits", first_name="Idle", last_name="Employee", email="idle@example.test"
+        )
         self.client.force_login(self.owner)
         page = self.client.get(reverse("user-hits"))
         self.assertEqual(page.status_code, 200)
@@ -1236,6 +1268,9 @@ class UserHitsTests(TestCase):
         self.assertContains(page, 'id="hitFromDateTime"')
         self.assertContains(page, 'id="hitToDateTime"')
         self.assertNotContains(page, 'id="hitFromTime"')
+        self.assertContains(page, "Idle Employee")
+        self.assertContains(page, 'aria-label="Search users"')
+        self.assertContains(page, 'aria-label="Search branches"')
 
         response = self.api.get(reverse("user-hits-api"), {
             "user": self.kanik.pk,

@@ -81,17 +81,23 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
         unit = getattr(profile, "organization_unit", None) if profile else None
         if unit:
             unit_labels = {}
+            unit_ids = {}
             current = unit
             while current:
                 unit_labels[current.unit_type] = current.name
+                unit_ids[current.unit_type] = current.pk
                 current = current.parent
             branch = unit_labels.get("branch", "")
             sub_branch = unit_labels.get("sub_branch", "")
             shift = unit_labels.get("shift", "")
+            branch_id = unit_ids.get("branch")
+            sub_branch_id = unit_ids.get("sub_branch")
+            shift_id = unit_ids.get("shift")
         else:
             branch = inherited_branch(platform_user.pk)
             sub_branch = (profile.department.strip() if profile and profile.department and branch else "") or branch
             shift = ""
+            branch_id = sub_branch_id = shift_id = None
         metadata[platform_user.pk] = {
             "user_id": platform_user.pk,
             "user_name": platform_user.get_full_name() or platform_user.username,
@@ -100,25 +106,43 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
             "branch": branch,
             "sub_branch": sub_branch,
             "shift": shift,
+            "branch_id": branch_id,
+            "sub_branch_id": sub_branch_id,
+            "shift_id": shift_id,
         }
     return metadata
 
 
 def user_hit_filter_options(user) -> dict:
     metadata = _build_user_metadata(_visible_user_ids(user))
-    tracked_ids = set(
-        SurveyAttempt.objects.filter(platform_user_id__in=metadata)
-        .exclude(platform_user_id=None)
-        .values_list("platform_user_id", flat=True)
-        .distinct()
-    )
-    tracked = [item for user_id, item in metadata.items() if user_id in tracked_ids]
-    tracked.sort(key=lambda item: (item["user_name"].casefold(), item["user_id"]))
+    visible_users = list(metadata.values())
+    visible_users.sort(key=lambda item: (item["user_name"].casefold(), item["user_id"]))
+
+    def option_value(item, level):
+        return str(item.get(f"{level}_id") or item.get(level) or "")
+
+    def unique_options(level, parent_levels=()):
+        options = {}
+        for item in visible_users:
+            name = item.get(level) or ""
+            value = option_value(item, level)
+            if not name or not value:
+                continue
+            option = {"value": value, "name": name}
+            for parent_level in parent_levels:
+                option[f"{parent_level}_value"] = option_value(item, parent_level)
+            options[(value, *(option.get(f"{parent}_value", "") for parent in parent_levels))] = option
+        return sorted(options.values(), key=lambda option: (option["name"].casefold(), option["value"]))
+
+    for item in visible_users:
+        item["branch_value"] = option_value(item, "branch")
+        item["sub_branch_value"] = option_value(item, "sub_branch")
+        item["shift_value"] = option_value(item, "shift")
     return {
-        "users": tracked,
-        "branches": sorted({item["branch"] for item in tracked if item["branch"]}, key=str.casefold),
-        "sub_branches": sorted({item["sub_branch"] for item in tracked if item["sub_branch"]}, key=str.casefold),
-        "shifts": sorted({item["shift"] for item in tracked if item["shift"]}, key=str.casefold),
+        "users": visible_users,
+        "branches": unique_options("branch"),
+        "sub_branches": unique_options("sub_branch", ("branch",)),
+        "shifts": unique_options("shift", ("branch", "sub_branch")),
     }
 
 
@@ -136,14 +160,21 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
     selected_branches = _csv_values(params.get("branch", ""))
     selected_sub_branches = _csv_values(params.get("sub_branch", ""))
     selected_shifts = _csv_values(params.get("shift", ""))
+    def hierarchy_match(item, level, selected):
+        return bool(
+            str(item.get(f"{level}_id") or "") in selected
+            or (item.get(level) or "") in selected
+        )
+
     if selected_branches:
-        visible_ids = {user_id for user_id in visible_ids if metadata.get(user_id, {}).get("branch") in selected_branches}
+        visible_ids = {user_id for user_id in visible_ids if hierarchy_match(metadata.get(user_id, {}), "branch", selected_branches)}
     if selected_sub_branches:
         visible_ids = {
-            user_id for user_id in visible_ids if metadata.get(user_id, {}).get("sub_branch") in selected_sub_branches
+            user_id for user_id in visible_ids
+            if hierarchy_match(metadata.get(user_id, {}), "sub_branch", selected_sub_branches)
         }
     if selected_shifts:
-        visible_ids = {user_id for user_id in visible_ids if metadata.get(user_id, {}).get("shift") in selected_shifts}
+        visible_ids = {user_id for user_id in visible_ids if hierarchy_match(metadata.get(user_id, {}), "shift", selected_shifts)}
 
     from_date = parse_date(params.get("from_date", "")) if params.get("from_date") else None
     to_date = parse_date(params.get("to_date", "")) if params.get("to_date") else None
@@ -194,7 +225,9 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
         local_date = timezone.localtime(attempt.initiated_at, current_timezone).date()
         key = (attempt.platform_user_id, local_date)
         row = grouped.setdefault(key, {
-            **user_meta,
+            **{field: user_meta[field] for field in (
+                "user_id", "user_name", "username", "user_email", "branch", "sub_branch", "shift"
+            )},
             "date": local_date.isoformat(),
             "hits": {"total": 0, **_empty_counts()},
             "completes": {"total": 0, **_empty_counts()},

@@ -107,7 +107,8 @@ STUDY_COLUMN_PERMISSIONS = {
 }
 
 STUDY_FILTER_PERMISSIONS = {
-    "search": "studies.filter.search", "user": "studies.filter.user",
+    "search": "studies.filter.search", "branch": "studies.filter.branch",
+    "sub_branch": "studies.filter.sub_branch", "shift": "studies.filter.shift", "user": "studies.filter.user",
     "status": "studies.filter.status", "country": "studies.filter.country",
     "client": "studies.filter.client", "buyer": "studies.filter.buyer",
     "project": "studies.filter.project", "date": "studies.filter.date",
@@ -267,18 +268,15 @@ def projects_page(request):
 def studies_page(request):
     codes = effective_permission_codes(request.user)
     user_ids = activity_visible_user_ids(request.user)
-    if request.user.is_superuser:
-        tracked_users = get_user_model().objects.filter(survey_attempts__isnull=False)
-    else:
-        tracked_users = get_user_model().objects.filter(pk__in=user_ids, survey_attempts__isnull=False)
-    tracked_users = tracked_users.distinct().order_by("first_name", "last_name", "username")
+    hierarchy_options = user_hit_filter_options(request.user)
     visible_attempts = SurveyAttempt.objects.all()
     if not request.user.is_superuser:
         visible_attempts = visible_attempts.filter(platform_user_id__in=user_ids)
+    visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
     countries = list(
-        visible_attempts.exclude(survey__country_code="")
-        .values("survey__country_code", "survey__country")
-        .distinct().order_by("survey__country_code")
+        visible_surveys.exclude(country_code="")
+        .values("country_code", "country")
+        .distinct().order_by("country_code")
     )
     study_clients = list(
         visible_attempts.filter(survey__client__isnull=False)
@@ -292,7 +290,10 @@ def studies_page(request):
     )
     return render(request, "surveys/studies.html", {
         "active_page": "studies",
-        "tracked_users": tracked_users,
+        "tracked_users": hierarchy_options["users"],
+        "study_branches": hierarchy_options["branches"],
+        "study_sub_branches": hierarchy_options["sub_branches"],
+        "study_shifts": hierarchy_options["shifts"],
         "study_countries": countries,
         "study_clients": study_clients,
         "study_buyers": study_buyers,
@@ -1425,6 +1426,9 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     def filter_queryset(self, queryset):
         _enforce_query_permissions(self.request, {
             "studies.filter.search": ("search",),
+            "studies.filter.branch": ("branch",),
+            "studies.filter.sub_branch": ("sub_branch",),
+            "studies.filter.shift": ("shift",),
             "studies.filter.user": ("user",),
             "studies.filter.status": ("status",),
             "studies.filter.country": ("country",),
@@ -1445,6 +1449,9 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         parameters=[
             OpenApiParameter("search", OpenApiTypes.STR, description="Search RID, user, survey, IP or client metadata."),
             OpenApiParameter("user", OpenApiTypes.STR, description="Comma-separated platform user IDs."),
+            OpenApiParameter("branch", OpenApiTypes.STR, description="Comma-separated organization Branch IDs or legacy labels."),
+            OpenApiParameter("sub_branch", OpenApiTypes.STR, description="Comma-separated organization Sub-branch IDs or legacy labels."),
+            OpenApiParameter("shift", OpenApiTypes.STR, description="Comma-separated organization Shift IDs or legacy labels."),
             OpenApiParameter("status", OpenApiTypes.STR, description="Comma-separated attempt status codes."),
             OpenApiParameter("country", OpenApiTypes.STR, description="Comma-separated survey country codes."),
             OpenApiParameter("company", OpenApiTypes.STR, description="Comma-separated survey company names."),
