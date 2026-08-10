@@ -2,6 +2,7 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    DashboardAPIView,
     SurveyAttemptViewSet,
     UserHitsAPIView,
     SyncRunViewSet,
@@ -35,6 +36,7 @@ urlpatterns = [
     path("studies/", studies_page, name="studies"),
     path("termination-reasons/", termination_reasons_page, name="termination-reasons"),
     path("user-hits/", user_hits_page, name="user-hits"),
+    path("api/v1/dashboard/", DashboardAPIView.as_view(), name="dashboard-api"),
     path("api/v1/user-hits/", UserHitsAPIView.as_view(), name="user-hits-api"),
     path("api/v1/sync/", SyncTriggerView.as_view(), name="sync-trigger"),
     path("api/v1/", include(router.urls)),

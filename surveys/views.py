@@ -42,10 +42,12 @@ from vendors.services import (
 from vendors.access import is_external_vendor_scope, vendor_scope_user_id
 
 from .filters import SurveyAttemptFilter, SurveyFilter
+from .dashboard import build_dashboard_payload, dashboard_attempts
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .models import Survey, SurveyAttempt, SyncRun
 from .serializers import (
     SurveyDetailSerializer,
+    DashboardResponseSerializer,
     SurveyListSerializer,
     SurveyAttemptSerializer,
     SurveyAttemptListResponseSerializer,
@@ -113,6 +115,25 @@ STUDY_FILTER_PERMISSIONS = {
     "client": "studies.filter.client", "buyer": "studies.filter.buyer",
     "project": "studies.filter.project", "date": "studies.filter.date",
     "clear": "studies.filters.clear",
+}
+
+DASHBOARD_FILTER_PERMISSIONS = {
+    "client": "dashboard.filter.client", "country": "dashboard.filter.country",
+    "branch": "dashboard.filter.branch", "sub_branch": "dashboard.filter.sub_branch",
+    "shift": "dashboard.filter.shift", "user": "dashboard.filter.user",
+    "date": "dashboard.filter.date", "clear": "dashboard.filters.clear",
+}
+
+DASHBOARD_CARD_PERMISSIONS = {
+    "hits": "dashboard.card.hits", "completes": "dashboard.card.completes",
+    "conversion_rate": "dashboard.card.conversion", "active_users": "dashboard.card.active_users",
+    "average_loi_seconds": "dashboard.card.average_loi", "revenue": "dashboard.card.revenue",
+}
+
+DASHBOARD_CHART_PERMISSIONS = {
+    "performance": "dashboard.chart.performance", "client_share": "dashboard.chart.client_share",
+    "status": "dashboard.chart.status", "device": "dashboard.chart.device",
+    "top_users": "dashboard.chart.top_users", "recent": "dashboard.chart.recent",
 }
 
 STUDY_CARD_PERMISSIONS = {
@@ -209,7 +230,38 @@ def _enforce_query_permissions(request, permission_parameters):
 
 @function_permission_required("dashboard.view")
 def dashboard_page(request):
-    return render(request, "surveys/dashboard.html", {"active_page": "dashboard"})
+    codes = effective_permission_codes(request.user)
+    hierarchy_options = user_hit_filter_options(request.user)
+    visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
+    countries = list(
+        visible_surveys.exclude(country_code="")
+        .values("country_code", "country").distinct().order_by("country_code")
+    )
+    client_rows = visible_surveys.values(
+        "client_id", "client__name", "company_name"
+    ).distinct().order_by("client__name", "company_name")
+    clients = []
+    seen_clients = set()
+    for row in client_rows:
+        value = str(row["client_id"] or "")
+        name = row["client__name"] or row["company_name"] or "Unassigned client"
+        key = value or name.casefold()
+        if key in seen_clients or not value:
+            continue
+        seen_clients.add(key)
+        clients.append({"value": value, "name": name})
+    return render(request, "surveys/dashboard.html", {
+        "active_page": "dashboard",
+        "dashboard_filters": _component_access(codes, DASHBOARD_FILTER_PERMISSIONS),
+        "dashboard_cards": _permitted_columns(codes, DASHBOARD_CARD_PERMISSIONS),
+        "dashboard_charts": _permitted_columns(codes, DASHBOARD_CHART_PERMISSIONS),
+        "dashboard_clients": clients,
+        "dashboard_countries": countries,
+        "dashboard_branches": hierarchy_options["branches"],
+        "dashboard_sub_branches": hierarchy_options["sub_branches"],
+        "dashboard_shifts": hierarchy_options["shifts"],
+        "dashboard_users": hierarchy_options["users"],
+    })
 
 
 @function_permission_required("projects.view")
@@ -1480,6 +1532,53 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         response["Content-Disposition"] = f'attachment; filename="studies-{local_now:%Y%m%d-%H%M%S}-IST.csv"'
         response["X-Content-Type-Options"] = "nosniff"
         return response
+
+
+class DashboardAPIView(APIView):
+    permission_classes = [HasFunctionPermission]
+    required_function_permission = "dashboard.view"
+
+    @extend_schema(
+        tags=["Dashboard"],
+        summary="Get permission-scoped dashboard analytics",
+        description=(
+            "Returns filtered KPI totals, immutable hit-time CPI revenue, client completion share, "
+            "five-day and six-month performance, outcome/device breakdowns, top users and recent activity. "
+            "Every response component and filter is controlled by a separate function permission."
+        ),
+        parameters=[
+            OpenApiParameter("client", OpenApiTypes.STR, description="Comma-separated permitted client IDs."),
+            OpenApiParameter("country", OpenApiTypes.STR, description="Comma-separated survey country codes."),
+            OpenApiParameter("branch", OpenApiTypes.STR, description="Comma-separated authorized Branch IDs."),
+            OpenApiParameter("sub_branch", OpenApiTypes.STR, description="Comma-separated authorized Sub-branch IDs."),
+            OpenApiParameter("shift", OpenApiTypes.STR, description="Comma-separated authorized Shift IDs."),
+            OpenApiParameter("user", OpenApiTypes.STR, description="Comma-separated visible platform user IDs."),
+            OpenApiParameter("initiated_from", OpenApiTypes.DATETIME, description="Inclusive survey-entry timestamp."),
+            OpenApiParameter("initiated_to", OpenApiTypes.DATETIME, description="Inclusive survey-entry timestamp."),
+        ],
+        responses={200: DashboardResponseSerializer},
+    )
+    def get(self, request):
+        _enforce_query_permissions(request, {
+            "dashboard.filter.client": ("client",),
+            "dashboard.filter.country": ("country",),
+            "dashboard.filter.branch": ("branch",),
+            "dashboard.filter.sub_branch": ("sub_branch",),
+            "dashboard.filter.shift": ("shift",),
+            "dashboard.filter.user": ("user",),
+            "dashboard.filter.date": ("initiated_from", "initiated_to"),
+        })
+        try:
+            queryset = dashboard_attempts(request.user, request.query_params)
+        except ValueError as exc:
+            return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        codes = effective_permission_codes(request.user)
+        return Response(build_dashboard_payload(
+            queryset,
+            request.user,
+            _component_access(codes, DASHBOARD_CARD_PERMISSIONS),
+            _component_access(codes, DASHBOARD_CHART_PERMISSIONS),
+        ))
 
 
 class UserHitsAPIView(APIView):

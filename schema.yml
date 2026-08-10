@@ -527,6 +527,69 @@ paths:
       responses:
         '204':
           description: No response body
+  /api/v1/dashboard/:
+    get:
+      operationId: api_v1_dashboard_retrieve
+      description: Returns filtered KPI totals, immutable hit-time CPI revenue, client
+        completion share, five-day and six-month performance, outcome/device breakdowns,
+        top users and recent activity. Every response component and filter is controlled
+        by a separate function permission.
+      summary: Get permission-scoped dashboard analytics
+      parameters:
+      - in: query
+        name: branch
+        schema:
+          type: string
+        description: Comma-separated authorized Branch IDs.
+      - in: query
+        name: client
+        schema:
+          type: string
+        description: Comma-separated permitted client IDs.
+      - in: query
+        name: country
+        schema:
+          type: string
+        description: Comma-separated survey country codes.
+      - in: query
+        name: initiated_from
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive survey-entry timestamp.
+      - in: query
+        name: initiated_to
+        schema:
+          type: string
+          format: date-time
+        description: Inclusive survey-entry timestamp.
+      - in: query
+        name: shift
+        schema:
+          type: string
+        description: Comma-separated authorized Shift IDs.
+      - in: query
+        name: sub_branch
+        schema:
+          type: string
+        description: Comma-separated authorized Sub-branch IDs.
+      - in: query
+        name: user
+        schema:
+          type: string
+        description: Comma-separated visible platform user IDs.
+      tags:
+      - Dashboard
+      security:
+      - VendorApiKeyAuth: []
+      - cookieAuth: []
+      responses:
+        '200':
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DashboardResponse'
+          description: ''
   /api/v1/survey-attempts/:
     get:
       operationId: api_v1_survey_attempts_list
@@ -3994,6 +4057,236 @@ components:
       required:
       - code
       - name
+    DashboardClientShare:
+      type: object
+      properties:
+        client_id:
+          type: integer
+          nullable: true
+        name:
+          type: string
+        completes:
+          type: integer
+          minimum: 0
+        share_percent:
+          type: number
+          format: double
+          maximum: 100
+          minimum: 0
+      required:
+      - client_id
+      - completes
+      - name
+      - share_percent
+    DashboardDeviceBreakdown:
+      type: object
+      properties:
+        desktop:
+          type: integer
+          minimum: 0
+        mobile:
+          type: integer
+          minimum: 0
+        tablet:
+          type: integer
+          minimum: 0
+        unclassified:
+          type: integer
+          minimum: 0
+      required:
+      - desktop
+      - mobile
+      - tablet
+      - unclassified
+    DashboardPerformance:
+      type: object
+      properties:
+        daily:
+          type: array
+          items:
+            $ref: '#/components/schemas/DashboardPerformancePoint'
+        monthly:
+          type: array
+          items:
+            $ref: '#/components/schemas/DashboardPerformancePoint'
+      required:
+      - daily
+      - monthly
+    DashboardPerformancePoint:
+      type: object
+      properties:
+        key:
+          type: string
+        label:
+          type: string
+        hits:
+          type: integer
+          minimum: 0
+        completes:
+          type: integer
+          minimum: 0
+      required:
+      - completes
+      - hits
+      - key
+      - label
+    DashboardRecentActivity:
+      type: object
+      properties:
+        rid:
+          type: string
+        user_name:
+          type: string
+        project_id:
+          type: string
+        client_name:
+          type: string
+        status:
+          type: string
+        status_label:
+          type: string
+        initiated_at:
+          type: string
+          format: date-time
+      required:
+      - client_name
+      - initiated_at
+      - project_id
+      - rid
+      - status
+      - status_label
+      - user_name
+    DashboardResponse:
+      type: object
+      properties:
+        summary:
+          $ref: '#/components/schemas/DashboardSummary'
+        performance:
+          allOf:
+          - $ref: '#/components/schemas/DashboardPerformance'
+          nullable: true
+        client_distribution:
+          type: array
+          items:
+            $ref: '#/components/schemas/DashboardClientShare'
+          nullable: true
+        status_breakdown:
+          allOf:
+          - $ref: '#/components/schemas/DashboardStatusBreakdown'
+          nullable: true
+        device_breakdown:
+          allOf:
+          - $ref: '#/components/schemas/DashboardDeviceBreakdown'
+          nullable: true
+        top_users:
+          type: array
+          items:
+            $ref: '#/components/schemas/DashboardTopUser'
+          nullable: true
+        recent_activity:
+          type: array
+          items:
+            $ref: '#/components/schemas/DashboardRecentActivity'
+          nullable: true
+        generated_at:
+          type: string
+          format: date-time
+      required:
+      - client_distribution
+      - device_breakdown
+      - generated_at
+      - performance
+      - recent_activity
+      - status_breakdown
+      - summary
+      - top_users
+    DashboardStatusBreakdown:
+      type: object
+      properties:
+        initiated:
+          type: integer
+          minimum: 0
+        completed:
+          type: integer
+          minimum: 0
+        terminated:
+          type: integer
+          minimum: 0
+        quota:
+          type: integer
+          minimum: 0
+        security:
+          type: integer
+          minimum: 0
+      required:
+      - completed
+      - initiated
+      - quota
+      - security
+      - terminated
+    DashboardSummary:
+      type: object
+      properties:
+        hits:
+          type: integer
+          minimum: 0
+          nullable: true
+        completes:
+          type: integer
+          minimum: 0
+          nullable: true
+        conversion_rate:
+          type: number
+          format: double
+          minimum: 0
+          nullable: true
+        active_users:
+          type: integer
+          minimum: 0
+          nullable: true
+        average_loi_seconds:
+          type: integer
+          minimum: 0
+          nullable: true
+        revenue:
+          type: string
+          format: decimal
+          pattern: ^-?\d{0,16}(?:\.\d{0,2})?$
+          nullable: true
+        revenue_currency:
+          type: string
+          nullable: true
+      required:
+      - active_users
+      - average_loi_seconds
+      - completes
+      - conversion_rate
+      - hits
+      - revenue
+      - revenue_currency
+    DashboardTopUser:
+      type: object
+      properties:
+        user_id:
+          type: integer
+        name:
+          type: string
+        hits:
+          type: integer
+          minimum: 0
+        completes:
+          type: integer
+          minimum: 0
+        conversion_rate:
+          type: number
+          format: double
+          minimum: 0
+      required:
+      - completes
+      - conversion_rate
+      - hits
+      - name
+      - user_id
     DeliveryModeEnum:
       enum:
       - panel
@@ -7000,6 +7293,9 @@ tags:
   description: Quota and pre-screening targeting captured from InnovateMR.
 - name: Survey attempts
   description: Staff-only respondent attempt, callback, IP and LOI audit records.
+- name: Dashboard
+  description: Permission-aware operational analytics, client contribution and performance
+    trends.
 - name: User hits
   description: Date-wise user hits and completes aggregated by respondent device.
 - name: Synchronization

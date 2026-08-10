@@ -28,7 +28,7 @@ EXTERNAL_VENDOR_FORBIDDEN_CODES = frozenset({
     "termination_reasons.field.status", "termination_reasons.field.reason",
     "termination_reasons.field.respondent", "termination_reasons.field.survey",
     "termination_reasons.field.timing", "termination_reasons.field.audit",
-    "studies.column.cpi", "studies.card.revenue",
+    "studies.column.cpi", "studies.card.revenue", "dashboard.card.revenue",
     "sync.run",
 })
 

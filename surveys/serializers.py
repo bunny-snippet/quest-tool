@@ -333,6 +333,79 @@ class UserHitsResponseSerializer(serializers.Serializer):
     summary = UserHitSummarySerializer()
 
 
+class DashboardSummarySerializer(serializers.Serializer):
+    hits = serializers.IntegerField(min_value=0, allow_null=True)
+    completes = serializers.IntegerField(min_value=0, allow_null=True)
+    conversion_rate = serializers.FloatField(min_value=0, allow_null=True)
+    active_users = serializers.IntegerField(min_value=0, allow_null=True)
+    average_loi_seconds = serializers.IntegerField(min_value=0, allow_null=True)
+    revenue = serializers.DecimalField(max_digits=18, decimal_places=2, allow_null=True)
+    revenue_currency = serializers.CharField(allow_null=True)
+
+
+class DashboardPerformancePointSerializer(serializers.Serializer):
+    key = serializers.CharField()
+    label = serializers.CharField()
+    hits = serializers.IntegerField(min_value=0)
+    completes = serializers.IntegerField(min_value=0)
+
+
+class DashboardPerformanceSerializer(serializers.Serializer):
+    daily = DashboardPerformancePointSerializer(many=True)
+    monthly = DashboardPerformancePointSerializer(many=True)
+
+
+class DashboardClientShareSerializer(serializers.Serializer):
+    client_id = serializers.IntegerField(allow_null=True)
+    name = serializers.CharField()
+    completes = serializers.IntegerField(min_value=0)
+    share_percent = serializers.FloatField(min_value=0, max_value=100)
+
+
+class DashboardStatusBreakdownSerializer(serializers.Serializer):
+    initiated = serializers.IntegerField(min_value=0)
+    completed = serializers.IntegerField(min_value=0)
+    terminated = serializers.IntegerField(min_value=0)
+    quota = serializers.IntegerField(min_value=0)
+    security = serializers.IntegerField(min_value=0)
+
+
+class DashboardDeviceBreakdownSerializer(serializers.Serializer):
+    desktop = serializers.IntegerField(min_value=0)
+    mobile = serializers.IntegerField(min_value=0)
+    tablet = serializers.IntegerField(min_value=0)
+    unclassified = serializers.IntegerField(min_value=0)
+
+
+class DashboardTopUserSerializer(serializers.Serializer):
+    user_id = serializers.IntegerField()
+    name = serializers.CharField()
+    hits = serializers.IntegerField(min_value=0)
+    completes = serializers.IntegerField(min_value=0)
+    conversion_rate = serializers.FloatField(min_value=0)
+
+
+class DashboardRecentActivitySerializer(serializers.Serializer):
+    rid = serializers.CharField()
+    user_name = serializers.CharField()
+    project_id = serializers.CharField()
+    client_name = serializers.CharField()
+    status = serializers.CharField()
+    status_label = serializers.CharField()
+    initiated_at = serializers.DateTimeField()
+
+
+class DashboardResponseSerializer(serializers.Serializer):
+    summary = DashboardSummarySerializer()
+    performance = DashboardPerformanceSerializer(allow_null=True)
+    client_distribution = DashboardClientShareSerializer(many=True, allow_null=True)
+    status_breakdown = DashboardStatusBreakdownSerializer(allow_null=True)
+    device_breakdown = DashboardDeviceBreakdownSerializer(allow_null=True)
+    top_users = DashboardTopUserSerializer(many=True, allow_null=True)
+    recent_activity = DashboardRecentActivitySerializer(many=True, allow_null=True)
+    generated_at = serializers.DateTimeField()
+
+
 class SurveyAttemptSerializer(serializers.ModelSerializer):
     survey_local_id = serializers.CharField(source="survey.local_id", read_only=True)
     survey_source_id = serializers.SerializerMethodField()

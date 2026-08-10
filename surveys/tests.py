@@ -337,7 +337,9 @@ class SurveyAPITests(TestCase):
         self.assertContains(projects, 'id="companyLabel">Client')
         self.assertNotContains(projects, 'id="cpiFilterTrigger"')
         self.assertNotContains(projects, "Quest")
-        self.assertContains(self.client.get(reverse("dashboard")), "dashboard is ready")
+        dashboard = self.client.get(reverse("dashboard"))
+        self.assertContains(dashboard, "Performance dashboard")
+        self.assertContains(dashboard, 'id="performanceChart"')
 
         profile = self.user.employee_profile
         profile.role = Role.objects.get(slug="admin")
@@ -1342,3 +1344,106 @@ class UserHitsTests(TestCase):
         self.assertEqual(denied_api.get(reverse("user-hits-api")).status_code, 403)
         self.client.force_login(no_access)
         self.assertEqual(self.client.get(reverse("user-hits")).status_code, 403)
+
+
+class DashboardAnalyticsTests(TestCase):
+    def setUp(self):
+        self.owner = get_user_model().objects.create_superuser(
+            username="dashboard-owner", email="dashboard-owner@example.test", password="test-password"
+        )
+        self.employee = get_user_model().objects.create_user(
+            username="dashboard-employee", first_name="Dash", last_name="Employee",
+            email="dashboard-employee@example.test",
+        )
+        self.other = get_user_model().objects.create_user(
+            username="dashboard-other", first_name="Other", last_name="User",
+            email="dashboard-other@example.test",
+        )
+        self.client_a = Client.objects.create(code="dashboard-a", name="Client Alpha")
+        self.client_b = Client.objects.create(code="dashboard-b", name="Client Beta")
+        self.survey_a = Survey.objects.create(
+            client=self.client_a, source_id=880001, company_name="Client Alpha", name="Alpha survey",
+            country="United States", country_code="US", cpi="4.00",
+        )
+        self.survey_b = Survey.objects.create(
+            client=self.client_b, source_id=880002, company_name="Client Beta", name="Beta survey",
+            country="Canada", country_code="CA", cpi="2.00",
+        )
+        self.complete = SurveyAttempt.objects.create(
+            rid="Da1Sh2Co3M", survey=self.survey_a, platform_user=self.employee,
+            user_id=str(self.employee.pk), status=SurveyAttempt.Status.COMPLETED,
+            source_cpi_snapshot="4.00", cpi_currency_snapshot="USD", loi_seconds=120,
+            entry_device="Desktop", callback_at=timezone.now(),
+        )
+        SurveyAttempt.objects.create(
+            rid="Da4Sh5Te6R", survey=self.survey_b, platform_user=self.other,
+            user_id=str(self.other.pk), status=SurveyAttempt.Status.TERMINATED,
+            source_cpi_snapshot="2.00", cpi_currency_snapshot="USD", loi_seconds=60,
+            entry_device="Mobile", callback_at=timezone.now(),
+        )
+        self.api = APIClient()
+        self.api.force_authenticate(self.owner)
+
+    def test_dashboard_page_has_animated_widgets_and_permission_aware_filters(self):
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("dashboard"))
+
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "Performance dashboard")
+        self.assertContains(page, 'id="performanceChart"')
+        self.assertContains(page, 'id="clientShareChart"')
+        self.assertContains(page, 'data-dashboard-filter="branch"')
+        self.assertContains(page, 'aria-label="Search clients"')
+        self.assertContains(page, "Hit-time CPI snapshots")
+
+    def test_dashboard_api_returns_overall_kpis_client_share_and_time_series(self):
+        response = self.api.get(reverse("dashboard-api"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["summary"]["hits"], 2)
+        self.assertEqual(response.data["summary"]["completes"], 1)
+        self.assertEqual(response.data["summary"]["conversion_rate"], 50.0)
+        self.assertEqual(response.data["summary"]["active_users"], 2)
+        self.assertEqual(response.data["summary"]["average_loi_seconds"], 90)
+        self.assertEqual(str(response.data["summary"]["revenue"]), "4.00")
+        self.assertEqual(response.data["status_breakdown"]["terminated"], 1)
+        self.assertEqual(response.data["device_breakdown"]["desktop"], 1)
+        self.assertEqual(response.data["client_distribution"][0]["name"], "Client Alpha")
+        self.assertEqual(response.data["client_distribution"][0]["share_percent"], 100.0)
+        self.assertEqual(len(response.data["performance"]["daily"]), 5)
+        self.assertEqual(len(response.data["performance"]["monthly"]), 6)
+        self.assertEqual(sum(point["hits"] for point in response.data["performance"]["daily"]), 2)
+        self.assertEqual(response.data["top_users"][0]["name"], "Dash Employee")
+        self.assertEqual(len(response.data["recent_activity"]), 2)
+
+    def test_dashboard_filters_and_employee_visibility_are_enforced(self):
+        filtered = self.api.get(reverse("dashboard-api"), {"client": self.client_b.pk})
+        self.assertEqual(filtered.status_code, 200)
+        self.assertEqual(filtered.data["summary"]["hits"], 1)
+        self.assertEqual(filtered.data["summary"]["completes"], 0)
+
+        scoped = APIClient()
+        scoped.force_authenticate(self.employee)
+        own = scoped.get(reverse("dashboard-api"))
+        self.assertEqual(own.status_code, 200)
+        self.assertEqual(own.data["summary"]["hits"], 1)
+        self.assertEqual(own.data["summary"]["completes"], 1)
+        self.assertIsNone(own.data["summary"]["revenue"])
+        self.assertIsNone(own.data["top_users"])
+        self.assertEqual(own.data["recent_activity"][0]["rid"], self.complete.rid)
+        self.assertEqual(scoped.get(reverse("dashboard-api"), {"branch": "1"}).status_code, 403)
+
+    def test_individual_card_permission_hides_only_that_metric(self):
+        UserFunctionOverride.objects.create(
+            user=self.employee,
+            function=AccessFunction.objects.get(code="dashboard.card.hits"),
+            effect=UserFunctionOverride.Effect.DENY,
+        )
+        scoped = APIClient()
+        scoped.force_authenticate(self.employee)
+
+        response = scoped.get(reverse("dashboard-api"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.data["summary"]["hits"])
+        self.assertEqual(response.data["summary"]["completes"], 1)
