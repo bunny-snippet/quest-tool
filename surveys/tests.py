@@ -579,6 +579,7 @@ class StudiesTrackingTests(TestCase):
         self.api = APIClient()
         self.api.force_authenticate(self.owner)
 
+
     def test_studies_page_and_filtered_api_show_compact_tracking_data(self):
         self.client.force_login(self.owner)
         page = self.client.get(reverse("studies"))
@@ -862,6 +863,84 @@ class StudiesTrackingTests(TestCase):
             reconcile_attempt_status(client, attempt)
             attempt.refresh_from_db()
             self.assertEqual(attempt.status, expected)
+
+
+class TerminationReasonPageTests(TestCase):
+    def setUp(self):
+        self.owner = get_user_model().objects.create_superuser(
+            username="reason-owner", email="reason-owner@example.test", password="test-password"
+        )
+        self.respondent = get_user_model().objects.create_user(
+            username="reason-respondent", first_name="Reason", last_name="Tester"
+        )
+        client = Client.objects.create(
+            code="reason-innovate", name="InnovateMR", provider_code="innovatemr"
+        )
+        integration = ClientIntegration.objects.create(
+            client=client,
+            name="InnovateMR reason test",
+            provider_code="innovatemr",
+            base_url="https://supplier.innovatemr.net/api/v2",
+        )
+        self.survey = Survey.objects.create(
+            source_id=16003381,
+            name="Reason lookup survey",
+            client=client,
+            integration=integration,
+            entry_link="https://edgeapi.innovatemr.net/startSurvey?PID=[%%pid%%]",
+        )
+        self.attempt = SurveyAttempt.objects.create(
+            rid="EqY33Hq0jH",
+            survey=self.survey,
+            platform_user=self.respondent,
+            user_id=str(self.respondent.pk),
+            status=SurveyAttempt.Status.TERMINATED,
+            status_source="browser_callback",
+            callback_at=timezone.now(),
+            callback_count=1,
+            initiation_ip="172.56.27.197",
+        )
+
+    @patch("surveys.views.InnovateMRClient.get_survey_transactions_by_pid")
+    def test_search_fetches_caches_and_displays_exact_provider_reason(self, transaction_lookup):
+        transaction_lookup.return_value = [{
+            "status": "Pre Survey Termination",
+            "termReason": "Off hours",
+            "trackId": self.attempt.rid,
+            "ip": "172.56.27.197",
+        }]
+        self.client.force_login(self.owner)
+
+        response = self.client.get(reverse("termination-reasons"), {"rid": self.attempt.rid})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Pre Survey Termination")
+        self.assertContains(response, "Off hours")
+        self.assertContains(response, "Term Reasons")
+        transaction_lookup.assert_called_once_with(self.survey.source_id, self.attempt.rid)
+        self.attempt.refresh_from_db()
+        self.assertEqual(self.attempt.upstream_transaction_data["termReason"], "Off hours")
+        self.assertIsNotNone(self.attempt.upstream_checked_at)
+
+    def test_admin_role_has_page_by_default_and_employee_is_forbidden(self):
+        admin_user = get_user_model().objects.create_user(username="reason-admin")
+        EmployeeProfile.objects.filter(user=admin_user).update(role=Role.objects.get(slug="admin"))
+        self.client.force_login(admin_user)
+        self.assertEqual(self.client.get(reverse("termination-reasons")).status_code, 200)
+
+        employee = get_user_model().objects.create_user(username="reason-employee")
+        EmployeeProfile.objects.filter(user=employee).update(role=Role.objects.get(slug="employee"))
+        self.client.force_login(employee)
+        self.assertEqual(self.client.get(reverse("termination-reasons")).status_code, 403)
+
+    def test_non_terminal_attempt_does_not_call_provider(self):
+        self.attempt.status = SurveyAttempt.Status.REDIRECTED
+        self.attempt.save(update_fields=["status"])
+        self.client.force_login(self.owner)
+        with patch("surveys.views.InnovateMRClient.get_survey_transactions_by_pid") as lookup:
+            response = self.client.get(reverse("termination-reasons"), {"rid": self.attempt.rid})
+        self.assertContains(response, "currently redirected to survey")
+        lookup.assert_not_called()
 
 
 class UserHitsTests(TestCase):

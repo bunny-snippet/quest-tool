@@ -61,6 +61,16 @@ FUNCTION_CATALOG = (
     ("studies.column.start", "Show Start column", "Studies - Table columns", "Display the survey start timestamp.", TRACKING_ROLES),
     ("studies.column.end", "Show End column", "Studies - Table columns", "Display the callback or current end timestamp.", TRACKING_ROLES),
 
+    ("termination_reasons.view", "View Termination Reasons page and sidebar", "Termination Reasons - Page & navigation", "Open the administrator-only provider outcome lookup page and display its sidebar item.", ADMIN_ROLES),
+    ("termination_reasons.filter.rid", "Search by RID", "Termination Reasons - Filters", "Find a final unsuccessful survey attempt by its exact respondent RID.", ADMIN_ROLES),
+    ("termination_reasons.action.refresh", "Refresh provider outcome", "Termination Reasons - Actions", "Fetch and cache the latest transaction status and term reason from the survey provider.", ADMIN_ROLES),
+    ("termination_reasons.field.status", "Show status details", "Termination Reasons - Result fields", "Display normalized and provider-reported statuses.", ADMIN_ROLES),
+    ("termination_reasons.field.reason", "Show term reason", "Termination Reasons - Result fields", "Display the exact provider term reason and category metadata.", ADMIN_ROLES),
+    ("termination_reasons.field.respondent", "Show respondent details", "Termination Reasons - Result fields", "Display respondent RID, user and captured network address.", ADMIN_ROLES),
+    ("termination_reasons.field.survey", "Show survey details", "Termination Reasons - Result fields", "Display project, survey, client and provider identifiers.", ADMIN_ROLES),
+    ("termination_reasons.field.timing", "Show timing details", "Termination Reasons - Result fields", "Display start, callback and recorded LOI details.", ADMIN_ROLES),
+    ("termination_reasons.field.audit", "Show audit details", "Termination Reasons - Result fields", "Display callback source, verification and provider lookup time.", ADMIN_ROLES),
+
     ("user_hits.view", "View User Hits page, sidebar and rows", "User Hits - Page & navigation", "Open User Hits, display its sidebar item and read aggregated user rows through the API.", TRACKING_ROLES),
     ("user_hits.filter.search", "Use Search filter", "User Hits - Filters", "Search users, email addresses, branches and sub-branches.", TRACKING_ROLES),
     ("user_hits.filter.branch", "Use Branch filter", "User Hits - Filters", "Filter User Hits by one or more branches.", TRACKING_ROLES),

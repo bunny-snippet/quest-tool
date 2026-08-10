@@ -58,7 +58,7 @@ from .pagination import SurveyPagination
 from .providers import ProviderError, get_provider
 from .rfg_outcomes import RFG_STATUS_MAP, describe_rfg_outcome
 from .rfg_text import clean_rfg_display_text
-from .services import replace_survey_quotas, replace_survey_targeting, sync_surveys
+from .services import reconcile_attempt_status, replace_survey_quotas, replace_survey_targeting, sync_surveys
 from .survey_flow import (
     backfill_attempt_entry_audit,
     build_outbound_url,
@@ -118,6 +118,21 @@ USER_HIT_FILTER_PERMISSIONS = {
     "search": "user_hits.filter.search", "branch": "user_hits.filter.branch",
     "sub_branch": "user_hits.filter.sub_branch", "shift": "user_hits.filter.shift", "user": "user_hits.filter.user",
     "date": "user_hits.filter.date", "clear": "user_hits.filters.clear",
+}
+
+TERM_REASON_FIELD_PERMISSIONS = {
+    "status": "termination_reasons.field.status",
+    "reason": "termination_reasons.field.reason",
+    "respondent": "termination_reasons.field.respondent",
+    "survey": "termination_reasons.field.survey",
+    "timing": "termination_reasons.field.timing",
+    "audit": "termination_reasons.field.audit",
+}
+
+UNSUCCESSFUL_ATTEMPT_STATUSES = {
+    SurveyAttempt.Status.TERMINATED,
+    SurveyAttempt.Status.OVER_QUOTA,
+    SurveyAttempt.Status.QUALITY_TERMINATED,
 }
 
 
@@ -231,6 +246,95 @@ def user_hits_page(request):
     })
 
 
+def _provider_outcome(attempt):
+    data = attempt.upstream_transaction_data or {}
+    provider_code = (
+        attempt.survey.integration.provider_code
+        if attempt.survey.integration_id
+        else "innovatemr"
+    )
+    if provider_code == "rfg":
+        parameters = data.get("rfg_callback") or data.get("rfg_local_outcome") or {}
+        outcome = data.get("rfg_outcome") or describe_rfg_outcome(parameters, attempt=attempt)
+        return {
+            "status": outcome.get("title") or outcome.get("status") or attempt.get_status_display(),
+            "reason": outcome.get("reason") or parameters.get("ruledOutBy") or parameters.get("local_reason") or "",
+            "category": parameters.get("ruledOutBy") or "",
+        }
+    return {
+        "status": data.get("status") or "",
+        "reason": data.get("termReason") or data.get("term_reason") or "",
+        "category": (
+            data.get("termReasonCategory")
+            or data.get("termReasonCategoryCode")
+            or data.get("termCategory")
+            or ""
+        ),
+    }
+
+
+@function_permission_required("termination_reasons.view")
+def termination_reasons_page(request):
+    codes = effective_permission_codes(request.user)
+    rid = request.GET.get("rid", "").strip()
+    attempt = None
+    outcome = None
+    lookup_error = ""
+    searched = bool(rid)
+
+    if searched and "termination_reasons.filter.rid" not in codes:
+        raise PermissionDenied("Your account cannot use the RID search filter.")
+    if searched and (len(rid) != 10 or not rid.isalnum()):
+        lookup_error = "Enter the exact 10-character RID containing only letters and numbers."
+    elif searched:
+        queryset = SurveyAttempt.objects.select_related(
+            "survey__integration__client", "platform_user"
+        )
+        attempt = queryset.filter(rid=rid).first()
+        if attempt is None:
+            lookup_error = "No survey attempt was found for this RID."
+        elif attempt.status not in UNSUCCESSFUL_ATTEMPT_STATUSES:
+            lookup_error = (
+                f"This RID is currently {attempt.get_status_display().lower()}. "
+                "A termination reason is available only after a terminated, quota or security outcome."
+            )
+        else:
+            outcome = _provider_outcome(attempt)
+            provider_code = (
+                attempt.survey.integration.provider_code
+                if attempt.survey.integration_id
+                else "innovatemr"
+            )
+            if (
+                provider_code == "innovatemr"
+                and "termination_reasons.action.refresh" in codes
+                and (not outcome["status"] or not outcome["reason"])
+            ):
+                try:
+                    reconcile_attempt_status(
+                        InnovateMRClient(integration=attempt.survey.integration), attempt
+                    )
+                    attempt.refresh_from_db()
+                    outcome = _provider_outcome(attempt)
+                except (InnovateMRAPIError, ValueError) as exc:
+                    lookup_error = (
+                        "The attempt was found, but InnovateMR could not return its detailed "
+                        f"transaction yet: {exc}"
+                    )
+
+    return render(request, "surveys/termination_reasons.html", {
+        "active_page": "termination-reasons",
+        "rid_query": rid,
+        "searched": searched,
+        "attempt": attempt,
+        "outcome": outcome,
+        "lookup_error": lookup_error,
+        "can_search_reasons": "termination_reasons.filter.rid" in codes,
+        "can_refresh_reasons": "termination_reasons.action.refresh" in codes,
+        "reason_fields": _component_access(codes, TERM_REASON_FIELD_PERMISSIONS),
+    })
+
+
 def workspace_home(request):
     if not request.user.is_authenticated:
         from django.contrib.auth.views import redirect_to_login
@@ -241,6 +345,8 @@ def workspace_home(request):
         return HttpResponseRedirect(reverse("dashboard"))
     if has_function_access(request.user, "attempts.view"):
         return HttpResponseRedirect(reverse("studies"))
+    if has_function_access(request.user, "termination_reasons.view"):
+        return HttpResponseRedirect(reverse("termination-reasons"))
     if has_function_access(request.user, "user_hits.view"):
         return HttpResponseRedirect(reverse("user-hits"))
     if any(has_function_access(request.user, code) for code in ("vendors.view", "vendors.manage", "allocations.view", "allocations.manage")):
@@ -587,7 +693,7 @@ def survey_start(request):
 
 STATUS_PAGES = {
     "1": {"title": "Thank you for participating!", "message": "Your survey response has been completed successfully.", "tone": "success"},
-    "2": {"title": "Survey ended", "message": "Your profile did not match the remaining survey requirements.", "tone": "neutral"},
+    "2": {"title": "Survey ended", "message": "The survey provider ended this attempt before it could be completed.", "tone": "neutral"},
     "3": {"title": "Quota already filled", "message": "The required quota was filled before your response could be completed.", "tone": "warning"},
     "4": {"title": "Quality check unsuccessful", "message": "This response did not pass the survey's quality checks.", "tone": "danger"},
 }

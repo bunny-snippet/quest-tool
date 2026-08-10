@@ -17,6 +17,10 @@ EXTERNAL_VENDOR_FORBIDDEN_CODES = frozenset({
     "clients.integration.view", "clients.integration.manage", "clients.integration.test",
     "clients.integration.preview", "clients.integration.sync",
     "organization.view", "organization.manage", "organization.clients.manage",
+    "termination_reasons.view", "termination_reasons.filter.rid", "termination_reasons.action.refresh",
+    "termination_reasons.field.status", "termination_reasons.field.reason",
+    "termination_reasons.field.respondent", "termination_reasons.field.survey",
+    "termination_reasons.field.timing", "termination_reasons.field.audit",
     "sync.run",
 })
 

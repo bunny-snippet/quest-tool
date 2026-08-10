@@ -1,0 +1,77 @@
+{% extends 'surveys/base.html' %}
+{% block title %}Termination Reasons · Survey Workspace{% endblock %}
+{% block content %}
+<section class="page-intro reason-page-intro">
+  <div>
+    <p class="eyebrow">Provider outcome audit</p>
+    <h1>Termination Reasons</h1>
+    <p>Search a respondent RID to see the provider's exact final status and term reason.</p>
+  </div>
+</section>
+
+{% if can_search_reasons %}
+<section class="reason-search-panel" aria-label="Search termination reason">
+  <form method="get" action="{% url 'termination-reasons' %}">
+    <div class="field">
+      <label for="reasonRid">Respondent RID</label>
+      <div class="field-control"><span aria-hidden="true">⌕</span><input id="reasonRid" name="rid" type="search" value="{{ rid_query }}" maxlength="10" pattern="[A-Za-z0-9]{10}" placeholder="Example: EqY33Hq0jH" autocomplete="off" required></div>
+    </div>
+    <button class="primary-button" type="submit"><span aria-hidden="true">→</span> Find reason</button>
+  </form>
+  <p>Only terminated, over-quota and security outcomes are returned. {% if can_refresh_reasons %}Missing InnovateMR details are fetched live and cached automatically.{% endif %}</p>
+</section>
+{% endif %}
+
+{% if lookup_error %}<div class="reason-alert{% if attempt %} warning{% endif %}"><strong>{% if attempt %}Provider detail pending{% else %}Reason not found{% endif %}</strong><span>{{ lookup_error }}</span></div>{% endif %}
+
+{% if attempt and outcome %}
+<section class="reason-result">
+  <header class="reason-result-head status-{{ attempt.status }}">
+    <div class="reason-status-icon" aria-hidden="true">{% if attempt.status == '3' %}Q{% elif attempt.status == '4' %}!{% else %}×{% endif %}</div>
+    <div><p>Final unsuccessful outcome</p><h2>{{ outcome.status|default:attempt.get_status_display }}</h2><span>RID {{ attempt.rid }}</span></div>
+    <span class="reason-status-pill">{{ attempt.get_status_display }}</span>
+  </header>
+
+  {% if reason_fields.reason %}<article class="reason-highlight">
+    <span>Exact term reason</span>
+    <strong>{{ outcome.reason|default:"Provider has not returned a specific reason yet." }}</strong>
+    {% if outcome.category %}<small>Category: {{ outcome.category }}</small>{% endif %}
+  </article>{% endif %}
+
+  <div class="reason-detail-grid">
+    {% if reason_fields.status %}<article><h3>Status details</h3><dl>
+      <div><dt>Platform status</dt><dd>{{ attempt.get_status_display }}</dd></div>
+      <div><dt>Provider status</dt><dd>{{ outcome.status|default:"Pending provider lookup" }}</dd></div>
+    </dl></article>{% endif %}
+
+    {% if reason_fields.respondent %}<article><h3>Respondent</h3><dl>
+      <div><dt>RID</dt><dd>{{ attempt.rid }}</dd></div>
+      <div><dt>User</dt><dd>{% if attempt.platform_user %}{{ attempt.platform_user.get_full_name|default:attempt.platform_user.username }}{% else %}Unavailable{% endif %}</dd></div>
+      <div><dt>IP address</dt><dd>{{ attempt.callback_ip|default:attempt.initiation_ip|default:"Unavailable" }}</dd></div>
+    </dl></article>{% endif %}
+
+    {% if reason_fields.survey %}<article><h3>Survey</h3><dl>
+      <div><dt>Project ID</dt><dd>{{ attempt.survey.local_id }}</dd></div>
+      <div><dt>Survey ID</dt><dd>{{ attempt.survey.source_key }}</dd></div>
+      <div><dt>Client</dt><dd>{% if attempt.survey.client %}{{ attempt.survey.client.name }}{% else %}{{ attempt.survey.company_name|default:"Unavailable" }}{% endif %}</dd></div>
+      <div><dt>Provider</dt><dd>{% if attempt.survey.integration %}{{ attempt.survey.integration.provider_code }}{% else %}InnovateMR{% endif %}</dd></div>
+    </dl></article>{% endif %}
+
+    {% if reason_fields.timing %}<article><h3>Timing</h3><dl>
+      <div><dt>Started</dt><dd>{{ attempt.initiated_at|date:"d M Y, h:i:s A T" }}</dd></div>
+      <div><dt>Ended</dt><dd>{{ attempt.callback_at|date:"d M Y, h:i:s A T"|default:"Pending" }}</dd></div>
+      <div><dt>LOI</dt><dd>{% if attempt.loi_seconds != None %}{{ attempt.loi_seconds }} seconds{% else %}Unavailable{% endif %}</dd></div>
+    </dl></article>{% endif %}
+
+    {% if reason_fields.audit %}<article><h3>Audit</h3><dl>
+      <div><dt>Status source</dt><dd>{{ attempt.status_source|default:"Unavailable" }}</dd></div>
+      <div><dt>Provider checked</dt><dd>{{ attempt.upstream_checked_at|date:"d M Y, h:i:s A T"|default:"Not checked" }}</dd></div>
+      <div><dt>Verified callback</dt><dd>{% if attempt.is_verified %}Yes{% else %}No{% endif %}</dd></div>
+      <div><dt>Callback count</dt><dd>{{ attempt.callback_count }}</dd></div>
+    </dl></article>{% endif %}
+  </div>
+</section>
+{% elif not searched %}
+<section class="reason-empty"><span aria-hidden="true">?</span><h2>Search a final RID</h2><p>The exact provider outcome will appear here without exposing API credentials or raw integration secrets.</p></section>
+{% endif %}
+{% endblock %}
