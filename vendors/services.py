@@ -4,14 +4,20 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from django.conf import settings
 from django.db import transaction
-from django.db.models import F, Prefetch, Q
+from django.db.models import Count, F, Prefetch, Q
 from django.utils import timezone
 
 from accounts.models import EmployeeProfile
 from surveys.models import Survey, SurveyAttempt
 
 from .access import vendor_scope_user_id
-from .models import AllocationReservation, OrganizationClientAccess, VendorClientAllocation, VendorSurveyAllocation
+from .models import (
+    AllocationReservation,
+    OrganizationClientAccess,
+    OrganizationUnit,
+    VendorClientAllocation,
+    VendorSurveyAllocation,
+)
 
 
 MONEY_QUANTUM = Decimal("0.01")
@@ -28,6 +34,63 @@ class VendorSurveyContext:
     survey_allocation: VendorSurveyAllocation
     cpi_cut_percent: Decimal
     payable_cpi: Decimal | None
+
+
+def organization_unit_rollup_counts(workspace_owner_ids) -> dict[str, dict[int, int]]:
+    """Aggregate unique members and client grants from children into each parent."""
+
+    units = list(
+        OrganizationUnit.objects.filter(workspace_owner_id__in=workspace_owner_ids)
+        .values("id", "parent_id")
+    )
+    unit_ids = {row["id"] for row in units}
+    direct_members = {
+        row["organization_unit_id"]: row["total"]
+        for row in EmployeeProfile.objects.filter(organization_unit_id__in=unit_ids)
+        .values("organization_unit_id")
+        .annotate(total=Count("id"))
+    }
+    direct_clients: dict[int, set[int]] = {}
+    for unit_id, client_id in OrganizationClientAccess.objects.filter(
+        organization_unit_id__in=unit_ids,
+        is_active=True,
+        client__is_active=True,
+    ).values_list("organization_unit_id", "client_id"):
+        direct_clients.setdefault(unit_id, set()).add(client_id)
+
+    children: dict[int, list[int]] = {}
+    for row in units:
+        if row["parent_id"] in unit_ids:
+            children.setdefault(row["parent_id"], []).append(row["id"])
+
+    member_rollups: dict[int, int] = {}
+    client_rollups: dict[int, set[int]] = {}
+
+    def visit(unit_id: int, trail: frozenset[int] = frozenset()) -> tuple[int, set[int]]:
+        if unit_id in member_rollups:
+            return member_rollups[unit_id], client_rollups[unit_id]
+        if unit_id in trail:
+            return direct_members.get(unit_id, 0), set(direct_clients.get(unit_id, set()))
+        members = direct_members.get(unit_id, 0)
+        clients = set(direct_clients.get(unit_id, set()))
+        next_trail = trail | {unit_id}
+        for child_id in children.get(unit_id, []):
+            child_members, child_clients = visit(child_id, next_trail)
+            members += child_members
+            clients.update(child_clients)
+        member_rollups[unit_id] = members
+        client_rollups[unit_id] = clients
+        return members, clients
+
+    for unit_id in unit_ids:
+        visit(unit_id)
+
+    return {
+        "members": member_rollups,
+        "clients": {unit_id: len(client_ids) for unit_id, client_ids in client_rollups.items()},
+        "direct_members": {unit_id: direct_members.get(unit_id, 0) for unit_id in unit_ids},
+        "direct_clients": {unit_id: len(direct_clients.get(unit_id, set())) for unit_id in unit_ids},
+    }
 
 
 def payable_cpi(source_cpi, cut_percent) -> Decimal | None:

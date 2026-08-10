@@ -309,8 +309,10 @@ class OrganizationUnitSerializer(serializers.ModelSerializer):
     workspace_owner_type = serializers.SerializerMethodField()
     parent_name = serializers.CharField(source="parent.name", read_only=True, allow_null=True)
     path = serializers.CharField(source="path_label", read_only=True)
-    member_count = serializers.IntegerField(read_only=True, default=0)
-    client_count = serializers.IntegerField(read_only=True, default=0)
+    member_count = serializers.SerializerMethodField()
+    client_count = serializers.SerializerMethodField()
+    direct_member_count = serializers.SerializerMethodField()
+    direct_client_count = serializers.SerializerMethodField()
     created_by = serializers.CharField(source="created_by.username", read_only=True, allow_null=True)
 
     class Meta:
@@ -318,6 +320,7 @@ class OrganizationUnitSerializer(serializers.ModelSerializer):
         fields = [
             "id", "workspace_owner", "workspace_owner_name", "workspace_owner_type", "parent", "parent_name",
             "unit_type", "name", "code", "description", "path", "member_count", "client_count",
+            "direct_member_count", "direct_client_count",
             "is_active", "created_by", "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
@@ -329,6 +332,21 @@ class OrganizationUnitSerializer(serializers.ModelSerializer):
         if obj.workspace_owner.is_superuser:
             return "owner"
         return getattr(getattr(obj.workspace_owner, "employee_profile", None), "account_type", "")
+
+    def _rollup_value(self, obj, key: str) -> int:
+        return int(self.context.get("organization_rollup_counts", {}).get(key, {}).get(obj.pk, 0))
+
+    def get_member_count(self, obj) -> int:
+        return self._rollup_value(obj, "members")
+
+    def get_client_count(self, obj) -> int:
+        return self._rollup_value(obj, "clients")
+
+    def get_direct_member_count(self, obj) -> int:
+        return self._rollup_value(obj, "direct_members")
+
+    def get_direct_client_count(self, obj) -> int:
+        return self._rollup_value(obj, "direct_clients")
 
     def validate(self, attrs):
         attrs = super().validate(attrs)

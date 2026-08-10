@@ -51,6 +51,7 @@ from .serializers import (
     VendorDirectorySerializer,
     VendorManagementOptionsSerializer,
 )
+from .services import organization_unit_rollup_counts
 
 
 @any_function_permission_required("vendors.view", "vendors.manage", "allocations.view", "allocations.manage")
@@ -252,10 +253,14 @@ class OrganizationUnitViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
             workspace_owner_id__in=self.organization_owner_ids()
         ).select_related(
             "workspace_owner", "workspace_owner__employee_profile", "parent", "created_by"
-        ).annotate(
-            member_count=Count("members", distinct=True),
-            client_count=Count("client_access_rules", filter=Q(client_access_rules__is_active=True), distinct=True),
         )
+
+    def get_serializer_context(self):
+        context = super().get_serializer_context()
+        context["organization_rollup_counts"] = organization_unit_rollup_counts(
+            self.organization_owner_ids()
+        )
+        return context
 
     def destroy(self, request, *args, **kwargs):
         instance = self.get_object()

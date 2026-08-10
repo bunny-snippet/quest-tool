@@ -94,7 +94,7 @@
   function renderSummary() {
     if ($('#branchCount')) $('#branchCount').textContent = state.units.filter((unit) => unit.unit_type === 'branch' && unit.is_active).length;
     if ($('#shiftCount')) $('#shiftCount').textContent = state.units.filter((unit) => unit.unit_type === 'shift' && unit.is_active).length;
-    if ($('#memberCount')) $('#memberCount').textContent = state.units.reduce((sum, unit) => sum + Number(unit.member_count || 0), 0);
+    if ($('#memberCount')) $('#memberCount').textContent = state.units.reduce((sum, unit) => sum + Number(unit.direct_member_count || 0), 0);
     if ($('#unitClientCount')) $('#unitClientCount').textContent = state.access.filter((row) => row.is_active).length;
   }
 

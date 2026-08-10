@@ -40,7 +40,7 @@
   </nav>
 
   {% if can_view_structure %}<section class="organization-panel {% if first_organization_tab == 'structure' %}active{% endif %}" data-organization-panel="structure" {% if first_organization_tab != 'structure' %}hidden{% endif %}>
-    <header class="organization-panel-head"><div><h2>Branch structure</h2><p>Multiple Team Leads and employees can share one Shift. Higher roles inherit visibility through child units.</p></div>{% if can_create_units %}<button class="primary-button compact" type="button" data-create-unit>Add unit <span>+</span></button>{% endif %}</header>
+    <header class="organization-panel-head"><div><h2>Branch structure</h2><p>Member and client totals roll up from Shift to Sub-branch and Branch, while each Shift keeps its own client access boundary.</p></div>{% if can_create_units %}<button class="primary-button compact" type="button" data-create-unit>Add unit <span>+</span></button>{% endif %}</header>
     <div class="organization-tree" id="organizationTree"><div class="organization-loading"><i></i>Loading hierarchy…</div></div>
   </section>{% endif %}
 
@@ -117,4 +117,4 @@
 </section>{% endif %}
 <div class="organization-toast" data-organization-toast aria-live="polite"></div>
 {% endblock %}
-{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=6" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=7" defer></script>{% endblock %}

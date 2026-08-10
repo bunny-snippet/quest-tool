@@ -4052,11 +4052,15 @@ components:
         member_count:
           type: integer
           readOnly: true
-          default: 0
         client_count:
           type: integer
           readOnly: true
-          default: 0
+        direct_member_count:
+          type: integer
+          readOnly: true
+        direct_client_count:
+          type: integer
+          readOnly: true
         is_active:
           type: boolean
         created_by:
@@ -4076,6 +4080,8 @@ components:
       - code
       - created_at
       - created_by
+      - direct_client_count
+      - direct_member_count
       - id
       - member_count
       - name

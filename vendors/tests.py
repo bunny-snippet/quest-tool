@@ -577,6 +577,31 @@ class OrganizationHierarchyTests(TestCase):
         with self.assertRaisesMessage(AllocationUnavailable, "not assigned"):
             resolve_vendor_survey_context(employee, self.survey_b)
 
+    def test_shift_members_and_clients_roll_up_to_parent_totals(self):
+        branch, sub_branch, shift = self.create_tree(self.owner, "rollup")
+        OrganizationClientAccess.objects.create(
+            organization_unit=shift, client=self.client_a, created_by=self.owner,
+        )
+        for index in range(2):
+            employee = get_user_model().objects.create_user(f"rollup-employee-{index}")
+            EmployeeProfile.objects.filter(user=employee).update(
+                organization_unit=shift,
+                created_by=self.owner,
+                role=Role.objects.get(slug="employee"),
+            )
+
+        response = self.owner_api.get(reverse("organization-unit-list"))
+
+        self.assertEqual(response.status_code, 200)
+        units = {row["id"]: row for row in response.data["results"]}
+        for unit in (branch, sub_branch, shift):
+            self.assertEqual(units[unit.pk]["member_count"], 2)
+            self.assertEqual(units[unit.pk]["client_count"], 1)
+        self.assertEqual(units[branch.pk]["direct_member_count"], 0)
+        self.assertEqual(units[branch.pk]["direct_client_count"], 0)
+        self.assertEqual(units[shift.pk]["direct_member_count"], 2)
+        self.assertEqual(units[shift.pk]["direct_client_count"], 1)
+
     def test_user_creation_assigns_team_leads_and_employees_to_shifts(self):
         branch, _, shift = self.create_tree(self.owner, "people")
         invalid = self.owner_api.post(reverse("access-user-list"), {

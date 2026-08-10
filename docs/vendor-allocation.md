@@ -22,6 +22,8 @@ Internal operations use real relational units rather than profile text fields:
 
 Multiple Team Leads may share a Shift. Each Team Lead can see lower-rank employee Studies and User Hits in that Shift. A Manager or Admin assigned higher in the tree sees lower-rank activity in descendant units. Internal-vendor roots can manage and audit their full organization tree. Existing unassigned profiles remain valid for backward compatibility.
 
+Organization structure totals roll upward without copying access rows: a Shift's members and unique client grants are included in its Sub-branch and Branch totals. This keeps management summaries accurate while preventing a client assigned to one Shift from leaking into sibling Shifts.
+
 `OrganizationClientAccess` assigns clients to any unit using nearest-level precedence. Direct Shift grants form that Shift's complete client set and override broader Sub-branch or Branch grants. A Shift without direct grants inherits the closest configured Sub-branch, then Branch; a configured Sub-branch likewise overrides its Branch. Main-office grants may use any active client. Internal-vendor grants must also exist in that vendor's active `VendorClientAllocation`; the unit rule can narrow vendor visibility but can never expand beyond owner-controlled allocations. Project listing, detail access and manually punched respondent links enforce the same client scope.
 
 ## Data hierarchy
