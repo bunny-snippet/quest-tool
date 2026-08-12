@@ -93,6 +93,7 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
     created_by = serializers.CharField(source="created_by.username", read_only=True, allow_null=True)
     client_name = serializers.CharField(source="client.name", read_only=True)
     api_token = serializers.CharField(write_only=True, required=False, allow_blank=True, trim_whitespace=False)
+    transaction_result_key = serializers.CharField(required=False, allow_blank=True)
     has_credential = serializers.SerializerMethodField()
     masked_credential = serializers.SerializerMethodField()
     survey_count = serializers.IntegerField(source="surveys.count", read_only=True)
@@ -274,6 +275,15 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
             set_default("inventory_result_key", "Surveys + SupplierAllocationSurveys")
             set_default("quota_result_key", "SurveyQuotas")
             set_default("targeting_result_key", "SurveyQualification.Questions")
+            # Cint does not use the generic transaction endpoint, but this
+            # model field is intentionally non-blank for other integrations.
+            # The browser therefore may submit an empty hidden value; normalize
+            # it instead of rejecting an otherwise valid Cint connection.
+            if not str(attrs.get(
+                "transaction_result_key",
+                getattr(self.instance, "transaction_result_key", ""),
+            ) or "").strip():
+                attrs["transaction_result_key"] = "result"
         elif provider_key in {"biobrain", "voqall"} or "voqall.com" in base_url.lower():
             api_root = base_url[:-8] if base_url.lower().endswith("/surveys") else base_url
             current_inventory = attrs.get(

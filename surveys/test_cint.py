@@ -335,10 +335,12 @@ class CintProviderTests(TestCase):
             "sync_interval_seconds": 60,
             "detail_refresh_batch": 1,
             "scheduled_sync_enabled": False,
+            "transaction_result_key": "",
         })
         self.assertTrue(serializer.is_valid(), serializer.errors)
         integration = serializer.save()
         self.assertEqual(integration.auth_header_name, "Authorization")
         self.assertEqual(integration.quota_result_key, "SurveyQuotas")
+        self.assertEqual(integration.transaction_result_key, "result")
         self.assertEqual(integration.credential_env_key, "CINT_API_KEY")
         self.assertFalse(integration.encrypted_api_token)
