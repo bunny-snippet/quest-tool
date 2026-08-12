@@ -2,9 +2,17 @@ from .base import ProviderConfigurationError
 
 
 def _provider_classes():
+    from .cint import CintProvider
     from .rfg import ResearchForGoodProvider
 
-    return {ResearchForGoodProvider.code: ResearchForGoodProvider}
+    return {
+        ResearchForGoodProvider.code: ResearchForGoodProvider,
+        CintProvider.code: CintProvider,
+    }
+
+
+def has_provider(code: str) -> bool:
+    return str(code or "").lower() in _provider_classes()
 
 
 def provider_catalog() -> list[dict]:

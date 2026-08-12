@@ -20,6 +20,7 @@ from surveys.rfg_outcomes import RFG_STATUS_MAP, describe_rfg_outcome
 
 from .models import ClientIntegration
 from .upstream import (
+    CINT_OPERATIONS,
     INNOVATE_OPERATIONS,
     RFG_OPERATIONS,
     UpstreamExplorerError,
@@ -40,12 +41,17 @@ CATALOG_TAG = "Client API catalog"
 INNOVATE_TAG = "InnovateMR APIs"
 RFG_TAG = "RFG APIs"
 RFG_CALLBACK_TAG = "RFG Callbacks"
+CINT_TAG = "Cint Exchange APIs"
 PROVIDER_ALIASES = {
     "innovate": "innovatemr",
     "innovate-mr": "innovatemr",
     "innovatemr": "innovatemr",
     "rfg": "rfg",
     "research-for-good": "rfg",
+    "cint": "cint",
+    "cint-exchange": "cint",
+    "lucid": "cint",
+    "samplicio": "cint",
 }
 
 PARAMETER_HELP = {
@@ -85,6 +91,8 @@ PARAMETER_HELP = {
     "end": "RFG log end date/time filter.",
     "zip": "Respondent postal/ZIP code.",
     "country_code": "Two-letter RFG country code.",
+    "country_language_id": "Cint CountryLanguageID from the global definitions endpoint, for example 9.",
+    "question_id": "Cint standard qualification QuestionID, for example 43 for gender.",
 }
 
 UPSTREAM_INPUT_NOTES = {
@@ -103,6 +111,10 @@ UPSTREAM_INPUT_NOTES = {
 }
 
 MUTATION_EXAMPLES = {
+    "create_supplier_link": {
+        "confirm_upstream_mutation": True,
+        "survey_id": "143479",
+    },
     "set_global_redirects": {
         "confirm_upstream_mutation": True,
         "payload": {
@@ -185,6 +197,8 @@ def _lookup_aliases(integration):
         aliases.update({"innovate", "innovate-mr", "innovatemr"})
     elif provider == "rfg":
         aliases.update({"rfg", "research-for-good"})
+    elif provider == "cint":
+        aliases.update({"cint", "cint-exchange", "lucid", "samplicio"})
     return aliases
 
 
@@ -321,7 +335,7 @@ class UpstreamExplorerViewSet(
     @action(detail=True, methods=["get"], url_path=r"execute/(?P<operation>[a-z][a-z0-9_]+)")
     def execute(self, request, client_code=None, operation=None):
         integration = self.get_object()
-        spec = {**INNOVATE_OPERATIONS, **RFG_OPERATIONS}.get(operation)
+        spec = {**INNOVATE_OPERATIONS, **RFG_OPERATIONS, **CINT_OPERATIONS}.get(operation)
         if spec and spec.mutating:
             return Response(
                 {"detail": "Use the provider-specific POST endpoint for live mutations."},
@@ -444,7 +458,11 @@ def _operation_description(provider, spec):
 
 def _build_operation_action(provider, operation, spec):
     local_method = "post" if spec.mutating else "get"
-    tag = INNOVATE_TAG if provider == "innovatemr" else RFG_TAG
+    tag = (
+        INNOVATE_TAG if provider == "innovatemr"
+        else CINT_TAG if provider == "cint"
+        else RFG_TAG
+    )
 
     def operation_action(self, request, client_code=None):
         integration = self.get_object()
@@ -501,4 +519,11 @@ for _operation, _spec in RFG_OPERATIONS.items():
         UpstreamExplorerViewSet,
         f"rfg_{_operation}",
         _build_operation_action("rfg", _operation, _spec),
+    )
+
+for _operation, _spec in CINT_OPERATIONS.items():
+    setattr(
+        UpstreamExplorerViewSet,
+        f"cint_{_operation}",
+        _build_operation_action("cint", _operation, _spec),
     )

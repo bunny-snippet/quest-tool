@@ -1,6 +1,16 @@
 from django.contrib import admin
 
-from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
+from .models import (
+    CanonicalOption,
+    CanonicalQuestion,
+    ProviderOptionMapping,
+    ProviderQuestionMapping,
+    Survey,
+    SurveyAttempt,
+    SurveyQuota,
+    SyncRun,
+    TargetingQuestion,
+)
 
 
 class SurveyQuotaInline(admin.TabularInline):
@@ -42,3 +52,44 @@ class SurveyAttemptAdmin(admin.ModelAdmin):
     ]
     list_filter = ["status", "status_source", "supplier_code", "entry_device", "entry_browser", "is_verified", "initiated_at"]
     readonly_fields = [field.name for field in SurveyAttempt._meta.fields]
+
+
+class CanonicalOptionInline(admin.TabularInline):
+    model = CanonicalOption
+    extra = 0
+
+
+@admin.register(CanonicalQuestion)
+class CanonicalQuestionAdmin(admin.ModelAdmin):
+    list_display = ["code", "label", "value_type", "is_active", "updated_at"]
+    search_fields = ["code", "label", "description"]
+    list_filter = ["value_type", "is_active"]
+    inlines = [CanonicalOptionInline]
+
+
+class ProviderOptionMappingInline(admin.TabularInline):
+    model = ProviderOptionMapping
+    extra = 0
+    autocomplete_fields = ["canonical_option"]
+
+
+@admin.register(ProviderQuestionMapping)
+class ProviderQuestionMappingAdmin(admin.ModelAdmin):
+    list_display = [
+        "provider_code", "external_question_id", "external_question_key",
+        "canonical_question", "country_code", "language_code", "is_active",
+    ]
+    search_fields = [
+        "provider_code", "external_question_id", "external_question_key",
+        "canonical_question__code", "canonical_question__label",
+    ]
+    list_filter = ["provider_code", "country_code", "language_code", "is_active"]
+    autocomplete_fields = ["canonical_question"]
+    inlines = [ProviderOptionMappingInline]
+
+
+@admin.register(CanonicalOption)
+class CanonicalOptionAdmin(admin.ModelAdmin):
+    list_display = ["question", "code", "label", "normalized_value", "is_active"]
+    search_fields = ["question__code", "code", "label", "normalized_value"]
+    list_filter = ["question", "is_active"]

@@ -15,6 +15,7 @@ from surveys.survey_flow import create_attempt
 
 from .constants import DATABASE_ALIAS
 from .models import PrescreenerAnswer, PrescreenerSubmission
+from .services import increment_profile_usage
 from .services import PrescreenerVaultError
 
 
@@ -89,6 +90,10 @@ class PrescreenerVaultFlowTests(TestCase):
         self.assertEqual(submission.respondent_age_group, "18-24")
         self.assertEqual(submission.respondent_gender, "male")
         self.assertEqual(submission.answer_count, 2)
+        self.assertEqual(submission.usage_count, 1)
+        self.assertEqual(increment_profile_usage(submission.uid), 2)
+        submission.refresh_from_db(using=DATABASE_ALIAS)
+        self.assertEqual(submission.usage_count, 2)
         gender = PrescreenerAnswer.objects.using(DATABASE_ALIAS).get(
             submission=submission, question_key="GENDER"
         )
@@ -140,6 +145,8 @@ class PrescreenerVaultFlowTests(TestCase):
         submission_text = " ".join(submissions.itertext())
         answer_text = " ".join(answers.itertext())
         self.assertIn(attempt.rid, submission_text)
+        self.assertNotIn("Answer count", submission_text)
+        self.assertIn("Usage count", submission_text)
         self.assertIn("What is your age?", answer_text)
         self.assertIn("Male", answer_text)
 

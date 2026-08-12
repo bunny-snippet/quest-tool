@@ -186,6 +186,116 @@ class TargetingQuestion(models.Model):
         ordering = ["question_id"]
 
 
+class CanonicalQuestion(models.Model):
+    """Provider-neutral qualification understood by the Exchange platform."""
+
+    class ValueType(models.TextChoices):
+        INTEGER = "integer", "Integer"
+        DECIMAL = "decimal", "Decimal"
+        TEXT = "text", "Text"
+        DATE = "date", "Date"
+        SINGLE = "single", "Single choice"
+        MULTIPLE = "multiple", "Multiple choice"
+
+    code = models.SlugField(max_length=80, unique=True, db_index=True)
+    label = models.CharField(max_length=180)
+    value_type = models.CharField(max_length=16, choices=ValueType.choices, default=ValueType.TEXT)
+    description = models.TextField(blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["code"]
+
+    def __str__(self):
+        return f"{self.code} - {self.label}"
+
+
+class CanonicalOption(models.Model):
+    """Stable answer key for one provider-neutral qualification."""
+
+    question = models.ForeignKey(CanonicalQuestion, related_name="options", on_delete=models.CASCADE)
+    code = models.SlugField(max_length=100)
+    label = models.CharField(max_length=250)
+    normalized_value = models.CharField(max_length=250, blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["question__code", "code"]
+        constraints = [
+            models.UniqueConstraint(fields=["question", "code"], name="unique_canonical_question_option"),
+        ]
+
+    def __str__(self):
+        return f"{self.question.code}:{self.code}"
+
+
+class ProviderQuestionMapping(models.Model):
+    """Maps a client's country/language-specific question ID to our stable key."""
+
+    provider_code = models.SlugField(max_length=50, db_index=True)
+    country_code = models.CharField(max_length=8, blank=True, db_index=True)
+    language_code = models.CharField(max_length=8, blank=True, db_index=True)
+    country_language_id = models.CharField(max_length=40, blank=True, db_index=True)
+    external_question_id = models.CharField(max_length=160)
+    external_question_key = models.CharField(max_length=180, blank=True)
+    canonical_question = models.ForeignKey(
+        CanonicalQuestion, related_name="provider_mappings", on_delete=models.PROTECT
+    )
+    is_active = models.BooleanField(default=True, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["provider_code", "country_code", "language_code", "external_question_id"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=[
+                    "provider_code", "country_code", "language_code", "country_language_id",
+                    "external_question_id",
+                ],
+                name="unique_provider_question_mapping",
+            ),
+        ]
+
+    def __str__(self):
+        return f"{self.provider_code}:{self.external_question_id} -> {self.canonical_question.code}"
+
+
+class ProviderOptionMapping(models.Model):
+    """Maps one upstream precode/value to a stable platform answer key."""
+
+    question_mapping = models.ForeignKey(
+        ProviderQuestionMapping, related_name="option_mappings", on_delete=models.CASCADE
+    )
+    external_value = models.CharField(max_length=250)
+    external_label = models.CharField(max_length=500, blank=True)
+    canonical_option = models.ForeignKey(
+        CanonicalOption, related_name="provider_mappings", null=True, blank=True, on_delete=models.PROTECT
+    )
+    canonical_value = models.CharField(max_length=250, blank=True)
+    is_active = models.BooleanField(default=True, db_index=True)
+    metadata = models.JSONField(default=dict, blank=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["question_mapping", "external_value"]
+        constraints = [
+            models.UniqueConstraint(
+                fields=["question_mapping", "external_value"], name="unique_provider_option_mapping"
+            ),
+        ]
+
+    def __str__(self):
+        target = self.canonical_option.code if self.canonical_option_id else self.canonical_value
+        return f"{self.question_mapping}:{self.external_value} -> {target}"
+
+
 class SyncRun(models.Model):
     class Status(models.TextChoices):
         RUNNING = "running", "Running"

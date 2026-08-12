@@ -510,7 +510,8 @@ class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     @action(detail=True, methods=["post"], url_path="test-connection")
     def test_connection(self, request, pk=None):
         integration = self.get_object()
-        if integration.provider_code == "rfg":
+        from surveys.providers import has_provider
+        if has_provider(integration.provider_code):
             from surveys.provider_services import test_provider_connection
             from surveys.providers import ProviderError
 
@@ -561,7 +562,8 @@ class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
         from surveys.tasks import sync_client_integration_task
 
         integration = self.get_object()
-        if integration.provider_code == "rfg" and integration.last_test_status != "success":
+        from surveys.providers import has_provider
+        if has_provider(integration.provider_code) and integration.last_test_status != "success":
             return Response(
                 {"detail": "Test and verify the connection first."},
                 status=status.HTTP_409_CONFLICT,

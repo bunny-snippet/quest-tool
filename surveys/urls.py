@@ -2,7 +2,9 @@ from django.urls import include, path
 from rest_framework.routers import DefaultRouter
 
 from .views import (
+    CanonicalQuestionViewSet,
     DashboardAPIView,
+    ProviderQuestionMappingViewSet,
     SurveyAttemptViewSet,
     UserHitsAPIView,
     SyncRunViewSet,
@@ -24,6 +26,8 @@ from .views import (
 
 router = DefaultRouter()
 router.register("surveys", SurveyViewSet, basename="survey")
+router.register("canonical-questions", CanonicalQuestionViewSet, basename="canonical-question")
+router.register("provider-question-mappings", ProviderQuestionMappingViewSet, basename="provider-question-mapping")
 router.register("sync-runs", SyncRunViewSet, basename="sync-run")
 router.register("survey-attempts", SurveyAttemptViewSet, basename="survey-attempt")
 

@@ -95,7 +95,10 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                     run.created += 1
                     touched.append(survey)
                 elif _survey_changed(survey, normalized):
-                    source_changed = survey.source_modified_at != normalized.modified_at
+                    source_changed = (
+                        survey.source_modified_at != normalized.modified_at
+                        or survey.raw_data != normalized.raw_data
+                    )
                     for field, value in values.items():
                         setattr(survey, field, value)
                     if source_changed:
@@ -166,9 +169,15 @@ def refresh_client_integration_details(integration: ClientIntegration, *, limit=
     candidates = Survey.objects.filter(
         integration=integration,
         status=Survey.Status.LIVE,
-    ).filter(
-        detail_synced_at__isnull=True
-    ).order_by("-source_modified_at", "pk")[:batch]
+    )
+    if integration.provider_code == "cint":
+        # Cint's list endpoints do not expose a modified timestamp and quota
+        # capacity is real-time, so rotate through the oldest detail snapshots.
+        candidates = candidates.order_by("detail_synced_at", "pk")[:batch]
+    else:
+        candidates = candidates.filter(
+            detail_synced_at__isnull=True
+        ).order_by("-source_modified_at", "pk")[:batch]
     refreshed = failures = 0
     for survey in candidates:
         try:

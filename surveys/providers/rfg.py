@@ -303,6 +303,8 @@ class ResearchForGoodProvider(SurveyProvider):
             survey.quota_synced_at = now
             survey.detail_synced_at = now
             survey.save(update_fields=["entry_link", "has_quota", "targeting_synced_at", "quota_synced_at", "detail_synced_at", "updated_at"])
+        from surveys.mappings import sync_survey_mappings
+        sync_survey_mappings(survey)
 
     def duplicate_check(self, survey, attempt, ip_address, fingerprint="0"):
         fingerprint = str(fingerprint or "0").strip()

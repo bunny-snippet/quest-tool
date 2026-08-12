@@ -1,7 +1,7 @@
 # Upstream client API explorer
 
 The Swagger UI at `/api/docs/` contains separate **Client API catalog**,
-**InnovateMR APIs**, **RFG APIs** and **RFG Callbacks** sections. They test
+**InnovateMR APIs**, **RFG APIs**, **RFG Callbacks** and **Cint Exchange APIs** sections. They test
 configured provider connections without copying credentials into the browser.
 
 ## Authentication
@@ -24,6 +24,9 @@ Basic variables are missing, the documentation fails closed with HTTP 503.
 - RFG resolves the `apid` and `secret` environment-variable references stored
   in `credential_env_keys`, then calculates `apid`, `time` and `hash` on the
   server for every signed request.
+- Cint resolves `CINT_API_KEY` (or the configured environment reference), sends
+  it only in the upstream `Authorization` header, and inserts the integration's
+  real Supplier Code server-side.
 - Credential values, Authorization headers and RFG signatures are never added
   to OpenAPI, response metadata or safe provider errors.
 - The catalog reports only environment-variable *names* and whether all
@@ -40,8 +43,8 @@ Basic variables are missing, the documentation fails closed with HTTP 503.
    `GET /api/v1/vendors/upstream-explorer/rfg/rfg/targeting/?survey_id=...`.
 
 The stable client code/name replaces the database integration ID. Built-in
-aliases include `innovate`, `innovatemr`, `innovate-mr`, `rfg` and
-`research-for-good`. When one alias matches more than one active connection,
+aliases include `innovate`, `innovatemr`, `innovate-mr`, `rfg`,
+`research-for-good`, `cint`, `cint-exchange`, `lucid` and `samplicio`. When one alias matches more than one active connection,
 the API returns HTTP 409 and lists the integration names accepted by the
 `integration` query parameter.
 
@@ -68,6 +71,11 @@ datapoint list/details, create-link, single/bulk duplicate checks, project log,
 project stats and postal-code geography lookup. RFG
 quota data is part of the documented `livealert/targeting/1` response, so the
 quota action calls that command and returns its `quotas` collection.
+
+Cint Exchange includes allocated survey IDs, open Marketplace inventory,
+allocated inventory, allocated survey by ID, qualifications, supplier quotas,
+global definitions, localized question library and localized question options.
+These are the read APIs used by the Model 2 / Method B polling implementation.
 
 Only explicitly allow-listed operations are exposed. Some documented
 eligibility/look-up operations use POST upstream, but they do not update provider

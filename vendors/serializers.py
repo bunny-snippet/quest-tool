@@ -195,6 +195,85 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     "scheduled_sync_enabled": "Test and verify this connection before scheduling it."
                 })
+        elif provider_key == "cint":
+            attrs.setdefault("base_url", "https://api.samplicio.us")
+            supplier_code = str(attrs.get(
+                "supplier_code", getattr(self.instance, "supplier_code", "")
+            ) or "").strip()
+            if not re.fullmatch(r"\d{1,40}", supplier_code):
+                raise serializers.ValidationError({
+                    "supplier_code": "Cint requires the real numeric Supplier Code issued for this account."
+                })
+            credential_env_key = str(attrs.get(
+                "credential_env_key", getattr(self.instance, "credential_env_key", "")
+            ) or "").strip()
+            if credential_env_key and not re.fullmatch(
+                r"[A-Za-z_][A-Za-z0-9_]*", credential_env_key
+            ):
+                raise serializers.ValidationError({
+                    "credential_env_key": "Use an environment-variable name here, never the Cint API key value."
+                })
+            config = attrs.get("config", getattr(self.instance, "config", {})) or {}
+            allowed_config = {
+                "timeout_seconds", "include_open_opportunities",
+                "include_allocated_surveys", "detail_refresh_batch",
+                "manage_supplier_links", "create_missing_supplier_links", "hash_key_env",
+                "profile_reuse_enabled", "profile_reuse_percentage", "country_strict_reuse",
+            }
+            unexpected = set(config) - allowed_config
+            if unexpected:
+                raise serializers.ValidationError({
+                    "config": f"Unsupported Cint settings: {', '.join(sorted(unexpected))}."
+                })
+            for flag in (
+                "include_open_opportunities", "include_allocated_surveys",
+                "manage_supplier_links", "create_missing_supplier_links",
+                "profile_reuse_enabled", "country_strict_reuse",
+            ):
+                if flag in config and not isinstance(config[flag], bool):
+                    raise serializers.ValidationError({"config": f"{flag} must be true or false."})
+            hash_key_env = str(config.get("hash_key_env") or "CINT_HASH_KEY")
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", hash_key_env):
+                raise serializers.ValidationError({
+                    "config": "Cint hash_key_env must be an environment-variable name, never the key value."
+                })
+            try:
+                reuse_percentage = int(config.get("profile_reuse_percentage", 0))
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError({"config": "profile_reuse_percentage must be 0-100."}) from exc
+            if not 0 <= reuse_percentage <= 100:
+                raise serializers.ValidationError({"config": "profile_reuse_percentage must be 0-100."})
+            if config.get("profile_reuse_enabled") is not True and reuse_percentage != 0:
+                raise serializers.ValidationError({
+                    "config": "Reuse percentage must remain 0 while profile reuse is disabled."
+                })
+            try:
+                interval = int(attrs.get(
+                    "sync_interval_seconds", getattr(self.instance, "sync_interval_seconds", 60)
+                ))
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError({
+                    "sync_interval_seconds": "Sync interval must be a whole number."
+                }) from exc
+            if interval < 60:
+                raise serializers.ValidationError({
+                    "sync_interval_seconds": "Cint inventory sync must be at least 60 seconds."
+                })
+            if attrs.get("scheduled_sync_enabled", False) and getattr(
+                self.instance, "last_test_status", ""
+            ) != "success":
+                raise serializers.ValidationError({
+                    "scheduled_sync_enabled": "Test and verify this connection before scheduling it."
+                })
+            set_default("inventory_endpoint", "/Supply/v1/Surveys/AllOfferwall/{supplier_code}")
+            set_default("paged_inventory_endpoint", "/Supply/v1/Surveys/SupplierAllocations/All/{supplier_code}")
+            set_default("quota_endpoint_template", "/Supply/v1/SurveyQuotas/BySurveyNumber/{survey_id}/{supplier_code}")
+            set_default("targeting_endpoint_template", "/Supply/v1/SurveyQualifications/BySurveyNumberForOfferwall/{survey_id}")
+            set_default("auth_header_name", "Authorization")
+            set_default("auth_header_prefix", "")
+            set_default("inventory_result_key", "Surveys + SupplierAllocationSurveys")
+            set_default("quota_result_key", "SurveyQuotas")
+            set_default("targeting_result_key", "SurveyQualification.Questions")
         elif provider_key in {"biobrain", "voqall"} or "voqall.com" in base_url.lower():
             api_root = base_url[:-8] if base_url.lower().endswith("/surveys") else base_url
             current_inventory = attrs.get(
@@ -233,7 +312,10 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         token = validated_data.pop("api_token", None)
-        connection_fields = {"provider_code", "base_url", "credential_env_keys", "config"}
+        connection_fields = {
+            "provider_code", "base_url", "credential_env_key", "credential_env_keys",
+            "supplier_code", "config",
+        }
         connection_changed = any(
             field in validated_data and validated_data[field] != getattr(instance, field)
             for field in connection_fields
@@ -241,7 +323,7 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
         instance = super().update(instance, validated_data)
         if token is not None:
             set_integration_token(instance, token)
-        if connection_changed and instance.provider_code == "rfg":
+        if connection_changed and instance.provider_code in {"rfg", "cint"}:
             instance.last_test_status = ""
             instance.last_test_error = "Connection settings changed; test the connection again."
             instance.scheduled_sync_enabled = False

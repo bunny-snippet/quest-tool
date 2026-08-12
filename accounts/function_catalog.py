@@ -114,6 +114,7 @@ FUNCTION_CATALOG = (
     ("prescreener_data.column.market", "Show country and language column", "Prescreened Data - Table columns", "Display the captured country and language snapshot.", ADMIN_ROLES),
     ("prescreener_data.column.profile", "Show reusable profile column", "Prescreened Data - Table columns", "Display normalized age, gender, ethnicity and postal profile values.", ADMIN_ROLES),
     ("prescreener_data.column.answers", "Show questions and answers", "Prescreened Data - Table columns", "Expand exact pre-screening questions and captured answers.", ADMIN_ROLES),
+    ("prescreener_data.column.usage_count", "Show profile usage count", "Prescreened Data - Table columns", "Display the original use plus policy-approved same-respondent reuses for this UID.", ADMIN_ROLES),
     ("prescreener_data.column.captured", "Show captured timestamp", "Prescreened Data - Table columns", "Display when the pre-screening submission was captured.", ADMIN_ROLES),
 
     ("termination_reasons.view", "View Term Reports page and sidebar", "Term Reports - Page & navigation", "Open the administrator-only provider outcome lookup page and display its sidebar item.", ADMIN_ROLES),

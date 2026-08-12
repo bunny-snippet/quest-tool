@@ -59,6 +59,8 @@ Pre-survey statuses are collapsed into the same five operational UI states: pend
 
 The landing page accepts RID aliases `PID`, `pid`, `QSID`, `qsid`, and `trackId` for integration tolerance. The canonical parameter remains `rid`.
 
+For Cint, the copied platform URL still opens the local pre-screener. On submit the immutable vault UID is the Cint PID and the attempt RID is the Cint MID. The live link also includes the logged-in respondent's normalized SHA-256 `cint_email` and the captured Cint question/precode parameters. The entire URL including its required trailing `&` is signed with HMAC-SHA1 using `CINT_HASH_KEY`; URL-safe Base64 without padding is appended as the final lowercase `hash` parameter. Links over 1999 characters fail closed.
+
 ## Trust and verification
 
 Browser redirects can be forged. Every callback starts as `is_verified=false`. Add InnovateMR server-to-server notification or redirect-hash validation before using a completion for rewards, invoices or financial reporting. The staff-only `/studies/` page, `/api/v1/survey-attempts/` endpoint and Django Admin expose the audit trail.

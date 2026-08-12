@@ -187,6 +187,8 @@ def replace_survey_targeting(client: InnovateMRClient, survey: Survey) -> None:
         ])
         survey.targeting_synced_at = timezone.now()
         survey.save(update_fields=["targeting_synced_at", "updated_at"])
+    from .mappings import sync_survey_mappings
+    sync_survey_mappings(survey)
 
 
 def replace_survey_details(client: InnovateMRClient, survey: Survey) -> None:

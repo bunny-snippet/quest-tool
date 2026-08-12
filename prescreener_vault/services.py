@@ -4,6 +4,7 @@ from datetime import date, datetime
 
 from django.conf import settings
 from django.db import transaction
+from django.db.models import F
 from django.utils import timezone
 
 from surveys.survey_flow import ensure_attempt_prescreener_uid
@@ -226,3 +227,20 @@ def capture_prescreener_submission(attempt, answers, *, submitted_at=None):
         raise
     except Exception as exc:
         raise PrescreenerVaultError(f"Prescreener vault write failed: {exc}") from exc
+
+
+def increment_profile_usage(uid: str) -> int:
+    """Atomically audit one policy-approved reuse of the same respondent profile."""
+    if not settings.PRESCREENER_VAULT_ENABLED:
+        raise PrescreenerVaultDisabled("The prescreener vault is not enabled.")
+    with transaction.atomic(using=DATABASE_ALIAS):
+        updated = PrescreenerSubmission.objects.using(DATABASE_ALIAS).filter(uid=uid).update(
+            usage_count=F("usage_count") + 1
+        )
+        if updated != 1:
+            raise PrescreenerVaultError("The reusable profile UID does not exist.")
+        return int(
+            PrescreenerSubmission.objects.using(DATABASE_ALIAS).values_list(
+                "usage_count", flat=True
+            ).get(uid=uid)
+        )

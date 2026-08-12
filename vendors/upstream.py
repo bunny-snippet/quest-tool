@@ -17,6 +17,7 @@ from .credentials import resolve_integration_token
 
 INNOVATE_DOCS = "https://developer.innovatemr.com"
 RFG_DOCS = "https://docs.researchforgood.com/RFGAPI/livealert/apidocs"
+CINT_DOCS = "https://developer.lucidhq.com"
 OPERATION_CODE_RE = re.compile(r"^[a-z][a-z0-9_]{1,79}$")
 SECRET_FIELD_NAMES = frozenset({
     "authorization", "api_key", "apikey", "access_token", "secret", "signature", "hash",
@@ -289,6 +290,76 @@ RFG_OPERATIONS = {
 }
 
 
+CINT_OPERATIONS = {
+    "inventory_ids": OperationSpec(
+        "inventory_ids", "Allocated survey IDs", "IDs of live surveys allocated to this Cint Supplier Code.",
+        "/Supply/v1/Surveys/Inventory/{supplier_code}", CINT_DOCS,
+        response_description="SupplyAllocationSurveyIDs currently allocated to this supplier.",
+    ),
+    "open_inventory": OperationSpec(
+        "open_inventory", "Open Marketplace surveys", "Live Marketplace opportunities without an existing allocation or entry link.",
+        "/Supply/v1/Surveys/AllOfferwall/{supplier_code}", CINT_DOCS,
+        response_description="Open Cint survey rows with SurveyNumber, buyer, market, LOI, IR, RPI and remaining capacity.",
+    ),
+    "allocated_inventory": OperationSpec(
+        "allocated_inventory", "Allocated surveys", "Live surveys allocated or linked to this Cint supplier.",
+        "/Supply/v1/Surveys/SupplierAllocations/All/{supplier_code}", CINT_DOCS,
+        response_description="SupplierAllocationSurveys visible to the configured supplier account.",
+    ),
+    "allocated_survey": OperationSpec(
+        "allocated_survey", "Allocated survey by ID", "One allocated survey including supplier allocation and link metadata when available.",
+        "/Supply/v1/Surveys/SupplierAllocations/BySurveyNumber/{survey_id}/{supplier_code}", CINT_DOCS,
+        required_parameters=("survey_id",),
+        response_description="One SupplierAllocationSurvey for the requested Cint SurveyNumber.",
+    ),
+    "supplier_link": OperationSpec(
+        "supplier_link", "Show supplier entry link", "Retrieve this supplier's live/test entry link and callback configuration for one survey.",
+        "/Supply/v1/SupplierLinks/BySurveyNumber/{survey_id}/{supplier_code}", CINT_DOCS,
+        required_parameters=("survey_id",),
+        response_description="The existing Cint SupplierLink with LiveLink, TestLink, tracking type and callback URLs.",
+    ),
+    "create_supplier_link": OperationSpec(
+        "create_supplier_link", "Create OWS supplier entry link", "Create a Cint Offerwall/Standalone link using this platform's four outcome redirects.",
+        "/Supply/v1/SupplierLinks/Create/{survey_id}/{supplier_code}", CINT_DOCS,
+        required_parameters=("survey_id",),
+        body_parameters=("confirm_upstream_mutation",),
+        upstream_method="POST",
+        mutating=True,
+        response_description="The new callback-enabled SupplierLink containing LiveLink and TestLink.",
+    ),
+    "targeting": OperationSpec(
+        "targeting", "Survey qualifications", "Questions and accepted Cint precodes defining the survey qualification.",
+        "/Supply/v1/SurveyQualifications/BySurveyNumberForOfferwall/{survey_id}", CINT_DOCS,
+        required_parameters=("survey_id",),
+        response_description="SurveyQualification questions, logical operators and accepted PreCodes.",
+    ),
+    "quota": OperationSpec(
+        "quota", "Supplier survey quotas", "Real-time total and demographic quota capacity available to this supplier.",
+        "/Supply/v1/SurveyQuotas/BySurveyNumber/{survey_id}/{supplier_code}", CINT_DOCS,
+        required_parameters=("survey_id",),
+        response_description="SurveyQuotas with RPI, conversion, real-time NumberOfRespondents and targeting questions.",
+    ),
+    "definitions": OperationSpec(
+        "definitions", "Global definitions", "Country-language, industry, sample, study, supplier-link and survey-status mappings.",
+        "/Lookup/v1/BasicLookups/BundledLookups/CountryLanguages,Industries,SampleTypes,StudyTypes,SupplierLinkTypes,SurveyStatuses",
+        CINT_DOCS,
+        response_description="Cint lookup dictionaries used to turn IDs into readable market and survey metadata.",
+    ),
+    "questions": OperationSpec(
+        "questions", "Question library", "All standard qualification questions for one CountryLanguageID.",
+        "/Lookup/v1/QuestionLibrary/AllQuestions/{country_language_id}", CINT_DOCS,
+        required_parameters=("country_language_id",),
+        response_description="Localized Cint question IDs, names, text and question types.",
+    ),
+    "question_options": OperationSpec(
+        "question_options", "Question options", "Localized answer labels and precodes for one Cint question.",
+        "/Lookup/v1/QuestionLibrary/AllQuestionOptions/{country_language_id}/{question_id}", CINT_DOCS,
+        required_parameters=("country_language_id", "question_id"),
+        response_description="Localized OptionText and Precode values for the requested Cint question.",
+    ),
+}
+
+
 INNOVATE_RESPONSE_DESCRIPTIONS = {
     "inventory": "Live survey rows allocated to this supplier account, including survey ID, market, CPI, IR, LOI, status and entry-link fields supplied by InnovateMR.",
     "paged_inventory": "One page of allocated live surveys plus the provider's next-page/cursor information.",
@@ -335,10 +406,18 @@ RFG_RESPONSE_DESCRIPTIONS = {
     "zip_to_geo": "RFG country/geography region indexes resolved from the postal code.",
 }
 
+CINT_RESPONSE_DESCRIPTIONS = {
+    code: spec.response_description for code, spec in CINT_OPERATIONS.items()
+}
+
 
 def operation_response_description(provider: str, spec: OperationSpec) -> str:
     provider = re.sub(r"[-_]", "", str(provider or "").lower())
-    mapping = RFG_RESPONSE_DESCRIPTIONS if provider == "rfg" else INNOVATE_RESPONSE_DESCRIPTIONS
+    mapping = (
+        RFG_RESPONSE_DESCRIPTIONS if provider == "rfg"
+        else CINT_RESPONSE_DESCRIPTIONS if provider == "cint"
+        else INNOVATE_RESPONSE_DESCRIPTIONS
+    )
     return mapping.get(spec.code, spec.response_description)
 
 
@@ -380,6 +459,8 @@ def operation_specs(integration) -> dict[str, OperationSpec]:
     provider = _provider_key(integration)
     if provider == "rfg":
         return dict(RFG_OPERATIONS)
+    if provider == "cint":
+        return dict(CINT_OPERATIONS)
     if provider == "innovatemr":
         operations = dict(INNOVATE_OPERATIONS)
     else:
@@ -450,6 +531,8 @@ def _effective_url(integration, spec: OperationSpec) -> str:
     endpoint = _configured_endpoint(integration, spec)
     if not endpoint:
         return "Not configured"
+    if _provider_key(integration) == "cint":
+        endpoint = endpoint.replace("{supplier_code}", quote(str(integration.supplier_code), safe=""))
     return InnovateMRClient(integration=integration).endpoint_url(endpoint)
 
 
@@ -460,6 +543,8 @@ def integration_metadata(integration) -> dict[str, Any]:
         aliases.update({"innovate", "innovatemr", "innovate-mr"})
     elif provider == "rfg":
         aliases.update({"rfg", "research-for-good"})
+    elif provider == "cint":
+        aliases.update({"cint", "cint-exchange", "lucid", "samplicio"})
     return {
         "client_code": integration.client.code,
         "lookup_aliases": sorted(alias for alias in aliases if alias),
@@ -523,7 +608,10 @@ def _limit_payload(payload: Any, limit: int) -> tuple[Any, int | None, bool]:
     if not isinstance(payload, dict):
         return payload, None, False
     limited = deepcopy(payload)
-    for key in ("result", "projects", "Surveys", "items"):
+    for key in (
+        "result", "projects", "Surveys", "SupplierAllocationSurveys", "SurveyQuotas",
+        "Questions", "QuestionOptions", "SupplyAllocationSurveyIDs", "items",
+    ):
         rows = limited.get(key)
         if isinstance(rows, list):
             limited[key] = rows[:limit]
@@ -679,6 +767,26 @@ def _execute_rest(integration, spec: OperationSpec, parameters: dict[str, Any]) 
     return client.request_json(endpoint, params=query or None)
 
 
+def _execute_cint(integration, spec: OperationSpec, parameters: dict[str, Any]) -> Any:
+    provider = get_provider(integration)
+    required = _required_values(spec, parameters)
+    endpoint = spec.endpoint.replace(
+        "{supplier_code}", quote(str(integration.supplier_code), safe="")
+    )
+    for name, value in required.items():
+        endpoint = endpoint.replace("{" + name + "}", quote(value, safe=""))
+    unresolved = re.findall(r"\{([^{}]+)\}", endpoint)
+    if unresolved:
+        raise UpstreamExplorerError(f"Missing endpoint value(s): {', '.join(unresolved)}.")
+    if spec.code == "create_supplier_link":
+        if parameters.get("confirm_upstream_mutation") is not True:
+            raise UpstreamExplorerError(
+                "This creates a live Cint supplier link. Set confirm_upstream_mutation=true."
+            )
+        return provider.explorer_create_supplier_link(required["survey_id"])
+    return provider.explorer_read(endpoint)
+
+
 def execute_operation(integration, operation: str, parameters: dict[str, Any]) -> dict[str, Any]:
     specs = operation_specs(integration)
     spec = specs.get(operation)
@@ -691,9 +799,12 @@ def execute_operation(integration, operation: str, parameters: dict[str, Any]) -
     except (TypeError, ValueError) as exc:
         raise UpstreamExplorerError("Limit must be a whole number from 1 to 200.") from exc
     try:
+        provider_key = _provider_key(integration)
         payload = (
             _execute_rfg(integration, spec, parameters)
-            if _provider_key(integration) == "rfg"
+            if provider_key == "rfg"
+            else _execute_cint(integration, spec, parameters)
+            if provider_key == "cint"
             else _execute_rest(integration, spec, parameters)
         )
     except (ProviderError, InnovateMRAPIError, ValueError) as exc:

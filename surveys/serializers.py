@@ -10,7 +10,17 @@ from accounts.access import has_function_access
 from vendors.access import is_external_vendor_scope, vendor_scope_user_id
 from vendors.services import organization_client_ids_for_user, survey_pricing_for_user
 
-from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
+from .models import (
+    CanonicalOption,
+    CanonicalQuestion,
+    ProviderOptionMapping,
+    ProviderQuestionMapping,
+    Survey,
+    SurveyAttempt,
+    SurveyQuota,
+    SyncRun,
+    TargetingQuestion,
+)
 from .outcomes import provider_outcome
 from .rfg_text import clean_rfg_display_text, clean_rfg_options
 
@@ -45,17 +55,21 @@ class SurveyQuotaSerializer(serializers.ModelSerializer):
         return obj.status or "Open"
 
     def get_target_known(self, obj) -> bool:
+        raw = obj.raw_data or {}
+        if "_target_known" in raw:
+            return bool(raw["_target_known"])
         if not self._is_rfg(obj):
             return True
-        raw = obj.raw_data or {}
         return obj.sample_size > 0 or any(
             raw.get(key) is not None for key in ("limit", "quotaTarget", "sampleSize")
         )
 
     def get_completed_known(self, obj) -> bool:
+        raw = obj.raw_data or {}
+        if "_completed_known" in raw:
+            return bool(raw["_completed_known"])
         if not self._is_rfg(obj):
             return True
-        raw = obj.raw_data or {}
         return any(raw.get(key) is not None for key in ("currentCompletes", "completes", "completed"))
 
     def get_limit_type(self, obj) -> str:
@@ -70,6 +84,10 @@ class SurveyQuotaSerializer(serializers.ModelSerializer):
         return datapoints if isinstance(datapoints, list) else []
 
     def get_scope_label(self, obj) -> str:
+        raw = obj.raw_data or {}
+        quota_type = str(raw.get("SurveyQuotaType") or "").strip().lower()
+        if quota_type:
+            return "Overall survey quota" if quota_type == "total" else f"{quota_type.title()} quota"
         return "Targeted respondent quota" if self._quota_datapoints(obj) else "Overall survey quota"
 
     @staticmethod
@@ -86,6 +104,9 @@ class SurveyQuotaSerializer(serializers.ModelSerializer):
         return f"{minimum}\u2013{maximum}"
 
     def get_targeting_details(self, obj) -> list:
+        normalized = (obj.raw_data or {}).get("targeting_details")
+        if isinstance(normalized, list):
+            return normalized
         questions = list(obj.survey.targeting_questions.all())
         details = []
         for datapoint in self._quota_datapoints(obj):
@@ -164,11 +185,49 @@ class TargetingQuestionSerializer(serializers.ModelSerializer):
             ]
             return (
                 f"Qualifying answer{'s' if len(qualifying) != 1 else ''}: {', '.join(qualifying)}"
-                if qualifying else "No fixed answer restriction was returned by RFG."
+                if qualifying else "No fixed answer restriction was returned by the provider."
             )
         if obj.category == "Required profile":
             return "Required respondent profile field."
         return ""
+
+
+class CanonicalOptionSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CanonicalOption
+        fields = ["code", "label", "normalized_value"]
+
+
+class CanonicalQuestionSerializer(serializers.ModelSerializer):
+    options = CanonicalOptionSerializer(many=True, read_only=True)
+
+    class Meta:
+        model = CanonicalQuestion
+        fields = ["code", "label", "value_type", "description", "options", "updated_at"]
+
+
+class ProviderOptionMappingSerializer(serializers.ModelSerializer):
+    canonical_option = serializers.SlugRelatedField(slug_field="code", read_only=True)
+
+    class Meta:
+        model = ProviderOptionMapping
+        fields = [
+            "external_value", "external_label", "canonical_option", "canonical_value",
+        ]
+
+
+class ProviderQuestionMappingSerializer(serializers.ModelSerializer):
+    canonical_key = serializers.CharField(source="canonical_question.code", read_only=True)
+    canonical_label = serializers.CharField(source="canonical_question.label", read_only=True)
+    options = ProviderOptionMappingSerializer(source="option_mappings", many=True, read_only=True)
+
+    class Meta:
+        model = ProviderQuestionMapping
+        fields = [
+            "provider_code", "country_code", "language_code", "country_language_id",
+            "external_question_id", "external_question_key", "canonical_key",
+            "canonical_label", "options", "updated_at",
+        ]
 
 
 class SurveyListSerializer(serializers.ModelSerializer):
@@ -249,7 +308,8 @@ class SurveyListSerializer(serializers.ModelSerializer):
             return None
         query = urlencode({
             "surveyId": obj.source_identifier,
-            "supplierCode": obj.integration.supplier_code if obj.integration_id else settings.PUBLIC_SUPPLIER_CODE,
+            # Public platform links never expose a client's real upstream supplier code.
+            "supplierCode": settings.PUBLIC_SUPPLIER_CODE,
             "userId": request.user.pk,
             "code": obj.local_id,
         })

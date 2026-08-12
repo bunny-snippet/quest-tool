@@ -2,7 +2,7 @@ import csv
 import ipaddress
 import json
 import logging
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 from urllib.parse import quote, urlencode
 
@@ -51,11 +51,13 @@ from .dashboard import (
 )
 from .excel import ExcelSheet, build_excel_response
 from .integrations import InnovateMRAPIError, InnovateMRClient
-from .models import Survey, SurveyAttempt, SyncRun
+from .models import CanonicalQuestion, ProviderQuestionMapping, Survey, SurveyAttempt, SyncRun
 from .outcomes import provider_outcome
 from .serializers import (
     SurveyDetailSerializer,
     DashboardResponseSerializer,
+    CanonicalQuestionSerializer,
+    ProviderQuestionMappingSerializer,
     SurveyListSerializer,
     SurveyAttemptSerializer,
     SurveyAttemptListResponseSerializer,
@@ -73,7 +75,7 @@ from prescreener_vault.services import (
     operational_answer_value,
 )
 from prescreener_vault.models import PrescreenerSubmission
-from .providers import ProviderError, get_provider
+from .providers import ProviderError, get_provider, has_provider
 from .rfg_outcomes import RFG_STATUS_MAP, describe_rfg_outcome
 from .rfg_text import clean_rfg_display_text
 from .services import reconcile_attempt_status, replace_survey_quotas, replace_survey_targeting, sync_surveys
@@ -232,6 +234,7 @@ PRESCREENER_DATA_COLUMN_PERMISSIONS = {
     "market": "prescreener_data.column.market",
     "profile": "prescreener_data.column.profile",
     "answers": "prescreener_data.column.answers",
+    "usage_count": "prescreener_data.column.usage_count",
     "captured": "prescreener_data.column.captured",
 }
 
@@ -511,7 +514,7 @@ def prescreener_data_export(request):
                 submission.language, submission.language_code, submission.respondent_age,
                 submission.respondent_age_group, submission.respondent_gender,
                 submission.respondent_ethnicity, submission.respondent_postal_code,
-                submission.answer_count, _excel_datetime(submission.submitted_at),
+                submission.usage_count, _excel_datetime(submission.submitted_at),
                 _excel_datetime(submission.captured_at),
             ]
 
@@ -533,7 +536,7 @@ def prescreener_data_export(request):
         [
             ExcelSheet(
                 "Submissions",
-                ["UID", "RID", "Country", "Country code", "Language", "Language code", "Age", "Age group", "Gender", "Ethnicity", "ZIP / postal code", "Answer count", "Submitted at (IST)", "Captured at (IST)"],
+                ["UID", "RID", "Country", "Country code", "Language", "Language code", "Age", "Age group", "Gender", "Ethnicity", "ZIP / postal code", "Usage count", "Submitted at (IST)", "Captured at (IST)"],
                 submission_rows(),
                 [22, 14, 20, 13, 17, 14, 9, 13, 14, 24, 18, 13, 22, 22],
             ),
@@ -1004,7 +1007,7 @@ def survey_start(request):
         )
         if not survey.entry_link and not is_rfg:
             return _invalid_survey_link(request)
-        expected_supplier_code = survey.integration.supplier_code if survey.integration_id else settings.PUBLIC_SUPPLIER_CODE
+        expected_supplier_code = settings.PUBLIC_SUPPLIER_CODE
         if supplier_code != expected_supplier_code:
             return _invalid_survey_link(request)
 
@@ -1018,7 +1021,7 @@ def survey_start(request):
         targeting_warning = ""
         if stale:
             try:
-                if is_rfg:
+                if survey.integration_id and has_provider(survey.integration.provider_code):
                     get_provider(survey.integration).refresh_details(survey)
                 else:
                     replace_survey_targeting(InnovateMRClient(integration=survey.integration), survey)
@@ -1087,9 +1090,13 @@ def survey_start(request):
             try:
                 if settings.PRESCREENER_VAULT_ENABLED:
                     capture_prescreener_submission(attempt, answers)
-                provider = None
-                if attempt.survey.integration_id and attempt.survey.integration.provider_code == "rfg":
-                    provider = get_provider(attempt.survey.integration)
+                provider = (
+                    get_provider(attempt.survey.integration)
+                    if attempt.survey.integration_id
+                    and has_provider(attempt.survey.integration.provider_code)
+                    else None
+                )
+                if provider and attempt.survey.integration.provider_code == "rfg":
                     eligible, reason = provider.validate_prescreener(attempt.survey, answers)
                     if not eligible:
                         _finish_local_rfg_attempt(
@@ -1361,25 +1368,86 @@ def survey_status(request):
 
 @extend_schema_view(
     list=extend_schema(
-        tags=["Surveys"],
-        summary="List synchronized surveys",
+        tags=["Canonical qualification mappings"],
+        summary="List stable internal qualification keys",
         description=(
-            "Returns locally stored surveys using page-number pagination. Search matches project ID, upstream survey ID, "
-            "survey name, country and category. Date filters accept ISO-8601 timestamps."
+            "Provider-neutral question and answer keys. External supplier integrations should use these "
+            "keys instead of hard-coding InnovateMR, RFG or Cint IDs."
+        ),
+    ),
+    retrieve=extend_schema(
+        tags=["Canonical qualification mappings"],
+        summary="Get one stable qualification definition",
+    ),
+)
+class CanonicalQuestionViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = CanonicalQuestion.objects.filter(is_active=True).prefetch_related("options")
+    serializer_class = CanonicalQuestionSerializer
+    lookup_field = "code"
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = ["code", "label", "description"]
+    ordering_fields = ["code", "label", "updated_at"]
+    ordering = ["code"]
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Canonical qualification mappings"],
+        summary="List provider-to-platform question mappings",
+        description=(
+            "Shows how each provider's country/language-specific question IDs and answer precodes map "
+            "to stable platform keys. Filter with provider_code, country_code, language_code or canonical_key."
         ),
         parameters=[
-            OpenApiParameter("search", OpenApiTypes.STR, description="Free-text search across survey identifiers and descriptive fields."),
-            OpenApiParameter("ordering", OpenApiTypes.STR, description="One of source_modified_at, source_created_at, cpi, sample_size, completes, created_at; prefix '-' for descending."),
-            OpenApiParameter("page", OpenApiTypes.INT, description="1-based result page."),
-            OpenApiParameter("page_size", OpenApiTypes.INT, description="Rows per page (1–100, default 20)."),
-            OpenApiParameter("buyer_id", OpenApiTypes.STR, description="Comma-separated buyer/sub-client IDs."),
-            OpenApiParameter("survey_type", OpenApiTypes.STR, description="Comma-separated normalized audience types, for example B2B,B2C."),
+            OpenApiParameter("provider_code", OpenApiTypes.STR),
+            OpenApiParameter("country_code", OpenApiTypes.STR),
+            OpenApiParameter("language_code", OpenApiTypes.STR),
+            OpenApiParameter("country_language_id", OpenApiTypes.STR),
+            OpenApiParameter("canonical_key", OpenApiTypes.STR),
         ],
+    ),
+)
+class ProviderQuestionMappingViewSet(viewsets.ReadOnlyModelViewSet):
+    queryset = ProviderQuestionMapping.objects.filter(is_active=True).select_related(
+        "canonical_question"
+    ).prefetch_related("option_mappings__canonical_option")
+    serializer_class = ProviderQuestionMappingSerializer
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter, filters.OrderingFilter]
+    search_fields = [
+        "external_question_id", "external_question_key", "canonical_question__code",
+        "canonical_question__label",
+    ]
+    ordering_fields = ["provider_code", "country_code", "language_code", "external_question_id"]
+    ordering = ["provider_code", "country_code", "language_code", "external_question_id"]
+
+    def get_queryset(self):
+        queryset = super().get_queryset()
+        exact_filters = {
+            "provider_code": "provider_code__iexact",
+            "country_code": "country_code__iexact",
+            "language_code": "language_code__iexact",
+            "country_language_id": "country_language_id",
+            "canonical_key": "canonical_question__code",
+        }
+        for parameter, lookup in exact_filters.items():
+            value = self.request.query_params.get(parameter)
+            if value not in (None, ""):
+                queryset = queryset.filter(**{lookup: value})
+        return queryset
+
+
+@extend_schema_view(
+    list=extend_schema(
+        tags=["Surveys"],
+        summary="List synchronized surveys",
+        description="Returns locally stored surveys using the requesting user's access scope.",
     ),
     retrieve=extend_schema(
         tags=["Surveys"],
         summary="Get one survey",
-        description="Looks up a survey by the platform's immutable 14-digit local_id and embeds current quotas and targeting questions.",
+        description="Returns one project with normalized quota and targeting details.",
     ),
 )
 class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
@@ -1462,8 +1530,15 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         stale = synced_at is None or (
             survey.source_modified_at is not None and synced_at < survey.source_modified_at
         )
+        if (
+            survey.integration_id
+            and survey.integration.provider_code == "cint"
+            and synced_at is not None
+            and synced_at < timezone.now() - timedelta(seconds=60)
+        ):
+            stale = True
         if stale:
-            if survey.integration_id and survey.integration.provider_code == "rfg":
+            if survey.integration_id and has_provider(survey.integration.provider_code):
                 get_provider(survey.integration).refresh_details(survey)
             else:
                 refresh = replace_survey_quotas if detail_type == "quotas" else replace_survey_targeting

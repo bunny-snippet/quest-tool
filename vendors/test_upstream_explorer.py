@@ -8,7 +8,7 @@ from accounts.models import Role
 
 from .models import Client, ClientIntegration
 from .schema import filter_unconfigured_upstream_provider_endpoints, remove_unconfigured_upstream_provider_tags
-from .upstream import INNOVATE_OPERATIONS, RFG_OPERATIONS, operation_response_description
+from .upstream import CINT_OPERATIONS, INNOVATE_OPERATIONS, RFG_OPERATIONS, operation_response_description
 
 
 class UpstreamExplorerTests(TestCase):
@@ -50,13 +50,17 @@ class UpstreamExplorerTests(TestCase):
     def test_every_documented_provider_operation_has_named_route_and_plain_language_contract(self):
         self.assertEqual(len(INNOVATE_OPERATIONS), 34)
         self.assertEqual(len(RFG_OPERATIONS), 12)
+        self.assertEqual(len(CINT_OPERATIONS), 11)
         for provider, operations in (
             ("innovatemr", INNOVATE_OPERATIONS),
             ("rfg", RFG_OPERATIONS),
+            ("cint", CINT_OPERATIONS),
         ):
             for code, spec in operations.items():
                 route_name = f"upstream-explorer-{provider}-{code.replace('_', '-')}"
-                route = reverse(route_name, args=["innovate" if provider == "innovatemr" else "rfg"])
+                route = reverse(route_name, args=[
+                    "innovate" if provider == "innovatemr" else provider
+                ])
                 self.assertIn(f"/{provider}/{code.replace('_', '-')}/", route)
                 self.assertTrue(spec.description)
                 self.assertTrue(spec.documentation_url.startswith("http"))
@@ -71,20 +75,76 @@ class UpstreamExplorerTests(TestCase):
         endpoints = [
             ("/api/v1/vendors/upstream-explorer/{client_code}/innovatemr/inventory/", "", "GET", object()),
             ("/api/v1/vendors/upstream-explorer/{client_code}/rfg/inventory/", "", "GET", object()),
+            ("/api/v1/vendors/upstream-explorer/{client_code}/cint/quota/", "", "GET", object()),
             ("/survey/rfg/callback", "", "GET", object()),
             ("/api/v1/vendors/upstream-explorer/", "", "GET", object()),
         ]
         filtered = filter_unconfigured_upstream_provider_endpoints(endpoints)
-        self.assertEqual([item[0] for item in filtered], [endpoints[0][0], endpoints[3][0]])
+        self.assertEqual([item[0] for item in filtered], [endpoints[0][0], endpoints[4][0]])
         schema = {"tags": [
             {"name": "Client API catalog"}, {"name": "InnovateMR APIs"},
-            {"name": "RFG APIs"}, {"name": "RFG Callbacks"},
+            {"name": "RFG APIs"}, {"name": "RFG Callbacks"}, {"name": "Cint Exchange APIs"},
         ]}
         result = remove_unconfigured_upstream_provider_tags(schema, None, None, False)
         self.assertEqual(
             [item["name"] for item in result["tags"]],
             ["Client API catalog", "InnovateMR APIs"],
         )
+
+    @patch.dict("os.environ", {"TEST_CINT_TOKEN": "server-only-cint-key"})
+    @patch("surveys.providers.cint.CintProvider.explorer_read")
+    def test_cint_quota_uses_real_supplier_code_and_server_credential(self, explorer_read):
+        explorer_read.return_value = {"ApiResult": 0, "SurveyQuotas": []}
+        cint_client = Client.objects.create(code="cint", name="Cint Exchange", provider_code="cint")
+        ClientIntegration.objects.create(
+            client=cint_client,
+            name="Cint production",
+            provider_code="cint",
+            base_url="https://api.samplicio.us",
+            credential_env_key="TEST_CINT_TOKEN",
+            supplier_code="0050",
+            auth_header_name="Authorization",
+        )
+        response = self.client.get(
+            reverse("upstream-explorer-cint-quota", args=["cint"]),
+            {"survey_id": "254256"},
+        )
+        self.assertEqual(response.status_code, 200)
+        explorer_read.assert_called_once_with(
+            "/Supply/v1/SurveyQuotas/BySurveyNumber/254256/0050"
+        )
+        self.assertNotIn("server-only-cint-key", response.content.decode())
+
+    @patch.dict("os.environ", {"TEST_CINT_TOKEN": "server-only-cint-key"})
+    @patch("surveys.providers.cint.CintProvider.explorer_create_supplier_link")
+    def test_cint_supplier_link_creation_requires_confirmation(self, create_link):
+        create_link.return_value = {
+            "ApiResult": 0,
+            "SupplierLink": {"LiveLink": "https://samplicio.us/s/default.aspx?SID=test&PID="},
+        }
+        cint_client = Client.objects.create(code="cint-create", name="Cint Create", provider_code="cint")
+        ClientIntegration.objects.create(
+            client=cint_client,
+            name="Cint production",
+            provider_code="cint",
+            base_url="https://api.samplicio.us",
+            credential_env_key="TEST_CINT_TOKEN",
+            supplier_code="0050",
+            auth_header_name="Authorization",
+        )
+        route = reverse("upstream-explorer-cint-create-supplier-link", args=["cint-create"])
+        rejected = self.client.post(
+            route, {"survey_id": "254256", "confirm_upstream_mutation": False},
+            content_type="application/json",
+        )
+        self.assertEqual(rejected.status_code, 400)
+        create_link.assert_not_called()
+        accepted = self.client.post(
+            route, {"survey_id": "254256", "confirm_upstream_mutation": True},
+            content_type="application/json",
+        )
+        self.assertEqual(accepted.status_code, 200)
+        create_link.assert_called_once_with("254256")
 
     @patch.dict("os.environ", {"TEST_INNOVATE_TOKEN": "server-only-token"})
     def test_catalog_documents_urls_without_exposing_secret(self):
