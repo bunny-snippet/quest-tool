@@ -2,8 +2,8 @@ openapi: 3.0.3
 info:
   title: Survey Workspace API
   version: 1.0.0
-  description: Internal multi-provider survey API. The client-specific InnovateMR
-    and RFG sections let authorized administrators execute allow-listed provider operations
+  description: Internal multi-provider survey API. Active client-provider sections
+    let authorized administrators execute allow-listed provider operations
     while every credential remains server-side. Authentication requires the current
     Django admin session and the separate documentation password.
 paths:
