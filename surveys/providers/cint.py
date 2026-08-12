@@ -1,7 +1,10 @@
 import base64
 import hashlib
 import hmac
+import json
+import logging
 import re
+import time
 from datetime import datetime, timezone as dt_timezone
 from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
@@ -21,6 +24,9 @@ from .base import (
     SurveyProvider,
     environment_value,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 class CintProvider(SurveyProvider):
@@ -55,6 +61,10 @@ class CintProvider(SurveyProvider):
             )
         config = integration.config or {}
         self.timeout = max(5, min(int(config.get("timeout_seconds", 45)), 120))
+        self.request_wall_timeout = max(
+            self.timeout,
+            min(int(config.get("request_wall_timeout_seconds", 150)), 300),
+        )
         self.include_open = config.get("include_open_opportunities", True) is not False
         self.include_allocated = config.get("include_allocated_surveys", True) is not False
         self.manage_supplier_links = config.get("manage_supplier_links", True) is not False
@@ -70,17 +80,34 @@ class CintProvider(SurveyProvider):
 
     def _request(self, path, *, method="GET", payload=None, allow_not_found=False):
         url = urljoin(self.base_url, str(path).lstrip("/"))
+        started = time.monotonic()
         try:
             headers = {"Authorization": self.api_key, "Accept": "application/json"}
             if method == "POST":
                 headers["Content-Type"] = "application/json"
-                response = self.session.post(url, headers=headers, json=payload or {}, timeout=self.timeout)
+                response = self.session.post(
+                    url, headers=headers, json=payload or {}, timeout=(10, self.timeout)
+                )
             else:
-                response = self.session.get(url, headers=headers, timeout=self.timeout)
+                response = self.session.get(
+                    url, headers=headers, timeout=(10, self.timeout), stream=True
+                )
             if allow_not_found and response.status_code == 404:
                 return {}
             response.raise_for_status()
-            data = response.json()
+            if method == "GET" and hasattr(response, "iter_content"):
+                body = bytearray()
+                for chunk in response.iter_content(chunk_size=64 * 1024):
+                    if time.monotonic() - started > self.request_wall_timeout:
+                        response.close()
+                        raise ProviderError(
+                            f"Cint Exchange request exceeded {self.request_wall_timeout} seconds."
+                        )
+                    if chunk:
+                        body.extend(chunk)
+                data = json.loads(body.decode(response.encoding or "utf-8"))
+            else:
+                data = response.json()
         except requests.RequestException as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             suffix = f" (HTTP {status})" if status else ""
@@ -153,15 +180,6 @@ class CintProvider(SurveyProvider):
     def inventory(self):
         self._load_definitions()
         merged = {}
-        if self.include_open:
-            data = self._request(f"Supply/v1/Surveys/AllOfferwall/{self.supplier_code}")
-            for row in self._rows(data, "Surveys"):
-                if row.get("SurveyNumber") is None:
-                    continue
-                merged[str(row["SurveyNumber"])] = {
-                    **row,
-                    "_cint_inventory_source": "open_opportunity",
-                }
         if self.include_allocated:
             data = self._request(
                 f"Supply/v1/Surveys/SupplierAllocations/All/{self.supplier_code}"
@@ -175,6 +193,30 @@ class CintProvider(SurveyProvider):
                     **row,
                     "_cint_inventory_source": "allocated",
                 }
+        if self.include_open:
+            try:
+                data = self._request(f"Supply/v1/Surveys/AllOfferwall/{self.supplier_code}")
+            except ProviderError:
+                if not merged:
+                    raise
+                logger.warning(
+                    "Cint open-opportunity inventory failed; continuing with %s allocated surveys "
+                    "for integration=%s.",
+                    len(merged), self.integration.pk,
+                    exc_info=True,
+                )
+            else:
+                for row in self._rows(data, "Surveys"):
+                    if row.get("SurveyNumber") is None:
+                        continue
+                    key = str(row["SurveyNumber"])
+                    merged[key] = {
+                        **row,
+                        **merged.get(key, {}),
+                        "_cint_inventory_source": (
+                            "allocated" if key in merged else "open_opportunity"
+                        ),
+                    }
         return list(merged.values())
 
     @staticmethod

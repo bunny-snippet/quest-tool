@@ -219,6 +219,7 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 "timeout_seconds", "include_open_opportunities",
                 "include_allocated_surveys", "detail_refresh_batch",
                 "manage_supplier_links", "create_missing_supplier_links", "hash_key_env",
+                "request_wall_timeout_seconds",
                 "profile_reuse_enabled", "profile_reuse_percentage", "country_strict_reuse",
             }
             unexpected = set(config) - allowed_config
@@ -247,6 +248,16 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
             if config.get("profile_reuse_enabled") is not True and reuse_percentage != 0:
                 raise serializers.ValidationError({
                     "config": "Reuse percentage must remain 0 while profile reuse is disabled."
+                })
+            try:
+                wall_timeout = int(config.get("request_wall_timeout_seconds", 150))
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError({
+                    "config": "request_wall_timeout_seconds must be a whole number."
+                }) from exc
+            if not 30 <= wall_timeout <= 300:
+                raise serializers.ValidationError({
+                    "config": "request_wall_timeout_seconds must be between 30 and 300."
                 })
             try:
                 interval = int(attrs.get(

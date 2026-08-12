@@ -42,6 +42,9 @@ def dispatch_due_integrations_task():
     for integration in integrations:
         if integration.provider_code in {"biobrain", "voqall"} and not resolve_integration_token(integration):
             continue
+        lease_name = f"integration-{integration.pk}-sync"
+        if SyncLease.objects.filter(name=lease_name, locked_until__gt=now).exists():
+            continue
         interval_seconds = {
             "innovatemr": settings.CLIENT_INTEGRATION_INNOVATEMR_SYNC_INTERVAL_SECONDS,
             "rfg": settings.CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS,
@@ -60,7 +63,11 @@ def dispatch_due_integrations_task():
     return {"queued": queued, "count": len(queued)}
 
 
-@shared_task(name="surveys.sync_client_integration", autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+@shared_task(
+    name="surveys.sync_client_integration",
+    soft_time_limit=240,
+    time_limit=270,
+)
 def sync_client_integration_task(integration_id):
     integration = ClientIntegration.objects.select_related("client").get(pk=integration_id, is_active=True)
     lease_name = f"integration-{integration_id}-sync"

@@ -14,6 +14,7 @@ from vendors.serializers import ClientIntegrationSerializer
 
 from .models import ProviderQuestionMapping, Survey, SurveyAttempt
 from .provider_services import sync_client_integration
+from .providers import ProviderError
 from .providers.cint import CintProvider
 from .serializers import SurveyListSerializer, SurveyQuotaSerializer, TargetingQuestionSerializer
 
@@ -80,6 +81,19 @@ class CintProviderTests(TestCase):
             DEFINITIONS,
             {
                 "ApiResult": 0,
+                "SupplierAllocationSurveys": [{
+                    "SurveyName": "Allocated business study",
+                    "SurveyNumber": 143479,
+                    "AccountName": "Buyer B",
+                    "CountryLanguageID": 9,
+                    "LengthOfInterview": 8,
+                    "BidIncidence": 45,
+                    "SampleTypeID": 2,
+                    "StudyTypeID": 1,
+                }],
+            },
+            {
+                "ApiResult": 0,
                 "Surveys": [{
                     "SurveyName": "Open consumer study",
                     "SurveyNumber": 457751,
@@ -91,19 +105,6 @@ class CintProviderTests(TestCase):
                     "OverallCompletes": 5,
                     "TotalRemaining": 95,
                     "SampleTypeID": 1,
-                    "StudyTypeID": 1,
-                }],
-            },
-            {
-                "ApiResult": 0,
-                "SupplierAllocationSurveys": [{
-                    "SurveyName": "Allocated business study",
-                    "SurveyNumber": 143479,
-                    "AccountName": "Buyer B",
-                    "CountryLanguageID": 9,
-                    "LengthOfInterview": 8,
-                    "BidIncidence": 45,
-                    "SampleTypeID": 2,
                     "StudyTypeID": 1,
                 }],
             },
@@ -124,10 +125,24 @@ class CintProviderTests(TestCase):
         self.assertIsNone(allocated.cpi)
         self.assertEqual(allocated.entry_link, "")
         self.assertEqual(session.calls[0][1]["headers"]["Authorization"], "cint-secret")
-        self.assertTrue(session.calls[1][0].endswith("/Supply/v1/Surveys/AllOfferwall/0050"))
-        self.assertTrue(session.calls[2][0].endswith(
+        self.assertTrue(session.calls[1][0].endswith(
             "/Supply/v1/Surveys/SupplierAllocations/All/0050"
         ))
+        self.assertTrue(session.calls[2][0].endswith("/Supply/v1/Surveys/AllOfferwall/0050"))
+
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_inventory_keeps_allocated_surveys_when_open_opportunities_fail(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+        allocated = {
+            "ApiResult": 0,
+            "SupplierAllocationSurveys": [{"SurveyNumber": 143479}],
+        }
+        with patch.object(provider, "_load_definitions"), patch.object(
+            provider, "_request", side_effect=[allocated, ProviderError("open inventory timeout")]
+        ):
+            rows = provider.inventory()
+
+        self.assertEqual([row["SurveyNumber"] for row in rows], [143479])
 
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
     def test_refresh_details_builds_targeting_and_quota_drawer_data(self):

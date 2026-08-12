@@ -18,7 +18,7 @@ from accounts.models import AccessFunction, EmployeeProfile, Role, UserFunctionO
 from vendors.models import Client, ClientIntegration, OrganizationUnit
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
-from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
+from .models import Survey, SurveyAttempt, SurveyQuota, SyncLease, SyncRun, TargetingQuestion
 from .services import (
     merge_inventory,
     parse_upstream_datetime,
@@ -204,6 +204,26 @@ class SurveySyncTests(TestCase):
             self.assertNotIn(integration.pk, dispatch_due_integrations_task()["queued"])
         with patch.dict(os.environ, {"TEST_BIOBRAIN_API_KEY": "bio-secret"}):
             self.assertIn(integration.pk, dispatch_due_integrations_task()["queued"])
+
+    @patch("surveys.tasks.sync_client_integration_task.delay")
+    def test_dispatcher_does_not_requeue_an_integration_with_an_active_lease(self, delay):
+        from .tasks import dispatch_due_integrations_task
+
+        ClientIntegration.objects.all().delete()
+        client = Client.objects.create(
+            code="leased-cint", name="Leased Cint", provider_code="cint"
+        )
+        integration = ClientIntegration.objects.create(
+            client=client, name="Cint running", provider_code="cint",
+            base_url="https://api.samplicio.us", supplier_code="50",
+            last_test_status="success", last_sync_started_at=timezone.now() - timedelta(minutes=2),
+        )
+        self.assertTrue(SyncLease.acquire(f"integration-{integration.pk}-sync", seconds=300))
+
+        result = dispatch_due_integrations_task()
+
+        self.assertNotIn(integration.pk, result["queued"])
+        delay.assert_not_called()
 
     @patch("surveys.tasks.sync_surveys")
     def test_successful_biobrain_inventory_publishes_hidden_client(self, sync_mock):
