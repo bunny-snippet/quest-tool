@@ -148,7 +148,9 @@ class SurveyQuotaSerializer(serializers.ModelSerializer):
 class TargetingQuestionSerializer(serializers.ModelSerializer):
     text = serializers.SerializerMethodField()
     options = serializers.SerializerMethodField()
-    targeting_note = serializers.SerializerMethodField(help_text="Readable RFG qualifying-answer or age rule for internal project details.")
+    targeting_note = serializers.SerializerMethodField(
+        help_text="Readable provider qualifying-answer or age rule for internal project details."
+    )
 
     class Meta:
         model = TargetingQuestion

@@ -7,6 +7,7 @@ The operational and prescreener MySQL databases remain the source of truth. Redi
 - Redis database `0`: Celery broker.
 - Redis database `1`: Celery result backend.
 - Redis database `2`: Django application cache.
+- Redis database `3`: Projects filter/count cache.
 
 Do not point the Django cache at database `0` or `1`. A Celery purge must never evict web caches, and clearing web caches must never delete queued work.
 
@@ -20,6 +21,12 @@ The first cache integration accelerates the isolated prescreener vault:
 
 Submission rows, raw question/answer payloads, survey attempts, live status, quota reservations, and callbacks continue to read/write the authoritative databases directly. New submissions and usage-count changes increment a Redis namespace version, which invalidates every related cached value without scanning keys.
 
+Projects uses a separate cache alias and Redis database. It caches only scoped
+filter choices and filtered result counts. Survey rows, prices, permissions,
+capacity decisions, and respondent copy links are always generated from the
+current request and authoritative database records. Provider sync and access or
+allocation changes advance the Projects namespace version without flushing Redis.
+
 ## Expiration policy
 
 Every ordinary cache write receives a random TTL spread around its configured base. For example, a 900-second base with 180-second jitter expires independently between 720 and 1080 seconds. This avoids many keys expiring simultaneously and stampeding MySQL.
@@ -31,6 +38,7 @@ The namespace version key does not expire. Cache keys do not contain filter valu
 ```dotenv
 CACHE_ENABLED=true
 REDIS_CACHE_URL=redis://127.0.0.1:6379/2
+PROJECTS_REDIS_CACHE_URL=redis://127.0.0.1:6379/3
 CACHE_KEY_PREFIX=quest-tool
 CACHE_DEFAULT_TTL_SECONDS=900
 CACHE_TTL_JITTER_SECONDS=180
@@ -40,7 +48,16 @@ CACHE_MAX_CONNECTIONS=100
 VAULT_CACHE_OPTIONS_TTL_SECONDS=600
 VAULT_CACHE_SUMMARY_TTL_SECONDS=180
 VAULT_CACHE_PROFILE_TTL_SECONDS=900
+PROJECT_CACHE_DEFAULT_TTL_SECONDS=300
+PROJECT_CACHE_TTL_JITTER_SECONDS=60
+PROJECT_CACHE_FILTERS_TTL_SECONDS=600
+PROJECT_CACHE_COUNT_TTL_SECONDS=90
 ```
+
+TTL is per key. A 900-second TTL never stops or restarts Redis, Django,
+Gunicorn, or Celery. Only that cached value expires; its next read safely
+rebuilds it from MySQL. With the configured 180-second jitter, a default
+900-second value expires between 720 and 1080 seconds.
 
 Redis should listen only on localhost (or a private network with authentication and TLS). The short one-second timeouts intentionally fail open to MySQL rather than holding web workers during a Redis outage.
 

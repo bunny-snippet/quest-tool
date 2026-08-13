@@ -1,12 +1,21 @@
 from unittest.mock import patch
 
-from django.core.cache import cache
-from django.test import SimpleTestCase, override_settings
+from django.contrib.auth import get_user_model
+from django.core.cache import cache, caches
+from django.test import SimpleTestCase, TestCase, override_settings
+from rest_framework.request import Request
+from rest_framework.test import APIRequestFactory
 
 from config.cache_utils import (
     jittered_ttl,
     safe_cache_get_or_set,
     stable_cache_key,
+)
+from surveys.models import Survey
+from surveys.project_cache import (
+    invalidate_project_cache,
+    project_filter_metadata,
+    project_filtered_count,
 )
 
 
@@ -40,12 +49,88 @@ class CacheUtilityTests(SimpleTestCase):
         self.assertEqual(second, {"value": 1})
         self.assertEqual(len(calls), 1)
 
-    @patch("config.cache_utils.cache.get", side_effect=ConnectionError("redis unavailable"))
-    @patch("config.cache_utils.cache.set", side_effect=ConnectionError("redis unavailable"))
-    def test_cache_outage_falls_back_to_factory(self, cache_set, cache_get):
+    @patch("config.cache_utils._cache")
+    def test_cache_outage_falls_back_to_factory(self, cache_lookup):
+        backend = cache_lookup.return_value
+        backend.get.side_effect = ConnectionError("redis unavailable")
+        backend.set.side_effect = ConnectionError("redis unavailable")
         self.assertEqual(
             safe_cache_get_or_set("test:outage", lambda: {"from": "database"}),
             {"from": "database"},
         )
-        cache_get.assert_called_once()
-        cache_set.assert_called_once()
+        backend.get.assert_called_once()
+        backend.set.assert_called_once()
+
+
+@override_settings(
+    PROJECT_CACHE_FILTERS_TTL_SECONDS=600,
+    PROJECT_CACHE_COUNT_TTL_SECONDS=90,
+    PROJECT_CACHE_TTL_JITTER_SECONDS=0,
+)
+class ProjectCacheTests(TestCase):
+    def setUp(self):
+        caches["projects"].clear()
+        self.user = get_user_model().objects.create_user(
+            username="project-cache-user",
+            password="test-password",
+        )
+        Survey.objects.create(
+            source_id=101,
+            company_name="InnovateMR",
+            country="United States",
+            country_code="US",
+            buyer_id="buyer-a",
+            survey_type="B2C",
+            cpi="2.50",
+        )
+
+    def test_filter_metadata_is_cached_then_version_invalidated(self):
+        first = project_filter_metadata(
+            Survey.objects.all(),
+            user_id=self.user.pk,
+            client_scoped=False,
+            include_cpi=True,
+        )
+        self.assertEqual(first["countries"], [("US", "United States")])
+
+        Survey.objects.create(
+            source_id=102,
+            company_name="Cint Exchange",
+            country="Canada",
+            country_code="CA",
+            cpi="4.00",
+        )
+        cached = project_filter_metadata(
+            Survey.objects.all(),
+            user_id=self.user.pk,
+            client_scoped=False,
+            include_cpi=True,
+        )
+        self.assertEqual(cached["countries"], [("US", "United States")])
+
+        invalidate_project_cache()
+        refreshed = project_filter_metadata(
+            Survey.objects.all(),
+            user_id=self.user.pk,
+            client_scoped=False,
+            include_cpi=True,
+        )
+        self.assertEqual([row[0] for row in refreshed["countries"]], ["CA", "US"])
+        self.assertEqual(str(refreshed["cpi_max"]), "4")
+
+    def test_count_cache_does_not_cache_project_rows(self):
+        request = Request(APIRequestFactory().get("/api/v1/surveys/?country=US"))
+        request.user = self.user
+        queryset = Survey.objects.filter(country_code="US")
+        self.assertEqual(project_filtered_count(request, queryset), 1)
+
+        second = Survey.objects.create(
+            source_id=103,
+            company_name="InnovateMR",
+            country="United States",
+            country_code="US",
+        )
+        self.assertEqual(project_filtered_count(request, queryset), 1)
+        self.assertTrue(Survey.objects.filter(pk=second.pk).exists())
+        invalidate_project_cache()
+        self.assertEqual(project_filtered_count(request, queryset), 2)

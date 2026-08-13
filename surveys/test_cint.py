@@ -12,11 +12,12 @@ from rest_framework.test import APIClient, APIRequestFactory
 from vendors.models import Client, ClientIntegration
 from vendors.serializers import ClientIntegrationSerializer
 
-from .models import ProviderQuestionMapping, Survey, SurveyAttempt
+from .models import ProviderQuestionMapping, Survey, SurveyAttempt, TargetingQuestion
 from .provider_services import sync_client_integration
 from .providers import ProviderError
 from .providers.cint import CintProvider
 from .serializers import SurveyListSerializer, SurveyQuotaSerializer, TargetingQuestionSerializer
+from .views import _prescreener_questions
 
 
 class FakeResponse:
@@ -257,6 +258,7 @@ class CintProviderTests(TestCase):
             [(item["OptionText"], item["Qualifies"]) for item in question_data["options"]],
             [("Male", True), ("Female", False)],
         )
+        self.assertEqual(question_data["targeting_note"], "Qualifying answer: Male")
         quota = survey.quotas.get(source_key="1781601")
         quota_data = SurveyQuotaSerializer(quota).data
         self.assertFalse(quota_data["target_known"])
@@ -274,6 +276,56 @@ class CintProviderTests(TestCase):
             set(mapping.option_mappings.values_list("canonical_option__code", flat=True)),
             {"male", "female"},
         )
+
+    def test_cint_prescreener_shows_qualifying_age_and_choice_hints(self):
+        self.assertEqual(
+            CintProvider._numeric_ranges(["18", "19", "20", "25"]),
+            [{"min": 18, "max": 20}, {"min": 25, "max": 25}],
+        )
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_id=143480,
+            source_key="143480",
+            company_name="Cint Exchange",
+        )
+        TargetingQuestion.objects.create(
+            survey=survey,
+            question_id=42,
+            key="AGE",
+            text="What is your age?",
+            question_type="Numeric",
+            category="Cint qualification",
+            options=[
+                {"OptionId": "18", "OptionText": "18"},
+                {"OptionId": "19", "OptionText": "19"},
+                {"OptionId": "20", "OptionText": "20"},
+            ],
+            raw_data={
+                "provider": "cint",
+                "targeting_choices": ["18", "19", "20"],
+                "targeting_age_ranges": [{"min": 18, "max": 20}],
+            },
+        )
+        TargetingQuestion.objects.create(
+            survey=survey,
+            question_id=43,
+            key="GENDER",
+            text="What is your gender?",
+            question_type="Single Punch",
+            category="Cint qualification",
+            options=[
+                {"OptionId": "1", "OptionText": "Male"},
+                {"OptionId": "2", "OptionText": "Female"},
+            ],
+            raw_data={"provider": "cint", "targeting_choices": ["1"]},
+        )
+
+        age, gender = _prescreener_questions(survey)
+        self.assertEqual((age["min_value"], age["max_value"]), (18, 20))
+        self.assertEqual(age["targeting_note"], "Qualifying age: 18\u201320")
+        self.assertEqual(gender["targeting_note"], "Qualifying answer: Male")
+        self.assertEqual(gender["options"], [{"value": "1", "label": "Male", "selected": False}])
 
     @patch.dict(
         "os.environ",

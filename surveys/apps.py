@@ -6,3 +6,5 @@ class SurveysConfig(AppConfig):
     name = "surveys"
     verbose_name = "Survey inventory"
 
+    def ready(self):
+        from . import signals  # noqa: F401

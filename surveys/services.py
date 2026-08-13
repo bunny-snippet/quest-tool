@@ -15,6 +15,7 @@ from vendors.models import ClientIntegration
 
 from .integrations import InnovateMRAPIError, InnovateMRClient, InnovateMRNotFound
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
+from .project_cache import invalidate_project_cache
 from .survey_flow import normalize_client_ip
 
 logger = logging.getLogger(__name__)
@@ -347,6 +348,9 @@ def sync_surveys(client: InnovateMRClient | None = None, integration: ClientInte
     finally:
         run.finished_at = timezone.now()
         run.save()
+
+    if run.status == SyncRun.Status.SUCCESS:
+        invalidate_project_cache()
 
     return SyncSummary(
         run_id=run.id,

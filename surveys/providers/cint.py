@@ -427,6 +427,28 @@ class CintProvider(SurveyProvider):
             })
         return conditions
 
+    @staticmethod
+    def _numeric_ranges(values):
+        """Compress qualifying integer values into readable inclusive ranges."""
+
+        numbers = sorted({
+            int(value)
+            for value in values
+            if str(value).strip().isdigit() and 0 <= int(value) <= 125
+        })
+        if not numbers:
+            return []
+        ranges = []
+        start = previous = numbers[0]
+        for number in numbers[1:]:
+            if number == previous + 1:
+                previous = number
+                continue
+            ranges.append({"min": start, "max": previous})
+            start = previous = number
+        ranges.append({"min": start, "max": previous})
+        return ranges
+
     def refresh_details(self, survey):
         survey_number = survey.source_key
         country_language_id = self._integer(
@@ -480,6 +502,14 @@ class CintProvider(SurveyProvider):
             question_id = condition["question_id"]
             question = metadata.get(question_id) or {}
             accepted = set(condition["precodes"])
+            question_name = str(question.get("Name") or "").strip()
+            question_text = str(question.get("QuestionText") or "").strip()
+            normalized_name = re.sub(r"[^A-Z0-9]", "", question_name.upper())
+            is_age_question = (
+                question_id == 42
+                or normalized_name == "AGE"
+                or re.search(r"\b(?:your\s+)?age\b", question_text, re.IGNORECASE)
+            )
             option_rows = [
                 {
                     "OptionId": str(option.get("Precode")),
@@ -497,8 +527,8 @@ class CintProvider(SurveyProvider):
             question_rows.append(TargetingQuestion(
                 survey=survey,
                 question_id=question_id,
-                key=str(question.get("Name") or f"CINT_Q_{question_id}"),
-                text=str(question.get("QuestionText") or f"Cint question {question_id}"),
+                key=question_name or f"CINT_Q_{question_id}",
+                text=question_text or f"Cint question {question_id}",
                 question_type=str(question.get("QuestionType") or "Qualification"),
                 category="Cint qualification",
                 options=option_rows,
@@ -506,6 +536,9 @@ class CintProvider(SurveyProvider):
                     "provider": "cint",
                     "logical_operator": condition["operator"],
                     "targeting_choices": sorted(accepted),
+                    "targeting_age_ranges": (
+                        self._numeric_ranges(accepted) if is_age_question else []
+                    ),
                     "qualification": condition["raw_conditions"],
                 },
             ))

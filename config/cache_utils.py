@@ -8,7 +8,7 @@ from collections.abc import Callable
 from typing import Any
 
 from django.conf import settings
-from django.core.cache import cache
+from django.core.cache import caches
 
 
 logger = logging.getLogger(__name__)
@@ -46,26 +46,41 @@ def stable_cache_key(namespace: str, value: Any = None) -> str:
     return f"{namespace}:{digest}"
 
 
-def safe_cache_get(key: str, default: Any = None) -> Any:
+def _cache(alias: str):
+    return caches[alias]
+
+
+def safe_cache_get(key: str, default: Any = None, *, alias: str = "default") -> Any:
     try:
-        return cache.get(key, default)
+        return _cache(alias).get(key, default)
     except Exception:
         logger.warning("Cache read failed for key namespace=%s", key.split(":", 1)[0], exc_info=True)
         return default
 
 
-def safe_cache_set(key: str, value: Any, *, timeout: int | None = None) -> bool:
+def safe_cache_set(
+    key: str,
+    value: Any,
+    *,
+    timeout: int | None = None,
+    jitter_seconds: int | None = None,
+    alias: str = "default",
+) -> bool:
     try:
-        cache.set(key, value, timeout=jittered_ttl(timeout))
+        _cache(alias).set(
+            key,
+            value,
+            timeout=jittered_ttl(timeout, jitter_seconds),
+        )
         return True
     except Exception:
         logger.warning("Cache write failed for key namespace=%s", key.split(":", 1)[0], exc_info=True)
         return False
 
 
-def safe_cache_delete(key: str) -> bool:
+def safe_cache_delete(key: str, *, alias: str = "default") -> bool:
     try:
-        return bool(cache.delete(key))
+        return bool(_cache(alias).delete(key))
     except Exception:
         logger.warning("Cache delete failed for key namespace=%s", key.split(":", 1)[0], exc_info=True)
         return False
@@ -76,24 +91,33 @@ def safe_cache_get_or_set(
     factory: Callable[[], Any],
     *,
     timeout: int | None = None,
+    jitter_seconds: int | None = None,
+    alias: str = "default",
 ) -> Any:
-    cached = safe_cache_get(key, _MISSING)
+    cached = safe_cache_get(key, _MISSING, alias=alias)
     if cached is not _MISSING:
         return cached
     value = factory()
-    safe_cache_set(key, value, timeout=timeout)
+    safe_cache_set(
+        key,
+        value,
+        timeout=timeout,
+        jitter_seconds=jitter_seconds,
+        alias=alias,
+    )
     return value
 
 
-def safe_cache_increment(key: str, *, default: int = 1) -> int:
+def safe_cache_increment(key: str, *, default: int = 1, alias: str = "default") -> int:
     """Increment a namespace version without making cache availability critical."""
 
     try:
-        cache.add(key, default, timeout=None)
-        return int(cache.incr(key))
+        backend = _cache(alias)
+        backend.add(key, default, timeout=None)
+        return int(backend.incr(key))
     except ValueError:
         try:
-            cache.set(key, default + 1, timeout=None)
+            _cache(alias).set(key, default + 1, timeout=None)
         except Exception:
             logger.warning(
                 "Cache version reset failed for key namespace=%s",

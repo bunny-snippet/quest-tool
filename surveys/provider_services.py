@@ -5,6 +5,7 @@ from django.utils import timezone
 from vendors.models import ClientIntegration
 
 from .models import Survey, SyncRun
+from .project_cache import invalidate_project_cache
 from .providers import ProviderError, get_provider
 
 
@@ -172,6 +173,8 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                 "detail_failures": run.detail_failures,
             },
         )
+    if run.status in {SyncRun.Status.SUCCESS, SyncRun.Status.PARTIAL}:
+        invalidate_project_cache()
     return run
 
 
@@ -204,4 +207,6 @@ def refresh_client_integration_details(integration: ClientIntegration, *, limit=
         except Exception:
             failures += 1
             logger.exception("Provider detail refresh failed for integration=%s survey=%s", integration.pk, survey.pk)
+    if refreshed:
+        invalidate_project_cache()
     return {"refreshed": refreshed, "failures": failures}

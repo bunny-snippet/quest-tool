@@ -9,7 +9,7 @@ from urllib.parse import quote, urlencode
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import DatabaseError, transaction
-from django.db.models import Count, Max, Min, Q, Sum
+from django.db.models import Count, Max, Q, Sum
 from django.http import HttpResponse, HttpResponseRedirect, StreamingHttpResponse
 from django.core.paginator import Paginator
 from django.shortcuts import render
@@ -69,6 +69,7 @@ from .serializers import (
     UserHitsResponseSerializer,
 )
 from .pagination import SurveyPagination
+from .project_cache import project_filter_metadata
 from prescreener_vault.services import (
     PrescreenerVaultError,
     capture_prescreener_submission,
@@ -293,40 +294,30 @@ def dashboard_page(request):
 def projects_page(request):
     codes = effective_permission_codes(request.user)
     visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
-    countries = visible_surveys.exclude(country_code="").values_list("country_code", "country").distinct().order_by("country_code")
     is_client_scoped_panel = bool(
         vendor_scope_user_id(request.user) or organization_client_ids_for_user(request.user) is not None
-    )
-    if is_client_scoped_panel:
-        companies = visible_surveys.filter(client__isnull=False).values_list("client__name", flat=True).distinct().order_by("client__name")
-    else:
-        companies = visible_surveys.exclude(company_name="").values_list("company_name", flat=True).distinct().order_by("company_name")
-    buyer_rows = visible_surveys.exclude(buyer_id="").values(
-        "buyer_id", "client__name", "company_name"
-    ).distinct().order_by("buyer_id")
-    buyer_options = [
-        {
-            "value": row["buyer_id"],
-            "client_value": (row["client__name"] if is_client_scoped_panel else row["company_name"]) or "",
-        }
-        for row in buyer_rows
-    ]
-    survey_types = list(
-        visible_surveys.exclude(survey_type="").values_list("survey_type", flat=True).distinct().order_by("survey_type")
     )
     project_columns = _project_columns_for_user(request.user)
     project_filters = _component_access(codes, PROJECT_FILTER_PERMISSIONS)
     can_sort_cpi = project_filters["cpi"]
+    metadata = project_filter_metadata(
+        visible_surveys,
+        user_id=request.user.pk,
+        client_scoped=is_client_scoped_panel,
+        include_cpi=can_sort_cpi,
+    )
     cpi_min, cpi_max = 0, 100
     if can_sort_cpi:
-        cpi_bounds = visible_surveys.aggregate(minimum=Min("cpi"), maximum=Max("cpi"))
-        cpi_min = cpi_bounds["minimum"] or 0
-        cpi_max = cpi_bounds["maximum"] or 100
+        cpi_min = metadata["cpi_min"] or 0
+        cpi_max = metadata["cpi_max"] or 100
         if cpi_max <= cpi_min:
             cpi_max = cpi_min + 1
     return render(request, "surveys/projects.html", {
-        "active_page": "projects", "countries": countries, "companies": companies,
-        "buyer_options": buyer_options, "survey_types": survey_types,
+        "active_page": "projects",
+        "countries": metadata["countries"],
+        "companies": metadata["companies"],
+        "buyer_options": metadata["buyer_options"],
+        "survey_types": metadata["survey_types"],
         "company_filter_label": "Client",
         "company_filter_param": "client_name" if is_client_scoped_panel else "company",
         "company_filter_default": "All clients",
@@ -709,7 +700,7 @@ def workspace_home(request):
     raise PermissionDenied("No workspace page is assigned to this account.")
 
 
-def _rfg_qualifying_option_values(question):
+def _qualifying_option_values(question):
     raw = question.raw_data or {}
     if "targeting_choices" not in raw:
         return None
@@ -726,8 +717,9 @@ def _rfg_qualifying_option_values(question):
 
 def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_only=True):
     prepared = []
-    is_rfg = bool(
-        survey.integration_id and survey.integration.provider_code == "rfg"
+    provider_code = (
+        survey.integration.provider_code
+        if survey.integration_id else "innovatemr"
     )
     for question in survey.targeting_questions.all():
         display_text = clean_rfg_display_text(question.text or question.key)
@@ -745,7 +737,7 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
         )
         options = []
         age_ranges = []
-        allowed_values = _rfg_qualifying_option_values(question) if is_rfg else None
+        allowed_values = _qualifying_option_values(question)
         for option in question.options:
             option_id = option.get("OptionId")
             if option.get("ageStart") is not None:
@@ -802,6 +794,21 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             f"{int(item['ageStart'])}\u2013{int(item['ageEnd'])}"
             for item in age_ranges
         ]
+        qualifying_labels = [
+            option["label"] for option in options
+            if not allowed_values or option["value"] in allowed_values
+        ]
+        if allowed_values and qualifying_options_only and not qualifying_labels:
+            qualifying_labels = sorted(allowed_values)
+        if qualifying_labels:
+            answer_word = "answer" if len(qualifying_labels) == 1 else "answers"
+            qualifying_answer_note = (
+                f"Qualifying {answer_word}: {', '.join(qualifying_labels)}"
+                if len(qualifying_labels) <= 6
+                else f"{len(qualifying_labels)} provider-approved answers are shown."
+            )
+        else:
+            qualifying_answer_note = ""
         prepared.append({
             "model": question,
             "display_text": display_text,
@@ -827,6 +834,8 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                 f"Qualifying age: {', '.join(age_range_labels)}"
                 if (is_age_question or is_dob_question) and age_range_labels
                 else "Only answers accepted by this survey are shown."
+                if provider_code == "rfg" and qualifying_options_only and allowed_values
+                else qualifying_answer_note
                 if qualifying_options_only and allowed_values else ""
             ),
         })
@@ -1440,7 +1449,8 @@ class ProviderQuestionMappingViewSet(viewsets.ReadOnlyModelViewSet):
     ),
 )
 class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
-    queryset = Survey.objects.select_related("client", "integration").all().prefetch_related("quotas", "targeting_questions")
+    queryset = Survey.objects.select_related("client", "integration").all()
+    project_count_cache_enabled = True
     lookup_field = "local_id"
     filterset_class = SurveyFilter
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
@@ -1450,7 +1460,10 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = [HasFunctionPermission]
 
     def get_queryset(self):
-        return scope_surveys_for_user(super().get_queryset(), self.request.user)
+        queryset = scope_surveys_for_user(super().get_queryset(), self.request.user)
+        if self.action == "retrieve":
+            queryset = queryset.prefetch_related("quotas", "targeting_questions")
+        return queryset
 
     def get_required_function_permission(self):
         if self.action == "export":
