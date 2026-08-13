@@ -95,19 +95,19 @@ class CintProviderTests(TestCase):
     def test_inventory_uses_only_approved_locales_and_inclusive_rpi_bands(self, sleep_mock):
         session = RecordingSession(
             {"ApiResult": 0, "Surveys": [
-                {"SurveyNumber": 6001, "CountryLanguageID": 6, "RPI": {"Value": 1}},
-                {"SurveyNumber": 6002, "CountryLanguageID": 6, "RPI": {"Value": 4}},
-                {"SurveyNumber": 6003, "CountryLanguageID": 6, "RPI": {"Value": 0.99}},
-                {"SurveyNumber": 6004, "CountryLanguageID": 6, "RPI": {"Value": 4.01}},
+                {"SurveyNumber": 6001, "CountryLanguageID": 6, "RPI": {"Value": 0.97}},
+                {"SurveyNumber": 6002, "CountryLanguageID": 6, "RPI": {"Value": 4.10}},
+                {"SurveyNumber": 6003, "CountryLanguageID": 6, "RPI": {"Value": 0.96}},
+                {"SurveyNumber": 6004, "CountryLanguageID": 6, "RPI": {"Value": 4.11}},
                 {"SurveyNumber": 6099, "CountryLanguageID": 9, "RPI": {"Value": 2}},
             ]},
             {"ApiResult": 0, "Surveys": [
                 {"SurveyNumber": 7001, "CountryLanguageID": 7, "RPI": {"Value": 2.50}},
             ]},
             {"ApiResult": 0, "Surveys": [
-                {"SurveyNumber": 8001, "CountryLanguageID": 8, "RPI": {"Value": 1}},
-                {"SurveyNumber": 8002, "CountryLanguageID": 8, "RPI": {"Value": 2}},
-                {"SurveyNumber": 8003, "CountryLanguageID": 8, "RPI": {"Value": 2.01}},
+                {"SurveyNumber": 8001, "CountryLanguageID": 8, "RPI": {"Value": 0.97}},
+                {"SurveyNumber": 8002, "CountryLanguageID": 8, "RPI": {"Value": 2.10}},
+                {"SurveyNumber": 8003, "CountryLanguageID": 8, "RPI": {"Value": 2.11}},
             ]},
             {"ApiResult": 0, "Surveys": [
                 {"SurveyNumber": 9001, "CountryLanguageID": 9, "RPI": {"Value": 4}},
@@ -137,6 +137,50 @@ class CintProviderTests(TestCase):
             ["6/0050", "7/0050", "8/0050", "9/0050", "10/0050", "76/0050"],
         )
         self.assertEqual(sleep_mock.call_count, 5)
+
+    @patch("surveys.providers.cint.time.sleep")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_inventory_refreshes_only_existing_rows_from_allocated_feed(self, sleep_mock):
+        Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="9001",
+            source_id=9001,
+            cpi=Decimal("1.50"),
+            remaining=40,
+        )
+        empty_feed = {"ApiResult": 0, "Surveys": []}
+        session = RecordingSession(
+            empty_feed, empty_feed, empty_feed, empty_feed, empty_feed, empty_feed,
+            {"ApiResult": 0, "SupplierAllocationSurveys": [
+                {
+                    "SurveyNumber": 9001,
+                    "CountryLanguageID": 9,
+                    "RPI": {"Value": 1.50},
+                    "BidLengthOfInterview": 35,
+                    "LengthOfInterview": 99,
+                    "BidIncidence": 50,
+                    "TotalRemaining": 36,
+                },
+                {
+                    "SurveyNumber": 9999,
+                    "CountryLanguageID": 9,
+                    "RPI": {"Value": 1.25},
+                    "TotalRemaining": 200,
+                },
+            ]},
+        )
+        provider = CintProvider(self.integration, session=session)
+        with patch.object(provider, "_load_definitions"):
+            rows = provider.inventory()
+
+        self.assertEqual([row["SurveyNumber"] for row in rows], [9001])
+        normalized = provider.normalize_inventory_item(rows[0], timezone.now())
+        self.assertEqual(normalized.values["loi"], 35)
+        self.assertEqual(normalized.values["incidence_rate"], Decimal("50"))
+        self.assertEqual(normalized.values["remaining"], 36)
+        self.assertEqual(normalized.values["sample_size"], 36)
+        self.assertEqual(sleep_mock.call_count, 6)
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)

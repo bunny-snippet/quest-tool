@@ -205,6 +205,23 @@ class CintProvider(SurveyProvider):
     def _marketplace_request(self, country_language_id):
         """Call the locale feed while enforcing Cint's one-request-per-second cap."""
 
+        self._wait_for_inventory_request_slot()
+        return self._request(
+            "Supply/v1/Surveys/AllOfferwall/ByCountryLanguage/"
+            f"{country_language_id}/{self.supplier_code}"
+        )
+
+    def _allocated_inventory_request(self):
+        """Fetch linked inventory so stored projects keep current live metrics."""
+
+        self._wait_for_inventory_request_slot()
+        return self._request(
+            f"Supply/v1/Surveys/SupplierAllocations/All/{self.supplier_code}"
+        )
+
+    def _wait_for_inventory_request_slot(self):
+        """Share Cint's request interval across open and allocated feeds."""
+
         now = time.monotonic()
         if self._last_marketplace_request_started_at is not None:
             remaining = (
@@ -214,10 +231,6 @@ class CintProvider(SurveyProvider):
             if remaining > 0:
                 time.sleep(remaining)
         self._last_marketplace_request_started_at = time.monotonic()
-        return self._request(
-            "Supply/v1/Surveys/AllOfferwall/ByCountryLanguage/"
-            f"{country_language_id}/{self.supplier_code}"
-        )
 
     def _marketplace_rpi_allowed(self, country_language_id, value):
         """Apply the approved inclusive RPI band for one locale feed."""
@@ -227,7 +240,12 @@ class CintProvider(SurveyProvider):
         return bool(rule and rpi is not None and rule["minimum"] <= rpi <= rule["maximum"])
 
     def inventory(self):
-        """Fetch and filter only the six approved CountryLanguage marketplace feeds."""
+        """Fetch eligible opportunities and refresh metrics for stored linked rows.
+
+        Creating a supplier link removes a survey from the open Marketplace
+        feed. The allocated feed is therefore read only for source keys already
+        accepted into this integration; it cannot introduce an unapproved row.
+        """
 
         self._load_definitions()
         merged = {}
@@ -272,6 +290,53 @@ class CintProvider(SurveyProvider):
                 }
         if not successful_feeds:
             raise ProviderError("All approved Cint country-language inventory requests failed.")
+
+        tracked = {
+            str(source_key): cpi
+            for source_key, cpi in Survey.objects.filter(
+                integration=self.integration,
+            ).values_list("source_key", "cpi")
+        }
+        if tracked:
+            try:
+                allocated_data = self._allocated_inventory_request()
+            except ProviderError as exc:
+                self.inventory_failures.append({
+                    "feed": "allocated_inventory",
+                    "error": str(exc)[:500],
+                })
+                logger.warning(
+                    "Cint allocated inventory refresh failed integration=%s.",
+                    self.integration.pk,
+                    exc_info=True,
+                )
+            else:
+                for row in self._rows(allocated_data, "SupplierAllocationSurveys"):
+                    survey_number = row.get("SurveyNumber")
+                    if survey_number is None:
+                        continue
+                    key = str(survey_number)
+                    if key not in tracked:
+                        continue
+                    country_language_id = self._integer(
+                        row.get("CountryLanguageID"), -1
+                    )
+                    allocation = self._supplier_allocation(row)
+                    rpi = self._decimal(row.get("RPI")) or self._decimal(
+                        allocation.get("RPI")
+                    )
+                    effective_rpi = rpi if rpi is not None else tracked[key]
+                    if not self._marketplace_rpi_allowed(
+                        country_language_id, effective_rpi
+                    ):
+                        self.rejected_source_keys.add(key)
+                        continue
+                    self.rejected_source_keys.discard(key)
+                    merged[key] = {
+                        **row,
+                        "_cint_inventory_source": "supplier_allocations_refresh",
+                        "_cint_country_language_request_id": country_language_id,
+                    }
         return list(merged.values())
 
     @staticmethod
@@ -426,13 +491,7 @@ class CintProvider(SurveyProvider):
             "name": str(payload.get("SurveyName") or f"Cint survey {source_key}"),
             "status": Survey.Status.LIVE,
             "starts": 0,
-            "loi": max(
-                0,
-                self._integer(
-                    payload.get("LengthOfInterview"),
-                    self._integer(payload.get("BidLengthOfInterview")),
-                ),
-            ),
+            "loi": max(0, self._integer(payload.get("BidLengthOfInterview"))),
             "incidence_rate": self._decimal(payload.get("BidIncidence")),
             **country_language,
             "group_type": str(study_type.get("Name") or study_type.get("Code") or ""),
