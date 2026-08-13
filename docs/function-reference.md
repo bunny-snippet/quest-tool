@@ -84,8 +84,10 @@ The notation is:
 - `build_outbound_url(entry_link, rid, answers)` is the generic InnovateMR path. It
   preserves the exact provider link, replaces/adds `PID=RID`, forces
   `trackId=RID`, and appends upstream question values.
-- `status_rid_from_request(request)` accepts legacy capitalization/aliases for
-  generic callbacks. RFG uses its own TID-first resolver instead.
+- `status_rid_from_request(request)` accepts legacy capitalization/aliases and
+  prefers provider `tid`/`trackId` because those fields carry the platform RID.
+  The generic callback then resolves either `SurveyAttempt.rid` or
+  `prescreener_uid` and always renders the matched attempt's canonical RID.
 
 ## `surveys/providers/base.py` and `registry.py`
 
@@ -363,6 +365,12 @@ The notation is:
 `termination_reasons_page`) calculate permissions and initial template context.
 Their API classes perform the actual filter/query work so HTML and JSON security
 remain aligned. Export helpers reuse the same scoped/filter querysets.
+
+The public `survey_start` POST builds provider URLs (including vault-backed Cint
+identity work) before touching the main attempt row. `_mark_attempt_redirected`
+then uses one conditional `UPDATE ... WHERE status='initiated'` as a
+compare-and-swap. This keeps cross-database work outside main-row locks and makes
+simultaneous/repeated tab submissions converge on the first immutable redirect.
 
 `vendors/views.py` and `accounts/views.py` are thin controller layers over their
 serializers/services. When debugging a rejected write, inspect serializer

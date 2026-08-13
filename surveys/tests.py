@@ -504,6 +504,36 @@ class SurveyFlowTests(TestCase):
         self.assertEqual(attempt.exit_os, "Android 14")
         self.assertIsNotNone(attempt.loi_seconds)
 
+    def test_repeated_submission_keeps_the_first_redirect_immutable(self):
+        start = self.client.get(reverse("survey-start"), {
+            "surveyId": self.survey.source_id,
+            "supplierCode": "1000",
+            "userId": self.platform_user.pk,
+            "code": self.survey.local_id,
+        })
+        rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
+        first = self.client.post(reverse("survey-start"), {
+            "rid": rid,
+            f"question_{self.question.pk}": "1",
+        })
+        self.assertEqual(first.status_code, 302)
+        first_outbound = first["Location"]
+
+        repeated = self.client.post(reverse("survey-start"), {
+            "rid": rid,
+            f"question_{self.question.pk}": "2",
+        })
+
+        self.assertRedirects(
+            repeated,
+            f"{reverse('survey-start')}?rid={rid}",
+            fetch_redirect_response=False,
+        )
+        attempt = SurveyAttempt.objects.get(rid=rid)
+        self.assertEqual(attempt.status, SurveyAttempt.Status.REDIRECTED)
+        self.assertEqual(attempt.outbound_url, first_outbound)
+        self.assertEqual(attempt.answers[str(self.question.pk)]["values"], ["1"])
+
     def test_status_requires_known_rid(self):
         response = self.client.get(reverse("survey-status"), {"status": "3", "rid": "Aa1Bb2Cc3D"})
         self.assertEqual(response.status_code, 404)

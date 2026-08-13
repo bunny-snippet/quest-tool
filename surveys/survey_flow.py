@@ -257,9 +257,15 @@ def build_outbound_url(entry_link: str, rid: str, answers: dict) -> str:
 
 
 def status_rid_from_request(request) -> str:
-    """Read the platform RID from supported generic/legacy callback aliases."""
+    """Read a callback tracking identifier, preferring the platform RID alias.
 
-    for name in ("rid", "RID", "pid", "PID", "qsid", "QSID", "trackId"):
+    Some providers echo our canonical RID as ``tid``/``trackId`` while their
+    field named ``rid`` contains our persistent prescreener UID.  Callers must
+    resolve the returned value against both model fields and then display the
+    matched attempt's canonical ``SurveyAttempt.rid``.
+    """
+
+    for name in ("tid", "TID", "trackId", "rid", "RID", "pid", "PID", "qsid", "QSID"):
         value = request.GET.get(name)
         if value:
             return value.strip()

@@ -58,6 +58,11 @@ https://api.exchange-ip.com/survey/rfg/callback?result={start.result}&tid={param
 
 Use RFG's server-to-server callback mode. RFG echoes the platform attempt key from `{params.tid}` and the persistent vault identity from `{params.rid}`. The endpoint resolves `tid` first and keeps UID-based `rid` lookup for compatibility. `{start.result}` supplies the documented terminal result. The endpoint records exit IP/time, LOI, the human-readable outcome and raw callback metadata, then finalizes allocation capacity. It rejects unknown tracking values and requests outside the documented RFG callback IP allowlist. If RFG changes its callback addresses, update `config.callback_ip_allowlist` through an audited integration update before switching traffic.
 
+Provider field names never replace platform identity: after either TID or UID
+lookup succeeds, status pages, Traffic Reports and callback acknowledgements use
+the matched row's 10-character `SurveyAttempt.rid`. The callback JSON exposes
+RFG echoes separately as `provider_tid` and `provider_rid`.
+
 Configure the respondent-facing complete and non-complete page redirects to the dedicated outcome page:
 
 ```text

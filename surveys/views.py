@@ -1008,9 +1008,35 @@ def _finish_local_rfg_attempt(attempt, answers, request, *, result, reason):
     return locked
 
 
+def _mark_attempt_redirected(attempt, answers, outbound_url):
+    """Atomically claim one initiated attempt for its provider redirect.
+
+    Provider adapters can touch the separate prescreener-vault database while
+    constructing a URL (for example, Cint assigns and audits an email identity).
+    Those operations must finish *before* the main-database write so a slow
+    vault operation never holds a ``SurveyAttempt`` row lock.  The conditional
+    update is a compare-and-swap: only the first concurrent form submission can
+    move the attempt from initiated to redirected.
+    """
+
+    now = timezone.now()
+    updated = SurveyAttempt.objects.filter(
+        pk=attempt.pk,
+        status=SurveyAttempt.Status.INITIATED,
+    ).update(
+        answers=operational_answer_value(answers),
+        submitted_at=now,
+        redirected_at=now,
+        outbound_url=outbound_url,
+        status=SurveyAttempt.Status.REDIRECTED,
+        updated_at=now,
+    )
+    return bool(updated)
+
+
 @require_http_methods(["GET", "POST"])
 def survey_start(request):
-    """Validate copied links, run the prescreener and redirect one locked attempt.
+    """Validate copied links, run the prescreener and redirect one claimed attempt.
 
     Initial GET creates the immutable RID/UID journey; canonical GET renders its
     questions; POST writes the vault, applies provider checks and records exactly
@@ -1137,6 +1163,12 @@ def survey_start(request):
     attempt = backfill_attempt_entry_audit(attempt, request)
 
     if request.method == "POST":
+        # A browser retry after a successful submission must not call the
+        # provider or allocate another cross-database respondent identity.
+        if attempt.status != SurveyAttempt.Status.INITIATED:
+            return HttpResponseRedirect(
+                f"{reverse('survey-start')}?rid={quote(attempt.rid)}"
+            )
         answers, errors = _collect_prescreener_answers(request, attempt.survey)
         if not errors:
             try:
@@ -1175,26 +1207,18 @@ def survey_start(request):
                         )
                         return HttpResponseRedirect(_rfg_result_url(attempt.rid, "8"))
                 if not errors:
-                    with transaction.atomic():
-                        locked = SurveyAttempt.objects.select_for_update().select_related(
-                            "survey", "survey__integration"
-                        ).get(pk=attempt.pk)
-                        if locked.status != SurveyAttempt.Status.INITIATED:
-                            return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(locked.rid)}")
-                        outbound_url = (
-                            provider.build_outbound_url(locked.survey, locked, answers)
-                            if provider
-                            else build_outbound_url(locked.survey.entry_link, locked.rid, answers)
+                    # URL construction may use the vault DB. Keep it outside a
+                    # main-DB row lock, then claim the redirect with one short,
+                    # conditional UPDATE to avoid MySQL 1205/1213 failures.
+                    outbound_url = (
+                        provider.build_outbound_url(attempt.survey, attempt, answers)
+                        if provider
+                        else build_outbound_url(attempt.survey.entry_link, attempt.rid, answers)
+                    )
+                    if not _mark_attempt_redirected(attempt, answers, outbound_url):
+                        return HttpResponseRedirect(
+                            f"{reverse('survey-start')}?rid={quote(attempt.rid)}"
                         )
-                        now = timezone.now()
-                        locked.answers = operational_answer_value(answers)
-                        locked.submitted_at = now
-                        locked.redirected_at = now
-                        locked.outbound_url = outbound_url
-                        locked.status = SurveyAttempt.Status.REDIRECTED
-                        locked.save(update_fields=[
-                            "answers", "submitted_at", "redirected_at", "outbound_url", "status", "updated_at"
-                        ])
                     return HttpResponseRedirect(outbound_url)
             except Exception as exc:
                 if isinstance(exc, PrescreenerVaultError):
@@ -1396,7 +1420,12 @@ class RFGCallbackAPIView(APIView):
         return Response({
             "ok": True,
             "tid": locked.rid,
-            "rid": locked.prescreener_uid,
+            # The platform response always calls its own 10-character tracking
+            # identifier RID. Provider field names are exposed separately so a
+            # client's ``rid`` can never replace the canonical value in our UI.
+            "rid": locked.rid,
+            "provider_tid": locked.rid,
+            "provider_rid": locked.prescreener_uid,
             "status": locked.status,
         })
 
@@ -1404,15 +1433,21 @@ class RFGCallbackAPIView(APIView):
 @require_http_methods(["GET"])
 def survey_status(request):
     status_code = request.GET.get("status", "").strip()
-    rid = status_rid_from_request(request)
+    callback_identifier = status_rid_from_request(request)
     page = STATUS_PAGES.get(status_code)
-    if page is None or not rid:
+    if page is None or not callback_identifier:
         return render(request, "surveys/flow_error.html", {
             "title": "Invalid survey status",
             "message": "A valid status (1–4) and RID are required.",
         }, status=400)
 
-    attempt = SurveyAttempt.objects.filter(rid=rid).first()
+    # Provider naming is never allowed to leak into our canonical identity.
+    # RFG, for example, returns the platform UID in its field named ``rid``.
+    # Resolve either identifier, then update and render SurveyAttempt.rid.
+    attempt = SurveyAttempt.objects.filter(
+        Q(rid=callback_identifier) | Q(prescreener_uid=callback_identifier)
+    ).first()
+    canonical_rid = attempt.rid if attempt else callback_identifier
     ip_address = get_request_ip(request)
     if attempt:
         with transaction.atomic():
@@ -1445,7 +1480,7 @@ def survey_status(request):
     return render(request, "surveys/status.html", {
         **page,
         "status_label": status_label,
-        "rid": rid,
+        "rid": canonical_rid,
         "ip_address": ip_address,
         "loi_seconds": attempt.loi_seconds if attempt else None,
         "attempt_found": bool(attempt),
