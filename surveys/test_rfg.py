@@ -334,6 +334,36 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertTrue(serialized["options"][1]["Qualifies"])
         self.assertEqual(serialized["targeting_note"], "Qualifying answer: Target")
 
+    @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
+    def test_detail_refresh_collapses_targeting_gender_into_required_profile(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-gender-dedup",
+            country_code="US",
+            status=Survey.Status.LIVE,
+        )
+        provider = ResearchForGoodProvider(self.integration)
+        targeting = {
+            "datapoints": [{"name": "profile_987", "values": [{"choice": 1}]}],
+            "quotas": [],
+        }
+        metadata = {
+            "property": "profile_gender",
+            "type": 0,
+            "question": {"en-US": "What is your gender?"},
+            "answers": [None, {"en-US": "Male"}, {"en-US": "Female"}],
+        }
+        with patch.object(provider, "targeting", return_value=targeting), patch.object(
+            provider, "datapoint", return_value=metadata
+        ), patch.object(provider, "create_link", return_value="https://survey.saysoforgood.com/live/example"):
+            provider.refresh_details(survey)
+
+        self.assertEqual(survey.targeting_questions.count(), 3)
+        self.assertFalse(survey.targeting_questions.filter(key="profile_gender").exists())
+        gender = survey.targeting_questions.get(key="RFG_GENDER")
+        self.assertEqual(gender.raw_data["targeting_choices"], [1])
+
     def test_rfg_quota_serializer_does_not_present_unknown_totals_as_zero(self):
         survey = Survey.objects.create(
             client=self.client_record,
@@ -493,6 +523,15 @@ class ResearchForGoodIntegrationTests(TestCase):
                 {"OptionId": 2, "OptionText": "Matching"},
             ], raw_data={"targeting_choices": [2]},
         )
+        gender_alias = TargetingQuestion.objects.create(
+            survey=survey, question_id=-15, key="rfg_gender_profile",
+            text="What is your gender?", category="RFG targeting",
+            question_type="single", options=[
+                {"OptionId": 1, "OptionText": "Male"},
+                {"OptionId": 2, "OptionText": "Female"},
+                {"OptionId": 3, "OptionText": "Other identification"},
+            ], raw_data={"targeting_choices": [1, 2, 3]},
+        )
         attempt = SurveyAttempt.objects.create(
             rid="Jkl012MnO5", survey=survey, platform_user=user, user_id=str(user.pk)
         )
@@ -504,6 +543,8 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertNotContains(prescreener, "Female")
         self.assertContains(prescreener, "Only answers accepted by this survey are shown.")
         self.assertContains(prescreener, "What is your date of birth?")
+        self.assertContains(prescreener, ">Gender</h2>", count=1, html=False)
+        self.assertNotContains(prescreener, "Other identification")
         self.assertContains(prescreener, "Qualifying age: 18–35")
         self.assertContains(prescreener, 'placeholder="DD-MM-YYYY"', html=False)
         self.assertContains(prescreener, f'name="question_{birthday.pk}"', html=False)
@@ -561,6 +602,7 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual(urlsplit(response["Location"]).netloc, "survey.saysoforgood.com")
         outbound_query = parse_qs(urlsplit(response["Location"]).query)
         self.assertEqual(outbound_query["income"], ["1"])
+        self.assertEqual(outbound_query[gender_alias.key], ["1"])
         self.assertEqual(outbound_query["birthday"], ["2000-01-01"])
         relaxed_attempt.refresh_from_db()
         self.assertEqual(relaxed_attempt.status, SurveyAttempt.Status.REDIRECTED)

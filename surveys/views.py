@@ -727,6 +727,55 @@ def _qualifying_option_values(question):
     return allowed
 
 
+def _rfg_profile_dimension(question):
+    """Return the mandatory profile dimension represented by an RFG row."""
+
+    key = re.sub(r"[^a-z0-9]+", " ", str(question.key or "").lower()).strip()
+    text = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        clean_rfg_display_text(question.text or "").lower(),
+    ).strip()
+    combined = f"{key} {text}"
+    if re.search(r"\b(gender|sex)\b", combined):
+        return "gender"
+    if re.search(r"\b(date of birth|birthday|dob|age)\b", combined):
+        return "age"
+    if re.search(r"\b(postal code|postcode|zip code|zipcode|zip)\b", combined):
+        return "postal"
+    return ""
+
+
+def _rfg_alias_allowed_values(question, dimension):
+    """Translate targeting choices to the mandatory profile control values."""
+
+    choices = {
+        str(value) for value in (question.raw_data or {}).get("targeting_choices") or []
+    }
+    if dimension == "gender":
+        return {
+            "M" if value == "1" else "F" if value == "2" else value
+            for value in choices
+        }
+    return choices
+
+
+def _rfg_alias_upstream_values(alias, dimension, values):
+    """Map one displayed profile answer back to a hidden RFG targeting code."""
+
+    if dimension != "gender" or not values:
+        return list(values)
+    selected = str(values[0]).upper()
+    wanted_label = "male" if selected in {"M", "1"} else "female"
+    for option in alias.options or []:
+        label = clean_rfg_display_text(option.get("OptionText") or "").lower().strip()
+        if label == wanted_label:
+            option_id = option.get("OptionId")
+            if option_id not in (None, ""):
+                return [str(option_id)]
+    return ["1" if wanted_label == "male" else "2"]
+
+
 def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_only=True):
     """Prepare provider targeting rows as safe, responsive form controls and hints."""
 
@@ -735,7 +784,30 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
         survey.integration.provider_code
         if survey.integration_id else "innovatemr"
     )
-    for question in survey.targeting_questions.all():
+    question_rows = list(survey.targeting_questions.all())
+    profile_aliases = {}
+    aliased_question_ids = set()
+    if provider_code == "rfg":
+        required = {}
+        for question in question_rows:
+            dimension = _rfg_profile_dimension(question)
+            is_required = (
+                str(question.category or "").strip().lower() == "required profile"
+                or str(question.key or "").upper()
+                in {"RFG_BIRTHDAY", "RFG_GENDER", "RFG_POSTAL_CODE"}
+            )
+            if dimension and is_required:
+                required[dimension] = question
+        for question in question_rows:
+            dimension = _rfg_profile_dimension(question)
+            primary = required.get(dimension)
+            if primary and primary.pk != question.pk:
+                profile_aliases.setdefault(primary.pk, []).append(question)
+                aliased_question_ids.add(question.pk)
+
+    for question in question_rows:
+        if question.pk in aliased_question_ids:
+            continue
         display_text = clean_rfg_display_text(question.text or question.key)
         lowered_type = question.question_type.lower()
         normalized_key = str(question.key or "").upper()
@@ -752,6 +824,18 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
         options = []
         age_ranges = []
         allowed_values = _qualifying_option_values(question)
+        dimension = _rfg_profile_dimension(question) if provider_code == "rfg" else ""
+        alias_allowed_sets = [
+            _rfg_alias_allowed_values(alias, dimension)
+            for alias in profile_aliases.get(question.pk, [])
+            if (alias.raw_data or {}).get("targeting_choices")
+        ]
+        for alias_allowed in alias_allowed_sets:
+            allowed_values = (
+                set(alias_allowed)
+                if allowed_values is None
+                else set(allowed_values).intersection(alias_allowed)
+            )
         for option in question.options:
             option_id = option.get("OptionId")
             if option.get("ageStart") is not None:
@@ -776,6 +860,17 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                     })
                 except (KeyError, TypeError, ValueError):
                     continue
+            for alias in profile_aliases.get(question.pk, []):
+                for item in (alias.raw_data or {}).get("targeting_age_ranges") or []:
+                    if not isinstance(item, dict):
+                        continue
+                    try:
+                        age_ranges.append({
+                            "ageStart": int(item.get("min", item.get("ageStart"))),
+                            "ageEnd": int(item.get("max", item.get("ageEnd"))),
+                        })
+                    except (TypeError, ValueError):
+                        continue
         if (is_dob_question or is_age_question) and not age_ranges and allowed_values:
             # Compatibility for Cint targeting stored before explicit age
             # ranges were normalized. Prefer the provider's visible labels so
@@ -856,6 +951,8 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             qualifying_answer_note = ""
         prepared.append({
             "model": question,
+            "profile_dimension": dimension,
+            "aliases": profile_aliases.get(question.pk, []),
             "display_text": display_text,
             "field_name": field_name,
             "input_kind": input_kind,
@@ -948,6 +1045,20 @@ def _collect_prescreener_answers(request, survey):
             "values": values,
             "upstream_values": upstream_values,
         }
+        for alias in prepared.get("aliases", []):
+            alias_upstream_values = _rfg_alias_upstream_values(
+                alias,
+                prepared.get("profile_dimension", ""),
+                upstream_values,
+            )
+            answers[str(alias.pk)] = {
+                "question_id": alias.question_id,
+                "question_key": alias.key,
+                "question_text": clean_rfg_display_text(alias.text or alias.key),
+                "values": values,
+                "upstream_values": alias_upstream_values,
+                "profile_alias": question.key,
+            }
     return answers, errors
 
 

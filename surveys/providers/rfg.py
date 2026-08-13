@@ -225,6 +225,22 @@ class ResearchForGoodProvider(SurveyProvider):
 
         return -int(hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:15], 16)
 
+    @staticmethod
+    def _profile_dimension(*values):
+        """Recognize an RFG mandatory profile field across provider aliases."""
+
+        combined = " ".join(
+            re.sub(r"[^a-z0-9]+", " ", str(value or "").lower()).strip()
+            for value in values
+        )
+        if re.search(r"\b(gender|sex)\b", combined):
+            return "gender"
+        if re.search(r"\b(date of birth|birthday|dob|age)\b", combined):
+            return "age"
+        if re.search(r"\b(postal code|postcode|zip code|zipcode|zip)\b", combined):
+            return "postal"
+        return ""
+
     def refresh_details(self, survey):
         """Replace RFG questions/quotas and store a usable entry link atomically."""
 
@@ -235,13 +251,14 @@ class ResearchForGoodProvider(SurveyProvider):
         for target in datapoints:
             if not isinstance(target, dict):
                 continue
-            if target.get("name") == "Age":
+            dimension = self._profile_dimension(target.get("name"))
+            if dimension == "age":
                 age_ranges = [
                     {"min": item.get("min"), "max": item.get("max")}
                     for item in target.get("values", [])
                     if isinstance(item, dict) and item.get("min") is not None and item.get("max") is not None
                 ]
-            elif target.get("name") == "Gender":
+            elif dimension == "gender":
                 gender_choices = [
                     int(item["choice"])
                     for item in target.get("values", [])
@@ -253,7 +270,10 @@ class ResearchForGoodProvider(SurveyProvider):
             TargetingQuestion(survey=survey, question_id=self._question_id("rfg-postal"), key="RFG_POSTAL_CODE", text="What is your postal code?", question_type="text", category="Required profile", options=[], raw_data={"adapter_version": 2, "mandatory_link_parameter": "postalCode", "country": survey.country_code}),
         ]
         for target in datapoints:
-            if not isinstance(target, dict) or not target.get("name") or target.get("name") in {"Age", "Gender"}:
+            if not isinstance(target, dict) or not target.get("name"):
+                continue
+            initial_dimension = self._profile_dimension(target.get("name"))
+            if initial_dimension in {"age", "gender", "postal"}:
                 continue
             metadata = self.datapoint(target["name"])
             question_type = int(metadata.get("type") or 0)
@@ -261,8 +281,32 @@ class ResearchForGoodProvider(SurveyProvider):
                 continue
             locale = str((self.integration.config or {}).get("locale", "en-US"))
             question_texts = metadata.get("question") if isinstance(metadata.get("question"), dict) else {}
+            localized_question = clean_rfg_display_text(
+                question_texts.get(locale) or question_texts.get("en-US") or target["name"]
+            )
             answers = metadata.get("answers") if isinstance(metadata.get("answers"), list) else []
             allowed = {int(item["choice"]) for item in target.get("values", []) if isinstance(item, dict) and str(item.get("choice", "")).isdigit()}
+            profile_dimension = self._profile_dimension(
+                target.get("name"),
+                metadata.get("property"),
+                localized_question,
+            )
+            if profile_dimension:
+                if profile_dimension == "gender" and allowed:
+                    gender_choices = sorted(allowed)
+                    questions[1].raw_data["targeting_choices"] = gender_choices
+                elif profile_dimension == "age":
+                    discovered_ranges = [
+                        {"min": item.get("min"), "max": item.get("max")}
+                        for item in target.get("values", [])
+                        if isinstance(item, dict)
+                        and item.get("min") is not None
+                        and item.get("max") is not None
+                    ]
+                    if discovered_ranges:
+                        age_ranges = discovered_ranges
+                        questions[0].raw_data["targeting_age_ranges"] = age_ranges
+                continue
             options = []
             for index, answer in enumerate(answers):
                 if index == 0 or not isinstance(answer, dict) or int(answer.get("disposition") or 0) == 3:
@@ -278,9 +322,7 @@ class ResearchForGoodProvider(SurveyProvider):
                 survey=survey,
                 question_id=self._question_id(metadata.get("property") or target["name"]),
                 key=str(metadata.get("property") or target["name"]),
-                text=clean_rfg_display_text(
-                    question_texts.get(locale) or question_texts.get("en-US") or target["name"]
-                ),
+                text=localized_question,
                 question_type="multi" if question_type == 1 else "single",
                 category="RFG targeting",
                 options=options,
@@ -484,6 +526,22 @@ class ResearchForGoodProvider(SurveyProvider):
                 continue
             else:
                 allowed = {str(value) for value in raw.get("targeting_choices") or []}
+                profile_dimension = self._profile_dimension(question.key, question.text)
+                if profile_dimension == "gender":
+                    gender_choice = "1" if gender in {"M", "1"} else "2"
+                    selected = selected or {gender_choice}
+                elif profile_dimension == "age":
+                    ranges = raw.get("targeting_age_ranges") or []
+                    if strict_targeting and ranges and not any(
+                        int(item.get("min", item.get("ageStart")))
+                        <= age
+                        <= int(item.get("max", item.get("ageEnd")))
+                        for item in ranges
+                    ):
+                        return False, "The respondent's age does not match this survey's targeting requirements."
+                    continue
+                elif profile_dimension == "postal":
+                    continue
                 if strict_targeting and allowed and not selected.intersection(allowed):
                     display_text = clean_rfg_display_text(question.text or question.key)
                     return False, f"The answer to '{display_text}' does not match this survey's requirements."
