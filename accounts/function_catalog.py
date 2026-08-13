@@ -206,6 +206,7 @@ FUNCTION_CATALOG = (
     ("users.delete", "Delete subordinate users", "Access control", "Delete permitted subordinate accounts.", ADMIN_ROLES),
     ("users.manage", "Manage employees", "Access control", "Legacy employee-management access.", ADMIN_ROLES),
     ("access.manage", "Manage roles and permissions", "Access control", "Configure functions, roles and user overrides.", ("super-admin",)),
+    ("access.cint_email_pool.manage", "Manage Cint respondent emails", "Access control - Sensitive data", "Import real respondent emails into the encrypted Cint identity pool and view aggregate pool status.", ("super-admin",)),
     ("api_docs.view", "View API documentation", "Development", "Open internal Swagger documentation.", ADMIN_ROLES),
     ("clients.view", "View clients", "Supplier Management - Page & navigation", "View client and integration metadata.", ("super-admin",)),
     ("clients.manage", "Manage clients", "Supplier Management - Actions", "Create and update client metadata.", ("super-admin",)),

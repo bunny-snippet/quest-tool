@@ -1,11 +1,15 @@
+import re
+
 from django.contrib.auth import get_user_model, login
+from django.contrib.auth.decorators import login_required
 from django.contrib.auth.views import LoginView, LogoutView
 from django.db import transaction
 from django.db.models import Count
 from django.http import Http404
 from django.core.exceptions import PermissionDenied
 from django.shortcuts import redirect, render
-from django.urls import reverse_lazy
+from django.urls import reverse, reverse_lazy
+from django.views.decorators.http import require_POST
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import filters, viewsets
 
@@ -18,6 +22,8 @@ from .models import AccessFunction, EmployeeProfile, Role
 from .serializers import AccessFunctionSerializer, RoleSerializer, UserAccessSerializer
 from vendors.access import organization_workspace_owner_ids
 from vendors.models import OrganizationUnit
+from prescreener_vault.cint_email_pool import add_real_email, email_pool_status
+from prescreener_vault.services import PrescreenerVaultError
 
 
 class WorkspaceLoginView(LoginView):
@@ -79,6 +85,18 @@ def access_control_page(request):
         is_active=True,
     ).select_related("workspace_owner", "parent__parent").order_by("workspace_owner__username", "unit_type", "name")
     requester_type = getattr(getattr(request.user, "employee_profile", None), "account_type", "")
+    can_manage_cint_email_pool = has_function_access(
+        request.user, "access.cint_email_pool.manage"
+    )
+    cint_email_pool = None
+    cint_email_pool_error = ""
+    if can_manage_cint_email_pool:
+        try:
+            cint_email_pool = email_pool_status()
+        except Exception:
+            cint_email_pool_error = (
+                "The encrypted email vault is unavailable. Verify the vault migration and database connection."
+            )
     return render(request, "accounts/access_control_v2.html", {
         "active_page": "access-control", "roles": roles, "functions": functions, "employees": users,
         "can_create_users": any(
@@ -94,7 +112,73 @@ def access_control_page(request):
         ),
         "can_create_roles": has_function_access(request.user, "roles.create"),
         "organization_units": organization_units,
+        "can_manage_cint_email_pool": can_manage_cint_email_pool,
+        "cint_email_pool": cint_email_pool,
+        "cint_email_pool_error": cint_email_pool_error,
+        "cint_email_import_result": request.session.pop("cint_email_import_result", None),
     })
+
+
+@login_required
+@require_POST
+def cint_email_pool_import(request):
+    if not has_function_access(request.user, "access.cint_email_pool.manage"):
+        raise PermissionDenied("You cannot manage the Cint respondent email pool.")
+
+    raw = request.POST.get("emails", "")
+    values = [value.strip() for value in re.split(r"[\r\n,;]+", raw) if value.strip()]
+    if len(values) > 5000:
+        request.session["cint_email_import_result"] = {
+            "tone": "error",
+            "message": "Paste at most 5,000 real email addresses in one import.",
+        }
+        return redirect(f"{reverse('access-control')}#cint-email-pool")
+    if not values:
+        request.session["cint_email_import_result"] = {
+            "tone": "error",
+            "message": "Paste at least one real email address.",
+        }
+        return redirect(f"{reverse('access-control')}#cint-email-pool")
+
+    added = existing = invalid = 0
+    invalid_positions = []
+    try:
+        for position, email in enumerate(values, start=1):
+            try:
+                _, created = add_real_email(email)
+            except ValueError:
+                invalid += 1
+                invalid_positions.append(position)
+            else:
+                if created:
+                    added += 1
+                else:
+                    existing += 1
+    except PrescreenerVaultError:
+        request.session["cint_email_import_result"] = {
+            "tone": "error",
+            "message": "The encrypted email vault is temporarily unavailable. No plaintext emails were stored.",
+        }
+    except Exception:
+        request.session["cint_email_import_result"] = {
+            "tone": "error",
+            "message": "Email import could not be completed. Check the vault database and encryption-key configuration.",
+        }
+    else:
+        suffix = (
+            f" Invalid input positions: {', '.join(map(str, invalid_positions[:25]))}"
+            + ("…" if len(invalid_positions) > 25 else "")
+            if invalid_positions
+            else ""
+        )
+        request.session["cint_email_import_result"] = {
+            "tone": "success" if not invalid else "warning",
+            "message": (
+                f"Processed {len(values)}: {added} encrypted and added, "
+                f"{existing} already present, {invalid} invalid.{suffix}"
+            ),
+        }
+    return redirect(f"{reverse('access-control')}#cint-email-pool")
 
 
 @extend_schema_view(

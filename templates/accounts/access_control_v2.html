@@ -2,7 +2,7 @@
 {% load static %}
 {% block title %}Access control · Survey Workspace{% endblock %}
 {% block header_title %}Access control{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'accounts/access.css' %}?v=3"><link rel="stylesheet" href="{% static 'accounts/access-responsive.css' %}?v=2">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'accounts/access.css' %}?v=4"><link rel="stylesheet" href="{% static 'accounts/access-responsive.css' %}?v=2">{% endblock %}
 {% block content %}
 <div class="csrf-source" hidden>{% csrf_token %}</div>
 {{ external_vendor_forbidden_codes|json_script:"externalVendorForbiddenCodes" }}
@@ -19,6 +19,31 @@
   <article><span>Managed users</span><strong>{{ employees|length }}</strong><small>Your visible hierarchy</small></article>
   <article><span>Grantable functions</span><strong>{{ functions|length }}</strong><small>Limited to your own access</small></article>
 </section>
+
+{% if can_manage_cint_email_pool %}
+<section class="access-panel cint-email-pool" id="cint-email-pool">
+  <div class="access-panel-head">
+    <div><p class="eyebrow">Encrypted respondent identity</p><h2>Cint Email Pool</h2><p>Paste real respondent emails. Each address can be permanently assigned to only one UID/PID.</p></div>
+    <span class="pool-security-badge">Encrypted at rest</span>
+  </div>
+  {% if cint_email_pool %}
+  <div class="pool-metrics" aria-label="Cint email pool status">
+    <article><span>Total</span><strong>{{ cint_email_pool.total }}</strong></article>
+    <article class="available"><span>Available</span><strong>{{ cint_email_pool.available }}</strong></article>
+    <article class="assigned"><span>Assigned</span><strong>{{ cint_email_pool.assigned }}</strong></article>
+    <article><span>Session uses</span><strong>{{ cint_email_pool.session_uses }}</strong></article>
+  </div>
+  {% endif %}
+  {% if cint_email_pool_error %}<div class="pool-feedback error">{{ cint_email_pool_error }}</div>{% endif %}
+  {% if cint_email_import_result %}<div class="pool-feedback {{ cint_email_import_result.tone }}">{{ cint_email_import_result.message }}</div>{% endif %}
+  <form class="pool-import-form" method="post" action="{% url 'cint-email-pool-import' %}">
+    {% csrf_token %}
+    <label for="cintEmailPoolInput"><span>Real email addresses</span><small>One per line, or separate using commas. Existing normalized addresses are skipped safely.</small></label>
+    <textarea id="cintEmailPoolInput" name="emails" rows="5" required autocomplete="off" spellcheck="false" placeholder="respondent.one@example.com&#10;respondent.two@example.com"></textarea>
+    <div class="pool-import-actions"><p>Plaintext addresses are encrypted before storage and are never displayed back on this page.</p><button class="primary-button" type="submit">Encrypt & add emails</button></div>
+  </form>
+</section>
+{% endif %}
 
 <section class="access-panel">
   <div class="access-panel-head"><div><h2>Role defaults</h2><p>These permissions become the user's baseline; individual allow/deny rules can override them.</p></div></div>

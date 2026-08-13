@@ -9,6 +9,9 @@ from django.test import TestCase
 from django.urls import reverse
 from rest_framework.test import APIClient
 
+from prescreener_vault.constants import DATABASE_ALIAS
+from prescreener_vault.models import CintRespondentEmail
+
 from .access import has_function_access
 from .function_catalog import sync_access_function_catalog
 from .models import AccessFunction, EmployeeProfile, Role, RoleFunctionPermission, UserFunctionOverride
@@ -305,6 +308,66 @@ class FunctionAccessTests(TestCase):
         self.assertContains(page, "user_hits.column.completes")
         self.assertContains(page, "Select entire group")
         self.assertContains(page, "assigned functions")
+
+
+class CintEmailPoolAccessTests(TestCase):
+    databases = {"default", DATABASE_ALIAS}
+
+    def setUp(self):
+        self.owner = get_user_model().objects.create_superuser(
+            username="email-pool-owner",
+            email="owner@example.test",
+            password="password-123",
+        )
+
+    def test_super_admin_can_bulk_import_real_emails_from_access_control(self):
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("access-control"))
+        self.assertContains(page, "Cint Email Pool")
+        self.assertContains(page, "Encrypt & add emails")
+
+        response = self.client.post(reverse("cint-email-pool-import"), {
+            "emails": "Real.One@example.com\nreal.two@example.com\ninvalid-value",
+        })
+        self.assertRedirects(
+            response,
+            reverse("access-control") + "#cint-email-pool",
+            fetch_redirect_response=False,
+        )
+        self.assertEqual(
+            CintRespondentEmail.objects.using(DATABASE_ALIAS).count(),
+            2,
+        )
+        stored = CintRespondentEmail.objects.using(DATABASE_ALIAS).first()
+        self.assertNotIn("real.one", stored.encrypted_email.lower())
+
+        result = self.client.get(reverse("access-control"))
+        self.assertContains(result, "2 encrypted and added")
+        self.assertContains(result, "1 invalid")
+        self.assertNotContains(result, "Real.One@example.com")
+
+    def test_employee_cannot_view_or_submit_sensitive_email_pool(self):
+        employee = get_user_model().objects.create_user(
+            username="email-pool-employee",
+            password="password-123",
+        )
+        UserFunctionOverride.objects.create(
+            user=employee,
+            function=AccessFunction.objects.get(code="access.manage"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        self.client.force_login(employee)
+        page = self.client.get(reverse("access-control"))
+        self.assertEqual(page.status_code, 200)
+        self.assertNotContains(page, "Cint Email Pool")
+        denied = self.client.post(
+            reverse("cint-email-pool-import"),
+            {"emails": "respondent@example.com"},
+        )
+        self.assertEqual(denied.status_code, 403)
+        self.assertFalse(
+            CintRespondentEmail.objects.using(DATABASE_ALIAS).exists()
+        )
 
 
 class DelegatedVendorTests(TestCase):
