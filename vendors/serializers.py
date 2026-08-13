@@ -279,13 +279,15 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     "scheduled_sync_enabled": "Test and verify this connection before scheduling it."
                 })
-            set_default("inventory_endpoint", "/Supply/v1/Surveys/AllOfferwall/{supplier_code}")
-            set_default("paged_inventory_endpoint", "/Supply/v1/Surveys/SupplierAllocations/All/{supplier_code}")
+            set_default(
+                "inventory_endpoint",
+                "/Supply/v1/Surveys/AllOfferwall/ByCountryLanguage/{country_language_id}/{supplier_code}",
+            )
             set_default("quota_endpoint_template", "/Supply/v1/SurveyQuotas/BySurveyNumber/{survey_id}/{supplier_code}")
             set_default("targeting_endpoint_template", "/Supply/v1/SurveyQualifications/BySurveyNumberForOfferwall/{survey_id}")
             set_default("auth_header_name", "Authorization")
             set_default("auth_header_prefix", "")
-            set_default("inventory_result_key", "Surveys + SupplierAllocationSurveys")
+            set_default("inventory_result_key", "Surveys")
             set_default("quota_result_key", "SurveyQuotas")
             set_default("targeting_result_key", "SurveyQualification.Questions")
             # Cint does not use the generic transaction endpoint, but this

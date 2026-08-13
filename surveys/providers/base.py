@@ -47,6 +47,7 @@ class SurveyProvider:
     minimum_sync_interval_seconds = 60
     credential_fields: tuple[tuple[str, str], ...] = ()
     default_base_url = ""
+    close_missing_inventory_items = True
 
     def __init__(self, integration, *, session=None):
         self.integration = integration
@@ -60,6 +61,11 @@ class SurveyProvider:
 
     def normalize_inventory_item(self, payload: dict[str, Any], seen_at) -> NormalizedSurvey:
         raise NotImplementedError
+
+    def prepare_inventory_item(self, normalized: NormalizedSurvey, existing_survey=None) -> NormalizedSurvey:
+        """Perform provider work required before an inventory row may be persisted."""
+
+        return normalized
 
     def refresh_details(self, survey) -> None:
         raise NotImplementedError

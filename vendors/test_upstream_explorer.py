@@ -50,7 +50,7 @@ class UpstreamExplorerTests(TestCase):
     def test_every_documented_provider_operation_has_named_route_and_plain_language_contract(self):
         self.assertEqual(len(INNOVATE_OPERATIONS), 34)
         self.assertEqual(len(RFG_OPERATIONS), 12)
-        self.assertEqual(len(CINT_OPERATIONS), 11)
+        self.assertEqual(len(CINT_OPERATIONS), 12)
         for provider, operations in (
             ("innovatemr", INNOVATE_OPERATIONS),
             ("rfg", RFG_OPERATIONS),

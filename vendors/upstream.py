@@ -301,6 +301,14 @@ CINT_OPERATIONS = {
         "/Supply/v1/Surveys/AllOfferwall/{supplier_code}", CINT_DOCS,
         response_description="Open Cint survey rows with SurveyNumber, buyer, market, LOI, IR, RPI and remaining capacity.",
     ),
+    "country_language_inventory": OperationSpec(
+        "country_language_inventory", "Marketplace surveys by country-language",
+        "Live Marketplace opportunities for one Cint CountryLanguageID; this is the production inventory endpoint used by Quest.",
+        "/Supply/v1/Surveys/AllOfferwall/ByCountryLanguage/{country_language_id}/{supplier_code}",
+        CINT_DOCS,
+        required_parameters=("country_language_id",),
+        response_description="Country-language-scoped Cint surveys with SurveyNumber, RPI, LOI, IR, market and capacity fields.",
+    ),
     "allocated_inventory": OperationSpec(
         "allocated_inventory", "Allocated surveys", "Live surveys allocated or linked to this Cint supplier.",
         "/Supply/v1/Surveys/SupplierAllocations/All/{supplier_code}", CINT_DOCS,

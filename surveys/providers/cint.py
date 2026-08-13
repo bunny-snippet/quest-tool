@@ -40,6 +40,20 @@ class CintProvider(SurveyProvider):
     default_base_url = "https://api.samplicio.us"
     minimum_sync_interval_seconds = 60
     credential_fields = (("token", "Authorization API key"),)
+    # Creating a supplier link removes an opportunity from the open Marketplace
+    # feed. Its lifecycle is therefore closed by the quota/detail API, not by an
+    # absence from a subsequent open-feed response.
+    close_missing_inventory_items = False
+
+    MARKETPLACE_RULES = {
+        6: {"country_code": "CA", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
+        7: {"country_code": "IN", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
+        8: {"country_code": "GB", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("2")},
+        9: {"country_code": "US", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
+        10: {"country_code": "FR", "language_code": "FRE", "minimum": Decimal("1"), "maximum": Decimal("4")},
+        76: {"country_code": "IN", "language_code": "HIN", "minimum": Decimal("1"), "maximum": Decimal("4")},
+    }
+    MARKETPLACE_MIN_REQUEST_INTERVAL_SECONDS = 1.01
 
     DEFINITIONS = (
         "Lookup/v1/BasicLookups/BundledLookups/"
@@ -70,18 +84,15 @@ class CintProvider(SurveyProvider):
             self.timeout,
             min(int(config.get("request_wall_timeout_seconds", 150)), 300),
         )
-        self.include_open = config.get("include_open_opportunities", True) is not False
-        self.include_allocated = config.get("include_allocated_surveys", True) is not False
         self.manage_supplier_links = config.get("manage_supplier_links", True) is not False
         self.create_missing_supplier_links = config.get("create_missing_supplier_links", True) is not False
         self.hash_key_env = str(config.get("hash_key_env") or "CINT_HASH_KEY").strip()
-        if not self.include_open and not self.include_allocated:
-            raise ProviderConfigurationError(
-                "Enable at least one Cint inventory source: open opportunities or allocated surveys."
-            )
         self._country_languages = {}
         self._sample_types = {}
         self._study_types = {}
+        self._last_marketplace_request_started_at = None
+        self.inventory_failures = []
+        self.rejected_source_keys = set()
 
     def _request(self, path, *, method="GET", payload=None, allow_not_found=False):
         """Execute one authenticated Cint call with response and wall-time guards."""
@@ -182,58 +193,85 @@ class CintProvider(SurveyProvider):
         """Verify API key and Supplier Code with a bounded lookup request."""
 
         definitions = self._load_definitions()
-        inventory = self._request(f"Supply/v1/Surveys/Inventory/{self.supplier_code}")
-        ids = inventory.get("SupplyAllocationSurveyIDs") or []
+        inventory = self._marketplace_request(9)
         return {
             "provider": self.code,
             "authenticated": True,
             "supplier_code": self.supplier_code,
             "country_languages": len(definitions.get("AllCountryLanguages") or []),
-            "allocated_survey_ids": len(ids) if isinstance(ids, list) else 0,
+            "eng_us_marketplace_surveys": len(self._rows(inventory, "Surveys")),
         }
 
+    def _marketplace_request(self, country_language_id):
+        """Call the locale feed while enforcing Cint's one-request-per-second cap."""
+
+        now = time.monotonic()
+        if self._last_marketplace_request_started_at is not None:
+            remaining = (
+                self.MARKETPLACE_MIN_REQUEST_INTERVAL_SECONDS
+                - (now - self._last_marketplace_request_started_at)
+            )
+            if remaining > 0:
+                time.sleep(remaining)
+        self._last_marketplace_request_started_at = time.monotonic()
+        return self._request(
+            "Supply/v1/Surveys/AllOfferwall/ByCountryLanguage/"
+            f"{country_language_id}/{self.supplier_code}"
+        )
+
+    def _marketplace_rpi_allowed(self, country_language_id, value):
+        """Apply the approved inclusive RPI band for one locale feed."""
+
+        rule = self.MARKETPLACE_RULES.get(self._integer(country_language_id, -1))
+        rpi = self._decimal(value)
+        return bool(rule and rpi is not None and rule["minimum"] <= rpi <= rule["maximum"])
+
     def inventory(self):
-        """Merge open opportunities and this supplier's allocated surveys."""
+        """Fetch and filter only the six approved CountryLanguage marketplace feeds."""
 
         self._load_definitions()
         merged = {}
-        if self.include_allocated:
-            data = self._request(
-                f"Supply/v1/Surveys/SupplierAllocations/All/{self.supplier_code}"
-            )
-            for row in self._rows(data, "SupplierAllocationSurveys"):
-                if row.get("SurveyNumber") is None:
-                    continue
-                key = str(row["SurveyNumber"])
-                merged[key] = {
-                    **merged.get(key, {}),
-                    **row,
-                    "_cint_inventory_source": "allocated",
-                }
-        if self.include_open:
+        self.inventory_failures = []
+        self.rejected_source_keys = set()
+        successful_feeds = 0
+        for country_language_id in self.MARKETPLACE_RULES:
             try:
-                data = self._request(f"Supply/v1/Surveys/AllOfferwall/{self.supplier_code}")
-            except ProviderError:
-                if not merged:
-                    raise
+                data = self._marketplace_request(country_language_id)
+                successful_feeds += 1
+            except ProviderError as exc:
+                self.inventory_failures.append({
+                    "country_language_id": country_language_id,
+                    "error": str(exc)[:500],
+                })
                 logger.warning(
-                    "Cint open-opportunity inventory failed; continuing with %s allocated surveys "
-                    "for integration=%s.",
-                    len(merged), self.integration.pk,
+                    "Cint marketplace feed failed integration=%s country_language_id=%s.",
+                    self.integration.pk, country_language_id,
                     exc_info=True,
                 )
-            else:
-                for row in self._rows(data, "Surveys"):
-                    if row.get("SurveyNumber") is None:
-                        continue
-                    key = str(row["SurveyNumber"])
-                    merged[key] = {
-                        **row,
-                        **merged.get(key, {}),
-                        "_cint_inventory_source": (
-                            "allocated" if key in merged else "open_opportunity"
-                        ),
-                    }
+                continue
+            for row in self._rows(data, "Surveys"):
+                survey_number = row.get("SurveyNumber")
+                if survey_number is None:
+                    continue
+                key = str(survey_number)
+                returned_country_language_id = self._integer(
+                    row.get("CountryLanguageID"), -1
+                )
+                if (
+                    returned_country_language_id != country_language_id
+                    or not self._marketplace_rpi_allowed(country_language_id, row.get("RPI"))
+                ):
+                    if key not in merged:
+                        self.rejected_source_keys.add(key)
+                    continue
+                self.rejected_source_keys.discard(key)
+                merged[key] = {
+                    **row,
+                    "_cint_inventory_source": "marketplace_country_language",
+                    "_cint_country_language_request_id": country_language_id,
+                }
+        if not successful_feeds:
+            raise ProviderError("All approved Cint country-language inventory requests failed.")
         return list(merged.values())
 
     @staticmethod
@@ -302,7 +340,12 @@ class CintProvider(SurveyProvider):
             payload.get("SupplierLink"), payload.get("Target"), payload.get("TargetModel"),
             allocation.get("Target"), allocation.get("TargetModel"),
         ]
-        return next((item for item in candidates if isinstance(item, dict)), {})
+        link = next((item for item in candidates if isinstance(item, dict)), {})
+        if not link and any(
+            payload.get(key) for key in ("LiveLink", "LiveSupplierLink", "TestLink", "TestSupplierLink")
+        ):
+            link = payload
+        return link
 
     def _country_language(self, identifier):
         """Expand CountryLanguageID into normalized market/language fields."""
@@ -314,12 +357,18 @@ class CintProvider(SurveyProvider):
         name_parts = [part.strip() for part in name.split(" - ", 1)]
         language = name_parts[0] if name_parts else ""
         country = name_parts[1] if len(name_parts) > 1 else name
-        return {
+        normalized = {
             "country": country,
             "country_code": code_parts[-1] if len(code_parts) > 1 else "",
             "language": language,
             "language_code": code_parts[0] if len(code_parts) > 1 else "",
         }
+        rule = self.MARKETPLACE_RULES.get(self._integer(identifier, -1), {})
+        if not normalized["country_code"]:
+            normalized["country_code"] = rule.get("country_code", "")
+        if not normalized["language_code"]:
+            normalized["language_code"] = rule.get("language_code", "")
+        return normalized
 
     def _survey_type(self, sample_type_id):
         """Normalize Cint sample type into the platform's B2B/B2C label."""
@@ -641,6 +690,10 @@ class CintProvider(SurveyProvider):
         )
         total_remaining = max(0, self._integer(total_quota.get("NumberOfRespondents")))
         quota_cpi = self._decimal(total_quota.get("RPI"))
+        rpi_allowed = (
+            quota_cpi is None
+            or self._marketplace_rpi_allowed(country_language_id, quota_cpi)
+        )
         now = timezone.now()
         with transaction.atomic():
             survey.targeting_questions.all().delete()
@@ -654,7 +707,7 @@ class CintProvider(SurveyProvider):
                 survey.cpi = quota_cpi
             survey.status = (
                 Survey.Status.CLOSED
-                if quota_data.get("SurveyStillLive") is False
+                if quota_data.get("SurveyStillLive") is False or not rpi_allowed
                 else Survey.Status.LIVE
             )
             survey.targeting_synced_at = now
@@ -698,6 +751,86 @@ class CintProvider(SurveyProvider):
         payload = self._redirect_payload()
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def prepare_inventory_item(self, normalized, existing_survey=None):
+        """Provision callbacks before allowing one accepted survey into the DB.
+
+        A survey that is new to this integration uses Cint's Create endpoint;
+        an existing local survey uses Update. Any upstream failure aborts this
+        individual row, so an unconfigured survey is never exposed in Projects.
+        """
+
+        if existing_survey is not None:
+            local_raw = existing_survey.raw_data or {}
+            existing_provider_payload = {
+                key: value for key, value in local_raw.items()
+                if not str(key).startswith("_cint_")
+            }
+            incoming_provider_payload = {
+                key: value for key, value in normalized.raw_data.items()
+                if not str(key).startswith("_cint_")
+            }
+            current_contract = (
+                local_raw.get("_cint_redirect_contract")
+                == self.redirect_contract_fingerprint()
+            )
+            normalized_fields_match = all(
+                getattr(existing_survey, field) == value
+                for field, value in normalized.values.items()
+                if field not in {"raw_data", "last_seen_at", "entry_link", "test_entry_link"}
+            )
+            if (
+                current_contract
+                and existing_provider_payload == incoming_provider_payload
+                and normalized_fields_match
+            ):
+                return normalized
+
+        method = "PUT" if existing_survey is not None else "POST"
+        action = "Update" if existing_survey is not None else "Create"
+        result = self._request(
+            f"Supply/v1/SupplierLinks/{action}/{normalized.source_key}/{self.supplier_code}",
+            method=method,
+            payload=self._redirect_payload(),
+        )
+        link = self._supplier_link(result)
+        if not link and existing_survey is None:
+            lookup = self._request(
+                "Supply/v1/SupplierLinks/BySurveyNumber/"
+                f"{normalized.source_key}/{self.supplier_code}"
+            )
+            link = self._supplier_link(lookup)
+
+        live_link = str(
+            link.get("LiveLink") or link.get("LiveSupplierLink") or ""
+        ).strip() if link else ""
+        test_link = str(
+            link.get("TestLink") or link.get("TestSupplierLink") or ""
+        ).strip() if link else ""
+        if existing_survey is None and not live_link:
+            raise ProviderError(
+                "Cint created the supplier link but did not return a usable live entry link."
+            )
+
+        raw_data = normalized.raw_data
+        raw_data["_cint_redirect_contract"] = self.redirect_contract_fingerprint()
+        raw_data["_cint_redirect_synced_at"] = timezone.now().isoformat()
+        raw_data["_cint_redirect_supplier_code"] = self.supplier_code
+        raw_data["_cint_redirect_method"] = method
+        if link:
+            raw_data["_cint_supplier_link"] = {
+                key: value for key, value in link.items()
+                if key not in {
+                    "DefaultLink", "SuccessLink", "FailureLink",
+                    "OverQuotaLink", "QualityTerminationLink",
+                }
+            }
+        if live_link:
+            normalized.values["entry_link"] = live_link
+        if test_link:
+            normalized.values["test_entry_link"] = test_link
+        normalized.values["raw_data"] = raw_data
+        return normalized
 
     def update_supplier_link_redirects(self, survey):
         """Configure callbacks for one Cint survey using its real supplier code.

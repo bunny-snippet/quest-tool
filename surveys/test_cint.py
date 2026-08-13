@@ -57,7 +57,12 @@ class RecordingSession:
 DEFINITIONS = {
     "ApiResult": 0,
     "AllCountryLanguages": [
-        {"Id": "9", "Code": "ENG-US", "Name": "English - United States"}
+        {"Id": "6", "Code": "ENG-CA", "Name": "English - Canada"},
+        {"Id": "7", "Code": "ENG-IN", "Name": "English - India"},
+        {"Id": "8", "Code": "ENG-GB", "Name": "English - United Kingdom"},
+        {"Id": "9", "Code": "ENG-US", "Name": "English - United States"},
+        {"Id": "10", "Code": "FRE-FR", "Name": "French - France"},
+        {"Id": "76", "Code": "HIN-IN", "Name": "Hindi - India"},
     ],
     "AllSampleTypes": [
         {"Id": "1", "Code": "B2C", "Name": "Consumer"},
@@ -85,77 +90,130 @@ class CintProviderTests(TestCase):
             detail_refresh_batch=1,
         )
 
+    @patch("surveys.providers.cint.time.sleep")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
-    def test_inventory_merges_open_and_allocated_surveys(self):
+    def test_inventory_uses_only_approved_locales_and_inclusive_rpi_bands(self, sleep_mock):
         session = RecordingSession(
-            DEFINITIONS,
-            {
-                "ApiResult": 0,
-                "SupplierAllocationSurveys": [{
-                    "SurveyName": "Allocated business study",
-                    "SurveyNumber": 143479,
-                    "AccountName": "Buyer B",
-                    "CountryLanguageID": 9,
-                    "LengthOfInterview": 8,
-                    "BidIncidence": 45,
-                    "SampleTypeID": 2,
-                    "StudyTypeID": 1,
-                }],
-            },
-            {
-                "ApiResult": 0,
-                "Surveys": [{
-                    "SurveyName": "Open consumer study",
-                    "SurveyNumber": 457751,
-                    "AccountName": "Buyer A",
-                    "CountryLanguageID": 9,
-                    "LengthOfInterview": 12,
-                    "BidIncidence": 30,
-                    "RPI": {"Value": 1.35, "CurrencyCode": "USD"},
-                    "OverallCompletes": 5,
-                    "TotalRemaining": 95,
-                    "SampleTypeID": 1,
-                    "StudyTypeID": 1,
-                }],
-            },
+            {"ApiResult": 0, "Surveys": [
+                {"SurveyNumber": 6001, "CountryLanguageID": 6, "RPI": {"Value": 1}},
+                {"SurveyNumber": 6002, "CountryLanguageID": 6, "RPI": {"Value": 4}},
+                {"SurveyNumber": 6003, "CountryLanguageID": 6, "RPI": {"Value": 0.99}},
+                {"SurveyNumber": 6004, "CountryLanguageID": 6, "RPI": {"Value": 4.01}},
+                {"SurveyNumber": 6099, "CountryLanguageID": 9, "RPI": {"Value": 2}},
+            ]},
+            {"ApiResult": 0, "Surveys": [
+                {"SurveyNumber": 7001, "CountryLanguageID": 7, "RPI": {"Value": 2.50}},
+            ]},
+            {"ApiResult": 0, "Surveys": [
+                {"SurveyNumber": 8001, "CountryLanguageID": 8, "RPI": {"Value": 1}},
+                {"SurveyNumber": 8002, "CountryLanguageID": 8, "RPI": {"Value": 2}},
+                {"SurveyNumber": 8003, "CountryLanguageID": 8, "RPI": {"Value": 2.01}},
+            ]},
+            {"ApiResult": 0, "Surveys": [
+                {"SurveyNumber": 9001, "CountryLanguageID": 9, "RPI": {"Value": 4}},
+            ]},
+            {"ApiResult": 0, "Surveys": [
+                {"SurveyNumber": 10001, "CountryLanguageID": 10, "RPI": {"Value": 1}},
+            ]},
+            {"ApiResult": 0, "Surveys": [
+                {"SurveyNumber": 76001, "CountryLanguageID": 76, "RPI": {"Value": 4}},
+            ]},
         )
         provider = CintProvider(self.integration, session=session)
-        with patch("surveys.provider_services.get_provider", return_value=provider):
-            run = sync_client_integration(self.integration)
-
-        self.assertEqual((run.created, run.unique_surveys), (2, 2))
-        open_survey = Survey.objects.get(integration=self.integration, source_key="457751")
-        allocated = Survey.objects.get(integration=self.integration, source_key="143479")
-        self.assertEqual(open_survey.cpi, Decimal("1.35"))
-        self.assertEqual((open_survey.completes, open_survey.remaining), (5, 95))
-        self.assertEqual(open_survey.country_code, "US")
-        self.assertEqual(open_survey.language_code, "ENG")
-        self.assertEqual(open_survey.survey_type, "B2C")
-        self.assertEqual(allocated.survey_type, "B2B")
-        self.assertIsNone(allocated.cpi)
-        self.assertEqual(allocated.entry_link, "")
-        self.assertEqual(session.calls[0][1]["headers"]["Authorization"], "cint-secret")
-        self.assertTrue(session.calls[1][0].endswith(
-            "/Supply/v1/Surveys/SupplierAllocations/All/0050"
-        ))
-        self.assertTrue(session.calls[2][0].endswith("/Supply/v1/Surveys/AllOfferwall/0050"))
-
-    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
-    def test_inventory_keeps_allocated_surveys_when_open_opportunities_fail(self):
-        provider = CintProvider(self.integration, session=RecordingSession())
-        allocated = {
-            "ApiResult": 0,
-            "SupplierAllocationSurveys": [{"SurveyNumber": 143479}],
-        }
-        with patch.object(provider, "_load_definitions"), patch.object(
-            provider, "_request", side_effect=[allocated, ProviderError("open inventory timeout")]
-        ):
+        with patch.object(provider, "_load_definitions"):
             rows = provider.inventory()
 
-        self.assertEqual([row["SurveyNumber"] for row in rows], [143479])
+        self.assertEqual(
+            [str(row["SurveyNumber"]) for row in rows],
+            ["6001", "6002", "7001", "8001", "8002", "9001", "10001", "76001"],
+        )
+        self.assertEqual(
+            provider.rejected_source_keys,
+            {"6003", "6004", "6099", "8003"},
+        )
+        requested = [call[0].split("/ByCountryLanguage/", 1)[1] for call in session.calls]
+        self.assertEqual(
+            requested,
+            ["6/0050", "7/0050", "8/0050", "9/0050", "10/0050", "76/0050"],
+        )
+        self.assertEqual(sleep_mock.call_count, 5)
 
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
-    def test_inventory_sync_preserves_hydrated_supplier_link_when_list_omits_it(self):
+    def test_sync_posts_new_links_and_puts_existing_links_before_db_write(self):
+        existing = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="143479",
+            company_name="Cint Exchange",
+            entry_link="https://samplicio.us/s/default.aspx?SID=existing&PID=",
+        )
+        session = RecordingSession(
+            {"ApiResult": 0, "SupplierLink": {
+                "LiveLink": "https://samplicio.us/s/default.aspx?SID=new&PID=",
+                "TestLink": "https://samplicio.us/s/default.aspx?SID=new-test&PID=",
+            }},
+            {"ApiResult": 0},
+        )
+        provider = CintProvider(self.integration, session=session)
+        provider._country_languages = {"9": DEFINITIONS["AllCountryLanguages"][3]}
+        provider._sample_types = {"1": DEFINITIONS["AllSampleTypes"][0]}
+        provider._study_types = {"1": DEFINITIONS["AllStudyTypes"][0]}
+        inventory = [
+            {
+                "SurveyNumber": 457751, "SurveyName": "New survey",
+                "CountryLanguageID": 9, "RPI": {"Value": 1.35},
+                "SampleTypeID": 1, "StudyTypeID": 1,
+            },
+            {
+                "SurveyNumber": 143479, "SurveyName": "Updated survey",
+                "CountryLanguageID": 9, "RPI": {"Value": 2.25},
+                "SampleTypeID": 1, "StudyTypeID": 1,
+            },
+        ]
+        with patch.object(provider, "inventory", return_value=inventory), patch(
+            "surveys.provider_services.get_provider", return_value=provider
+        ):
+            run = sync_client_integration(self.integration)
+
+        self.assertEqual((run.created, run.updated, run.unique_surveys), (1, 1, 2))
+        self.assertEqual(len(session.calls), 2)
+        self.assertIn("/SupplierLinks/Create/457751/0050", session.calls[0][0])
+        self.assertIn("/SupplierLinks/Update/143479/0050", session.calls[1][0])
+        self.assertEqual(session.calls[0][1]["json"], provider._redirect_payload())
+        self.assertEqual(session.calls[1][1]["json"], provider._redirect_payload())
+        created = Survey.objects.get(integration=self.integration, source_key="457751")
+        self.assertIn("SID=new", created.entry_link)
+        self.assertEqual(created.raw_data["_cint_redirect_method"], "POST")
+        existing.refresh_from_db()
+        self.assertEqual(existing.cpi, Decimal("2.25"))
+        self.assertIn("SID=existing", existing.entry_link)
+        self.assertEqual(existing.raw_data["_cint_redirect_method"], "PUT")
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_failed_link_provisioning_skips_new_survey_entirely(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+        provider._country_languages = {"9": DEFINITIONS["AllCountryLanguages"][3]}
+        inventory = [{
+            "SurveyNumber": 457751,
+            "CountryLanguageID": 9,
+            "RPI": {"Value": 1.35},
+        }]
+        with patch.object(provider, "inventory", return_value=inventory), patch.object(
+            provider, "_request", side_effect=ProviderError("link create failed")
+        ), patch("surveys.provider_services.get_provider", return_value=provider):
+            run = sync_client_integration(self.integration)
+
+        self.assertEqual(run.status, "partial")
+        self.assertEqual(run.detail_failures, 1)
+        self.assertFalse(
+            Survey.objects.filter(integration=self.integration, source_key="457751").exists()
+        )
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_inventory_sync_preserves_hydrated_supplier_link_on_put(self):
         survey = Survey.objects.create(
             client=self.client_record,
             integration=self.integration,
@@ -164,36 +222,65 @@ class CintProviderTests(TestCase):
             company_name="Cint Exchange",
             entry_link="https://samplicio.us/s/default.aspx?SID=live-sid&PID=",
             test_entry_link="https://samplicio.us/s/default.aspx?SID=test-sid&PID=",
-            raw_data={
-                "_cint_supplier_link": {"SupplierLinkID": 99},
-                "_cint_redirect_contract": "configured-contract",
-            },
+            raw_data={"_cint_supplier_link": {"SupplierLinkID": 99}},
         )
-        session = RecordingSession(
-            DEFINITIONS,
-            {
-                "ApiResult": 0,
-                "SupplierAllocationSurveys": [{
-                    "SurveyNumber": 143479,
-                    "SurveyName": "Allocated survey without embedded link",
-                    "CountryLanguageID": 9,
-                }],
-            },
-            {"ApiResult": 0, "Surveys": []},
+        provider = CintProvider(
+            self.integration,
+            session=RecordingSession({"ApiResult": 0}),
         )
-        provider = CintProvider(self.integration, session=session)
-        with patch("surveys.provider_services.get_provider", return_value=provider):
+        provider._country_languages = {"9": DEFINITIONS["AllCountryLanguages"][3]}
+        inventory = [{
+            "SurveyNumber": 143479,
+            "SurveyName": "Existing survey",
+            "CountryLanguageID": 9,
+            "RPI": {"Value": 1.50},
+        }]
+        with patch.object(provider, "inventory", return_value=inventory), patch(
+            "surveys.provider_services.get_provider", return_value=provider
+        ):
             sync_client_integration(self.integration)
 
         survey.refresh_from_db()
         self.assertIn("SID=live-sid", survey.entry_link)
         self.assertIn("SID=test-sid", survey.test_entry_link)
+        self.assertEqual(survey.raw_data["_cint_supplier_link"]["SupplierLinkID"], 99)
         self.assertEqual(
-            survey.raw_data["_cint_supplier_link"]["SupplierLinkID"], 99
+            survey.raw_data["_cint_redirect_contract"],
+            provider.redirect_contract_fingerprint(),
         )
-        self.assertEqual(
-            survey.raw_data["_cint_redirect_contract"], "configured-contract"
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_unchanged_existing_inventory_does_not_repeat_redirect_put(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+        provider._country_languages = {"9": DEFINITIONS["AllCountryLanguages"][3]}
+        payload = {
+            "SurveyNumber": 143479,
+            "SurveyName": "Stable survey",
+            "CountryLanguageID": 9,
+            "RPI": {"Value": 1.50},
+        }
+        normalized = provider.normalize_inventory_item(payload, timezone.now())
+        values = dict(normalized.values)
+        values["entry_link"] = "https://samplicio.us/s/default.aspx?SID=stable&PID="
+        values["raw_data"] = {
+            **normalized.raw_data,
+            "_cint_redirect_contract": provider.redirect_contract_fingerprint(),
+        }
+        Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_id=normalized.numeric_source_id,
+            source_key=normalized.source_key,
+            **values,
         )
+        with patch.object(provider, "inventory", return_value=[payload]), patch(
+            "surveys.provider_services.get_provider", return_value=provider
+        ):
+            run = sync_client_integration(self.integration)
+
+        self.assertEqual(run.unchanged, 1)
+        self.assertEqual(provider.session.calls, [])
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
@@ -607,4 +694,11 @@ class CintProviderTests(TestCase):
         self.assertEqual(integration.quota_result_key, "SurveyQuotas")
         self.assertEqual(integration.transaction_result_key, "result")
         self.assertEqual(integration.credential_env_key, "CINT_API_KEY")
+        self.assertEqual(
+            integration.inventory_endpoint,
+            "/Supply/v1/Surveys/AllOfferwall/ByCountryLanguage/"
+            "{country_language_id}/{supplier_code}",
+        )
+        self.assertEqual(integration.inventory_result_key, "Surveys")
+        self.assertEqual(integration.paged_inventory_endpoint, "")
         self.assertFalse(integration.encrypted_api_token)

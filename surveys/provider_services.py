@@ -32,6 +32,7 @@ def _preserve_provider_local_state(integration, survey, normalized):
         "_cint_redirect_contract",
         "_cint_redirect_synced_at",
         "_cint_redirect_supplier_code",
+        "_cint_redirect_method",
     ):
         value = local_raw_data.get(key)
         if value not in (None, "") and key not in normalized.raw_data:
@@ -102,11 +103,36 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
     try:
         inventory = provider.inventory()
         run.fetched_full = len(inventory)
+        prepared_rows = [
+            provider.normalize_inventory_item(payload, now)
+            for payload in inventory
+        ]
+        source_keys = [row.source_key for row in prepared_rows]
+        # Load only rows represented by this response; never materialize an
+        # integration's entire historical inventory into worker memory.
+        existing_surveys = {
+            survey.source_key: survey
+            for survey in Survey.objects.filter(
+                integration=integration,
+                source_key__in=source_keys,
+            )
+        }
         normalized_rows = {}
-        for payload in inventory:
-            normalized = provider.normalize_inventory_item(payload, now)
+        for normalized in prepared_rows:
+            existing = existing_surveys.get(normalized.source_key)
+            try:
+                normalized = provider.prepare_inventory_item(normalized, existing)
+            except Exception:
+                run.detail_failures += 1
+                logger.exception(
+                    "Provider pre-persistence preparation failed integration=%s survey=%s",
+                    integration.pk,
+                    normalized.source_key,
+                )
+                continue
             normalized_rows[normalized.source_key] = normalized
         run.unique_surveys = len(normalized_rows)
+        run.detail_failures += len(getattr(provider, "inventory_failures", []))
 
         with transaction.atomic():
             for source_key, normalized in normalized_rows.items():
@@ -141,10 +167,23 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                     survey.save(update_fields=["last_seen_at", "integration", "updated_at"])
                     run.unchanged += 1
 
-            run.closed = Survey.objects.filter(
-                integration=integration,
-                status=Survey.Status.LIVE,
-            ).exclude(source_key__in=normalized_rows).update(status=Survey.Status.CLOSED, updated_at=now)
+            if provider.close_missing_inventory_items:
+                run.closed = Survey.objects.filter(
+                    integration=integration,
+                    status=Survey.Status.LIVE,
+                ).exclude(source_key__in=normalized_rows).update(
+                    status=Survey.Status.CLOSED,
+                    updated_at=now,
+                )
+            else:
+                # Cint open opportunities disappear after link creation. Only
+                # rows explicitly rejected by the current CPI/locale policy are
+                # closed here; allocated rows absent from the feed stay live.
+                run.closed = Survey.objects.filter(
+                    integration=integration,
+                    status=Survey.Status.LIVE,
+                    source_key__in=getattr(provider, "rejected_source_keys", set()),
+                ).update(status=Survey.Status.CLOSED, updated_at=now)
 
         if refresh_details:
             detail_batch = int((integration.config or {}).get("detail_refresh_batch", integration.detail_refresh_batch))
