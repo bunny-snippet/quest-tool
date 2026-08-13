@@ -379,14 +379,14 @@ class ResearchForGoodProvider(SurveyProvider):
         sync_survey_mappings(survey)
 
     def duplicate_check(self, survey, attempt, ip_address, fingerprint="0"):
-        """Check RFG duplication using the persistent vault UID as RFG ``rid``."""
+        """Check RFG duplication using the platform attempt RID as RFG ``rid``."""
 
         fingerprint = str(fingerprint or "0").strip()
         if fingerprint != "0" and not re.fullmatch(r"[0-9a-fA-F]{32,128}", fingerprint):
             fingerprint = "0"
-        rfg_rid = str(attempt.prescreener_uid or "").strip()
+        rfg_rid = str(attempt.rid or "").strip()
         if not rfg_rid:
-            raise ProviderError("RFG requires the prescreener UID as its persistent RID.")
+            raise ProviderError("RFG requires the platform attempt RID.")
         response = self._command({"command": "livealert/duplicateCheck/1", "rfg_id": survey.source_key, "fingerprint": 0 if fingerprint == "0" else fingerprint, "rid": rfg_rid, "ip": ip_address or ""})
         return bool(response.get("isDuplicate"))
 
@@ -397,7 +397,7 @@ class ResearchForGoodProvider(SurveyProvider):
         return {str(item.get("question_key") or ""): item.get("upstream_values") or item.get("values") or [] for item in answers.values()}
 
     def build_outbound_url(self, survey, attempt, answers):
-        """Build RFG entry URL with platform RID as TID and vault UID as RID."""
+        """Build the RFG entry URL using only the platform RID as RFG ``rid``."""
 
         values = self._answer_map(answers)
         age_or_birthday = (values.get("RFG_BIRTHDAY") or [""])[0]
@@ -415,11 +415,14 @@ class ResearchForGoodProvider(SurveyProvider):
             raise ProviderError("Postal code is required for Research For Good.")
         parts = urlsplit(survey.entry_link)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
-        rfg_rid = str(attempt.prescreener_uid or "").strip()
+        rfg_rid = str(attempt.rid or "").strip()
         if not rfg_rid:
-            raise ProviderError("RFG requires the prescreener UID as its persistent RID.")
+            raise ProviderError("RFG requires the platform attempt RID.")
+        # RFG previously received a separate TID. Remove any stale value from a
+        # stored provider link so every new journey has one canonical identity.
+        query.pop("tid", None)
+        query.pop("TID", None)
         query.update({
-            "tid": attempt.rid,
             "rid": rfg_rid,
             "country": str(survey.country_code or "").upper(),
             "postalCode": postal,

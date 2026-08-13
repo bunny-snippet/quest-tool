@@ -359,8 +359,7 @@ class SyncTriggerResponseSerializer(serializers.Serializer):
 
 class RFGCallbackResponseSerializer(serializers.Serializer):
     ok = serializers.BooleanField()
-    tid = serializers.CharField(max_length=10)
-    rid = serializers.CharField(max_length=19)
+    rid = serializers.CharField(max_length=10)
     status = serializers.CharField()
 
 

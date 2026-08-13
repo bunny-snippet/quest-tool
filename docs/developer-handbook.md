@@ -190,7 +190,7 @@ compatibility; the product UI calls these records Suppliers.
 | Provider | Outbound journey key | Persistent profile key | Callback key | Notes |
 |---|---|---|---|---|
 | InnovateMR | `PID=RID`, `trackId=RID` | Not sent as UID | `rid=trackId/PID` | Exact allocated entry link and real `supCode` stay server-side. |
-| RFG | `tid=RID` | `rid=UID` | Resolve `tid` first; UID `rid` fallback | Duplicate check also sends UID as RFG `rid`. |
+| RFG | `rid=RID` | Not sent | Resolve canonical `rid` | Duplicate check also sends the attempt RID as RFG `rid`. |
 | Cint | `MID=RID` | `PID=UID` | Supplier links return `MID` into local `rid` | `cint_email` is a SHA-256 hash stably assigned to UID; URL is HMAC-SHA1 signed. |
 
 Do not infer meaning from capitalization alone. `RID` is our journey, while a
@@ -259,11 +259,12 @@ redirects still point elsewhere.
 ### RFG branch
 
 `ResearchForGoodProvider.validate_prescreener` applies local strict/relaxed
-targeting. `duplicate_check` sends UID as RFG `rid`. `build_outbound_url` converts
-age to birthday, validates gender/postal code, then sends `tid=RID` and `rid=UID`.
-The server callback enters `RFGCallbackAPIView.get`, `_rfg_attempt_from_request`
-resolves TID first, and the callback transaction records the verified terminal
-outcome. `rfg_result` is browser display only and cannot make a completion payable.
+targeting. `duplicate_check` sends the attempt RID as RFG `rid`.
+`build_outbound_url` converts age to birthday, validates gender/postal code, then
+sends only `rid=RID`. The server callback enters `RFGCallbackAPIView.get`,
+`_rfg_attempt_from_request` resolves that canonical RID, and the callback
+transaction records the verified terminal outcome. `rfg_result` is browser
+display only and cannot make a completion payable.
 
 ### Cint branch
 
@@ -343,7 +344,7 @@ Connected functions: `_has_exact_query`, `_invalid_survey_link`,
 | Copy Link absent | `SurveyListSerializer`, Projects column/action permissions, allocation access and `entry_link`. |
 | Prescreener does not open | `survey_start` initial GET validation and `create_attempt`. |
 | Prescreener submits but provider does not open | vault availability, provider `build_outbound_url`, attempt `outbound_url`, web logs. |
-| RFG callback not found | confirm RFG `tid` contains platform RID and RFG `rid` contains UID; inspect `_rfg_attempt_from_request`. |
+| RFG callback not found | confirm RFG `rid` contains the platform attempt RID; inspect `_rfg_attempt_from_request`. |
 | Cint signature rejected | confirm stable hash key, query order, UID/PID, RID/MID, email pool and trailing ampersand. |
 | Status stays initiated/redirected | callback URLs, `survey_status`/RFG callback, worker reconciliation and callback IP/security. |
 | Wrong LOI | compare `initiated_at`, first `callback_at` and provider transaction end time; do not use current time. |
@@ -375,7 +376,7 @@ No disposable test/debug file is currently tracked. The provider test modules us
 fake HTTP sessions and Django test databases; they do not call live providers or
 write production data. Keep them because:
 
-- `surveys/test_rfg.py` protects RFG HMAC, targeting, RID/TID/UID mapping and callbacks.
+- `surveys/test_rfg.py` protects RFG HMAC, targeting, canonical RID mapping and callbacks.
 - `surveys/test_cint.py` protects inventory, supplier links, PID/MID/email hash and URL signatures.
 - `surveys/test_provider_integrations.py` protects generic provider sync behavior.
 - `surveys/tests.py` protects the shared respondent/report/export flow.

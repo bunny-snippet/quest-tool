@@ -1391,21 +1391,15 @@ RFG_CALLBACK_IPS = {
 
 
 def _rfg_attempt_from_request(request):
-    """Resolve new TID tracking first, with old RID/UID callbacks supported."""
+    """Resolve an RFG callback using the platform RID sent as RFG ``rid``."""
 
     base = SurveyAttempt.objects.select_related("survey__integration").filter(
         survey__integration__provider_code="rfg"
     )
-    for name in ("tid", "TID", "trackId"):
+    for name in ("rid", "RID"):
         value = str(request.GET.get(name) or "").strip()
         if value:
             attempt = base.filter(rid=value).first()
-            if attempt:
-                return attempt
-    for name in ("rid", "RID", "pid", "PID", "qsid", "QSID"):
-        value = str(request.GET.get(name) or "").strip()
-        if value:
-            attempt = base.filter(Q(rid=value) | Q(prescreener_uid=value)).first()
             if attempt:
                 return attempt
     return None
@@ -1473,8 +1467,7 @@ class RFGCallbackAPIView(APIView):
             "RFG callback preview endpoint to safely understand result/live codes without writing data."
         ),
         parameters=[
-            OpenApiParameter("tid", OpenApiTypes.STR, required=True, description="Platform 10-character attempt RID echoed from RFG TID"),
-            OpenApiParameter("rid", OpenApiTypes.STR, required=False, description="Persistent prescreener UID echoed from RFG RID"),
+            OpenApiParameter("rid", OpenApiTypes.STR, required=True, description="Platform 10-character attempt RID echoed from RFG RID"),
             OpenApiParameter("result", OpenApiTypes.STR, required=True, description="RFG result code"),
             OpenApiParameter("ruledOutBy", OpenApiTypes.STR, required=False, description="RFG termination reason"),
             OpenApiParameter("sesskey", OpenApiTypes.STR, required=False, description="RFG session identifier"),
@@ -1530,13 +1523,7 @@ class RFGCallbackAPIView(APIView):
             finalize_attempt_capacity(locked)
         return Response({
             "ok": True,
-            "tid": locked.rid,
-            # The platform response always calls its own 10-character tracking
-            # identifier RID. Provider field names are exposed separately so a
-            # client's ``rid`` can never replace the canonical value in our UI.
             "rid": locked.rid,
-            "provider_tid": locked.rid,
-            "provider_rid": locked.prescreener_uid,
             "status": locked.status,
         })
 
@@ -1552,12 +1539,8 @@ def survey_status(request):
             "message": "A valid status (1–4) and RID are required.",
         }, status=400)
 
-    # Provider naming is never allowed to leak into our canonical identity.
-    # RFG, for example, returns the platform UID in its field named ``rid``.
-    # Resolve either identifier, then update and render SurveyAttempt.rid.
-    attempt = SurveyAttempt.objects.filter(
-        Q(rid=callback_identifier) | Q(prescreener_uid=callback_identifier)
-    ).first()
+    # Public callbacks now accept only the canonical 10-character attempt RID.
+    attempt = SurveyAttempt.objects.filter(rid=callback_identifier).first()
     canonical_rid = attempt.rid if attempt else callback_identifier
     ip_address = get_request_ip(request)
     if attempt:
