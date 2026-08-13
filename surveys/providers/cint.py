@@ -90,9 +90,11 @@ class CintProvider(SurveyProvider):
         started = time.monotonic()
         try:
             headers = {"Authorization": self.api_key, "Accept": "application/json"}
-            if method == "POST":
+            method = str(method or "GET").upper()
+            if method in {"POST", "PUT"}:
                 headers["Content-Type"] = "application/json"
-                response = self.session.post(
+                sender = self.session.post if method == "POST" else self.session.put
+                response = sender(
                     url, headers=headers, json=payload or {}, timeout=(10, self.timeout)
                 )
             else:
@@ -689,6 +691,50 @@ class CintProvider(SurveyProvider):
             "OverQuotaLink": f"{callback}?status=3&rid=[%MID%]",
             "QualityTerminationLink": f"{callback}?status=4&rid=[%MID%]",
         }
+
+    def redirect_contract_fingerprint(self):
+        """Identify the exact supplier redirect contract configured upstream."""
+
+        payload = self._redirect_payload()
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def update_supplier_link_redirects(self, survey):
+        """Configure callbacks for one Cint survey using its real supplier code.
+
+        This method is intentionally invoked by background inventory work rather
+        than the browser copy action. That keeps copy-link latency independent of
+        Cint and lets a per-integration lease serialize large update batches.
+        """
+
+        # Update operates on a supplier-specific link. Open opportunities may
+        # reach inventory before that link exists, so create/retrieve it once
+        # before applying the explicit redirect contract.
+        if not survey.entry_link:
+            self.ensure_supplier_link(survey)
+        payload = self._redirect_payload()
+        result = self._request(
+            f"Supply/v1/SupplierLinks/Update/{survey.source_key}/{self.supplier_code}",
+            method="PUT",
+            payload=payload,
+        )
+        raw_data = dict(survey.raw_data or {})
+        raw_data["_cint_redirect_contract"] = self.redirect_contract_fingerprint()
+        raw_data["_cint_redirect_synced_at"] = timezone.now().isoformat()
+        raw_data["_cint_redirect_supplier_code"] = self.supplier_code
+        link = self._supplier_link(result)
+        live_link = str(link.get("LiveLink") or "").strip() if link else ""
+        test_link = str(link.get("TestLink") or "").strip() if link else ""
+        update_fields = ["raw_data", "updated_at"]
+        survey.raw_data = raw_data
+        if live_link:
+            survey.entry_link = live_link
+            update_fields.append("entry_link")
+        if test_link:
+            survey.test_entry_link = test_link
+            update_fields.append("test_entry_link")
+        survey.save(update_fields=update_fields)
+        return result
 
     def ensure_supplier_link(self, survey):
         """Retrieve the supplier link, creating an OWS link only when it is missing."""

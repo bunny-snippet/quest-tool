@@ -13,7 +13,11 @@ from vendors.credentials import resolve_integration_token
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .models import Survey, SurveyAttempt, SyncLease
 from .services import reconcile_attempt_status, replace_survey_details, sync_surveys
-from .provider_services import refresh_client_integration_details, sync_client_integration
+from .provider_services import (
+    refresh_client_integration_details,
+    sync_cint_redirect_contracts,
+    sync_client_integration,
+)
 from .providers import has_provider
 
 
@@ -97,6 +101,9 @@ def sync_client_integration_task(integration_id):
                 "success" if run.status == "success" and not details["failures"] else "partial"
             )
             integration.last_sync_summary = summary
+            if integration.provider_code == "cint":
+                sync_cint_redirects_task.delay(integration.pk)
+                summary["redirect_updates_queued"] = True
             return summary
         api = InnovateMRClient(integration=integration)
         summary = sync_surveys(api, integration=integration).__dict__
@@ -125,6 +132,38 @@ def sync_client_integration_task(integration_id):
             "last_sync_finished_at", "last_sync_status", "last_sync_error", "last_sync_summary", "updated_at",
         ])
         SyncLease.release(lease_name)
+
+
+@shared_task(
+    name="surveys.sync_cint_redirects",
+    soft_time_limit=240,
+    time_limit=270,
+)
+def sync_cint_redirects_task(integration_id, batch_size=25):
+    """Configure new/backfill Cint survey callbacks in serialized batches."""
+
+    lease_name = f"cint-redirects-{integration_id}"
+    if not SyncLease.acquire(lease_name, seconds=300):
+        return {"status": "skipped", "reason": "redirect batch already running"}
+    continue_batching = False
+    try:
+        integration = ClientIntegration.objects.select_related("client").get(
+            pk=integration_id,
+            is_active=True,
+            provider_code="cint",
+        )
+        result = sync_cint_redirect_contracts(integration, batch_size=batch_size)
+        continue_batching = result["remaining"] > 0 and result["failures"] == 0
+        result["status"] = "success" if not result["failures"] else "partial"
+        return result
+    finally:
+        SyncLease.release(lease_name)
+        if continue_batching:
+            sync_cint_redirects_task.apply_async(
+                args=[integration_id],
+                kwargs={"batch_size": batch_size},
+                countdown=1,
+            )
 
 
 @shared_task(name="surveys.sync_innovatemr_surveys")

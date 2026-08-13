@@ -2,6 +2,7 @@
 
 import logging
 from django.db import transaction
+from django.db.models import Q
 from django.utils import timezone
 
 from vendors.models import ClientIntegration
@@ -25,9 +26,16 @@ def _preserve_provider_local_state(integration, survey, normalized):
         normalized.values["entry_link"] = survey.entry_link
     if not normalized.values.get("test_entry_link") and survey.test_entry_link:
         normalized.values["test_entry_link"] = survey.test_entry_link
-    supplier_link = (survey.raw_data or {}).get("_cint_supplier_link")
-    if supplier_link and "_cint_supplier_link" not in normalized.raw_data:
-        normalized.raw_data["_cint_supplier_link"] = supplier_link
+    local_raw_data = survey.raw_data or {}
+    for key in (
+        "_cint_supplier_link",
+        "_cint_redirect_contract",
+        "_cint_redirect_synced_at",
+        "_cint_redirect_supplier_code",
+    ):
+        value = local_raw_data.get(key)
+        if value not in (None, "") and key not in normalized.raw_data:
+            normalized.raw_data[key] = value
         normalized.values["raw_data"] = normalized.raw_data
 
 
@@ -212,3 +220,44 @@ def refresh_client_integration_details(integration: ClientIntegration, *, limit=
     if refreshed:
         invalidate_project_cache()
     return {"refreshed": refreshed, "failures": failures}
+
+
+def sync_cint_redirect_contracts(integration: ClientIntegration, *, batch_size=25) -> dict:
+    """Update one bounded batch of Cint redirects not on the current contract."""
+
+    if integration.provider_code != "cint":
+        raise ProviderError("Redirect contract synchronization is only available for Cint.")
+    if not integration.is_active:
+        raise ProviderError("This Cint integration is inactive.")
+    provider = get_provider(integration)
+    fingerprint = provider.redirect_contract_fingerprint()
+    pending = Survey.objects.filter(integration=integration).filter(
+        Q(raw_data___cint_redirect_contract__isnull=True)
+        | ~Q(raw_data___cint_redirect_contract=fingerprint)
+    ).order_by("pk")
+    candidates = list(pending[: max(1, min(int(batch_size), 100))])
+    updated = failures = 0
+    errors = []
+    for survey in candidates:
+        try:
+            provider.update_supplier_link_redirects(survey)
+            updated += 1
+        except Exception as exc:
+            failures += 1
+            errors.append({"survey": survey.source_key, "error": str(exc)[:500]})
+            logger.exception(
+                "Cint redirect update failed integration=%s survey=%s",
+                integration.pk,
+                survey.pk,
+            )
+    remaining = Survey.objects.filter(integration=integration).filter(
+        Q(raw_data___cint_redirect_contract__isnull=True)
+        | ~Q(raw_data___cint_redirect_contract=fingerprint)
+    ).count()
+    return {
+        "processed": len(candidates),
+        "updated": updated,
+        "failures": failures,
+        "remaining": remaining,
+        "errors": errors,
+    }

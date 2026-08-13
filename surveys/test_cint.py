@@ -16,7 +16,7 @@ from vendors.models import Client, ClientIntegration
 from vendors.serializers import ClientIntegrationSerializer
 
 from .models import ProviderQuestionMapping, Survey, SurveyAttempt, TargetingQuestion
-from .provider_services import sync_client_integration
+from .provider_services import sync_cint_redirect_contracts, sync_client_integration
 from .providers import ProviderError
 from .providers.cint import CintProvider
 from .serializers import SurveyListSerializer, SurveyQuotaSerializer, TargetingQuestionSerializer
@@ -46,6 +46,10 @@ class RecordingSession:
         return FakeResponse(self.payloads.pop(0))
 
     def post(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        return FakeResponse(self.payloads.pop(0))
+
+    def put(self, url, **kwargs):
         self.calls.append((url, kwargs))
         return FakeResponse(self.payloads.pop(0))
 
@@ -160,7 +164,10 @@ class CintProviderTests(TestCase):
             company_name="Cint Exchange",
             entry_link="https://samplicio.us/s/default.aspx?SID=live-sid&PID=",
             test_entry_link="https://samplicio.us/s/default.aspx?SID=test-sid&PID=",
-            raw_data={"_cint_supplier_link": {"SupplierLinkID": 99}},
+            raw_data={
+                "_cint_supplier_link": {"SupplierLinkID": 99},
+                "_cint_redirect_contract": "configured-contract",
+            },
         )
         session = RecordingSession(
             DEFINITIONS,
@@ -184,6 +191,101 @@ class CintProviderTests(TestCase):
         self.assertEqual(
             survey.raw_data["_cint_supplier_link"]["SupplierLinkID"], 99
         )
+        self.assertEqual(
+            survey.raw_data["_cint_redirect_contract"], "configured-contract"
+        )
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_redirect_update_uses_real_supplier_code_and_mid_callbacks(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_id=82199770,
+            source_key="82199770",
+            company_name="Cint Exchange",
+            entry_link="https://samplicio.us/s/default.aspx?SID=existing&PID=",
+        )
+        session = RecordingSession({"ApiResult": 0})
+        provider = CintProvider(self.integration, session=session)
+
+        provider.update_supplier_link_redirects(survey)
+
+        self.assertEqual(len(session.calls), 1)
+        url, kwargs = session.calls[0]
+        self.assertEqual(
+            url,
+            "https://api.samplicio.us/Supply/v1/SupplierLinks/Update/82199770/0050",
+        )
+        self.assertEqual(kwargs["headers"]["Authorization"], "cint-secret")
+        self.assertEqual(kwargs["json"], {
+            "SupplierLinkTypeCode": "OWS",
+            "TrackingTypeCode": "NONE",
+            "DefaultLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+            "SuccessLink": "https://api.exchange-ip.com/survey?status=1&rid=[%MID%]",
+            "FailureLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+            "OverQuotaLink": "https://api.exchange-ip.com/survey?status=3&rid=[%MID%]",
+            "QualityTerminationLink": "https://api.exchange-ip.com/survey?status=4&rid=[%MID%]",
+        })
+        survey.refresh_from_db()
+        self.assertEqual(
+            survey.raw_data["_cint_redirect_contract"],
+            provider.redirect_contract_fingerprint(),
+        )
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_redirect_batch_skips_surveys_already_on_current_contract(self):
+        provider = CintProvider(self.integration, session=RecordingSession({"ApiResult": 0}))
+        fingerprint = provider.redirect_contract_fingerprint()
+        configured = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199769",
+            raw_data={"_cint_redirect_contract": fingerprint},
+        )
+        pending = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199770",
+            entry_link="https://samplicio.us/s/default.aspx?SID=pending&PID=",
+        )
+
+        with patch("surveys.provider_services.get_provider", return_value=provider):
+            result = sync_cint_redirect_contracts(self.integration, batch_size=25)
+
+        self.assertEqual(result["updated"], 1)
+        self.assertEqual(result["remaining"], 0)
+        self.assertIn("/Update/82199770/0050", provider.session.calls[0][0])
+        configured.refresh_from_db()
+        pending.refresh_from_db()
+        self.assertEqual(configured.raw_data["_cint_redirect_contract"], fingerprint)
+        self.assertEqual(pending.raw_data["_cint_redirect_contract"], fingerprint)
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_redirect_update_creates_missing_supplier_link_before_put(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199771",
+        )
+        session = RecordingSession(
+            {"ApiResult": 0},
+            {"ApiResult": 0, "SupplierLink": {
+                "LiveLink": "https://samplicio.us/s/default.aspx?SID=new&PID=",
+                "TestLink": "https://samplicio.us/s/default.aspx?SID=test&PID=test",
+            }},
+            {"ApiResult": 0},
+        )
+        provider = CintProvider(self.integration, session=session)
+
+        provider.update_supplier_link_redirects(survey)
+
+        self.assertEqual(len(session.calls), 3)
+        self.assertIn("/SupplierLinks/BySurveyNumber/82199771/0050", session.calls[0][0])
+        self.assertIn("/SupplierLinks/Create/82199771/0050", session.calls[1][0])
+        self.assertIn("/SupplierLinks/Update/82199771/0050", session.calls[2][0])
 
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
     def test_refresh_details_builds_targeting_and_quota_drawer_data(self):
