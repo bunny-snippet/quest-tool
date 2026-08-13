@@ -81,3 +81,58 @@ class PrescreenerAnswerValue(models.Model):
                 name="vault_matching_value_idx",
             ),
         ]
+
+
+class CintRespondentEmail(models.Model):
+    """One real respondent email, permanently assignable to at most one UID."""
+
+    class Status(models.TextChoices):
+        AVAILABLE = "available", "Available"
+        ASSIGNED = "assigned", "Assigned"
+        DISABLED = "disabled", "Disabled"
+
+    encrypted_email = models.TextField(editable=False)
+    email_hash = models.CharField(max_length=64, unique=True, editable=False)
+    assigned_uid = models.CharField(
+        max_length=19,
+        unique=True,
+        null=True,
+        blank=True,
+        editable=False,
+    )
+    status = models.CharField(
+        max_length=12,
+        choices=Status.choices,
+        default=Status.AVAILABLE,
+        db_index=True,
+    )
+    use_count = models.PositiveIntegerField(default=0)
+    assigned_at = models.DateTimeField(null=True, blank=True)
+    first_used_at = models.DateTimeField(null=True, blank=True)
+    last_used_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["pk"]
+        indexes = [
+            models.Index(
+                fields=["status", "assigned_at"],
+                name="vault_cint_email_pool_idx",
+            ),
+        ]
+
+
+class CintRespondentEmailUse(models.Model):
+    """Idempotent audit of one email identity being used by one RID/session."""
+
+    identity = models.ForeignKey(
+        CintRespondentEmail,
+        related_name="session_uses",
+        on_delete=models.PROTECT,
+    )
+    rid = models.CharField(max_length=10, unique=True)
+    used_at = models.DateTimeField(auto_now_add=True, db_index=True)
+
+    class Meta:
+        ordering = ["-used_at"]

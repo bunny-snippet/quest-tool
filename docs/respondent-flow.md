@@ -59,7 +59,7 @@ Pre-survey statuses are collapsed into the same five operational UI states: pend
 
 The landing page accepts RID aliases `PID`, `pid`, `QSID`, `qsid`, and `trackId` for integration tolerance. The canonical parameter remains `rid`.
 
-For Cint, the copied platform URL still opens the local pre-screener. On submit the immutable vault UID is the Cint PID and the attempt RID is the Cint MID. The live link also includes the logged-in respondent's normalized SHA-256 `cint_email` and the captured Cint question/precode parameters. The entire URL including its required trailing `&` is signed with HMAC-SHA1 using `CINT_HASH_KEY`; URL-safe Base64 without padding is appended as the final lowercase `hash` parameter. Links over 1999 characters fail closed.
+For Cint, the copied platform URL still opens the local pre-screener. On submit the immutable vault UID is the Cint PID and the attempt RID is the Cint MID. A real respondent email from the encrypted vault pool is permanently assigned to that UID; the live link receives only its normalized SHA-256 `cint_email`, never the employee login email or plaintext. A reused UID resolves to the same identity, while a new UID can only claim an unassigned address. The captured Cint question/precode parameters are added to the link. The entire URL including its required trailing `&` is signed with HMAC-SHA1 using `CINT_HASH_KEY`; URL-safe Base64 without padding is appended as the final lowercase `hash` parameter. Links over 1999 characters fail closed.
 
 ## Trust and verification
 

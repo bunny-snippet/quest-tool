@@ -76,6 +76,7 @@ from prescreener_vault.services import (
     capture_prescreener_submission,
     operational_answer_value,
 )
+from prescreener_vault.cint_email_pool import CintEmailPoolExhausted
 from prescreener_vault.models import PrescreenerSubmission
 from prescreener_vault.cache import (
     apply_submission_filters,
@@ -1166,7 +1167,11 @@ def survey_start(request):
             except Exception as exc:
                 if isinstance(exc, PrescreenerVaultError):
                     logger.exception("Prescreener vault capture failed for rid=%s", attempt.rid)
-                    detail = "Secure prescreener storage is temporarily unavailable. Please submit again shortly."
+                    detail = (
+                        "No real respondent email is currently available. Please contact the workspace administrator."
+                        if isinstance(exc, CintEmailPoolExhausted)
+                        else "Secure prescreener storage is temporarily unavailable. Please submit again shortly."
+                    )
                 else:
                     logger.exception(
                         "Survey provider continuation failed for rid=%s provider=%s",

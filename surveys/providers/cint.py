@@ -14,6 +14,7 @@ from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
 
+from prescreener_vault.cint_email_pool import assigned_email_hash
 from surveys.models import Survey, SurveyQuota, TargetingQuestion
 from vendors.credentials import resolve_integration_token
 
@@ -673,17 +674,6 @@ class CintProvider(SurveyProvider):
         return live_link
 
     @staticmethod
-    def _clean_email(email):
-        email = str(email or "").strip().lower()
-        if "@" not in email:
-            return ""
-        local, domain = email.rsplit("@", 1)
-        if domain in {"gmail.com", "googlemail.com"}:
-            local = local.split("+", 1)[0].replace(".", "")
-            domain = "gmail.com"
-        return f"{local}@{domain}"
-
-    @staticmethod
     def _entry_signature(unsigned_url, key):
         if not unsigned_url.endswith("&"):
             raise ProviderConfigurationError("Cint hash input must include the trailing ampersand.")
@@ -700,12 +690,10 @@ class CintProvider(SurveyProvider):
         hostname = (parsed.hostname or "").lower()
         if hostname != "samplicio.us" and not hostname.endswith(".samplicio.us"):
             raise ProviderConfigurationError("Cint returned an unexpected supplier-link hostname.")
-        email = self._clean_email(getattr(attempt.platform_user, "email", ""))
-        if not email:
-            raise ProviderConfigurationError("Cint requires a real email on the respondent's platform account.")
         pid = str(attempt.prescreener_uid or "").strip()
         if not pid:
             raise ProviderConfigurationError("Cint requires the pre-screener UID as persistent PID.")
+        email_digest = assigned_email_hash(pid, attempt.rid)
         query = [
             (key, value) for key, value in parse_qsl(parsed.query, keep_blank_values=True)
             if key.lower() not in {"pid", "mid", "hash", "cint_email"}
@@ -713,7 +701,7 @@ class CintProvider(SurveyProvider):
         query.extend([
             ("PID", pid),
             ("MID", attempt.rid),
-            ("cint_email", hashlib.sha256(email.encode("utf-8")).hexdigest()),
+            ("cint_email", email_digest),
         ])
         for answer in answers.values():
             question_id = answer.get("question_id")

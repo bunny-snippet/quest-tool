@@ -9,6 +9,9 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient, APIRequestFactory
 
+from prescreener_vault.cint_email_pool import add_real_email
+from prescreener_vault.constants import DATABASE_ALIAS
+from prescreener_vault.models import CintRespondentEmail
 from vendors.models import Client, ClientIntegration
 from vendors.serializers import ClientIntegrationSerializer
 
@@ -61,6 +64,8 @@ DEFINITIONS = {
 
 
 class CintProviderTests(TestCase):
+    databases = {"default", DATABASE_ALIAS}
+
     def setUp(self):
         self.client_record = Client.objects.create(
             code="cint", name="Cint Exchange", provider_code="cint"
@@ -331,6 +336,7 @@ class CintProviderTests(TestCase):
         {"TEST_CINT_API_KEY": "cint-secret", "CINT_HASH_KEY": "hash-secret"},
         clear=False,
     )
+    @override_settings(RESPONDENT_EMAIL_ENCRYPTION_KEY="test-respondent-email-key")
     def test_outbound_link_uses_uid_pid_rid_mid_profile_and_hmac_sha1(self):
         user = get_user_model().objects.create_user(
             username="cint-user", email="Example.User+test@gmail.com", password="test-pass"
@@ -360,6 +366,7 @@ class CintProviderTests(TestCase):
             platform_user=user,
             user_id=str(user.pk),
         )
+        add_real_email("Real.Respondent+pool@gmail.com")
         url = CintProvider(self.integration).build_outbound_url(survey, attempt, {
             "question": {"question_id": 43, "upstream_values": ["1"]},
         })
@@ -374,10 +381,22 @@ class CintProviderTests(TestCase):
         self.assertIn("43=1", url)
         self.assertIn(
             "cint_email=" + hashlib.sha256(
-                "exampleuser@gmail.com".encode("utf-8")
+                "realrespondent@gmail.com".encode("utf-8")
             ).hexdigest(),
             url,
         )
+        user.email = "changed-employee-email@example.com"
+        user.save(update_fields=["email"])
+        retry_url = CintProvider(self.integration).build_outbound_url(survey, attempt, {})
+        self.assertIn(
+            "cint_email=" + hashlib.sha256(
+                "realrespondent@gmail.com".encode("utf-8")
+            ).hexdigest(),
+            retry_url,
+        )
+        identity = CintRespondentEmail.objects.using(DATABASE_ALIAS).get()
+        self.assertEqual(identity.assigned_uid, attempt.prescreener_uid)
+        self.assertEqual(identity.use_count, 1)
 
     @patch("surveys.views.get_provider")
     def test_unsynced_live_cint_survey_has_copy_link_and_hydrates_on_first_start(
