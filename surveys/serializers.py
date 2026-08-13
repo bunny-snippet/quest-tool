@@ -303,8 +303,10 @@ class SurveyListSerializer(serializers.ModelSerializer):
         request = self.context.get("request")
         if not request or not request.user.is_authenticated or not has_function_access(request.user, "survey_links.copy"):
             return None
-        is_rfg = bool(obj.integration_id and obj.integration.provider_code == "rfg")
-        if not obj.entry_link and not is_rfg:
+        supports_lazy_entry_link = bool(
+            obj.integration_id and obj.integration.provider_code in {"rfg", "cint"}
+        )
+        if not obj.entry_link and not supports_lazy_entry_link:
             return None
         query = urlencode({
             "surveyId": obj.source_identifier,

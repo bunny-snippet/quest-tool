@@ -1002,10 +1002,12 @@ def survey_start(request):
         ).first()
         if survey is None:
             return _invalid_survey_link(request)
-        is_rfg = bool(
-            survey.integration_id and survey.integration.provider_code == "rfg"
+        provider_code = (
+            survey.integration.provider_code if survey.integration_id else ""
         )
-        if not survey.entry_link and not is_rfg:
+        is_rfg = provider_code == "rfg"
+        supports_lazy_entry_link = provider_code in {"rfg", "cint"}
+        if not survey.entry_link and not supports_lazy_entry_link:
             return _invalid_survey_link(request)
         expected_supplier_code = settings.PUBLIC_SUPPLIER_CODE
         if supplier_code != expected_supplier_code:
@@ -1014,6 +1016,8 @@ def survey_start(request):
         stale = survey.targeting_synced_at is None or (
             survey.source_modified_at and survey.targeting_synced_at < survey.source_modified_at
         )
+        if supports_lazy_entry_link:
+            stale = stale or not survey.entry_link
         if is_rfg:
             stale = stale or not survey.entry_link or not survey.targeting_questions.filter(
                 raw_data__adapter_version__in=[2, 3]

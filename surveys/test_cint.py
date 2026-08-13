@@ -7,7 +7,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
-from rest_framework.test import APIRequestFactory
+from rest_framework.test import APIClient, APIRequestFactory
 
 from vendors.models import Client, ClientIntegration
 from vendors.serializers import ClientIntegrationSerializer
@@ -292,6 +292,48 @@ class CintProviderTests(TestCase):
             ).hexdigest(),
             url,
         )
+
+    @patch("surveys.views.get_provider")
+    def test_unsynced_live_cint_survey_has_copy_link_and_hydrates_on_first_start(
+        self, get_provider_mock
+    ):
+        admin = get_user_model().objects.create_superuser(
+            "cint-link-owner", "cint-link-owner@example.com", "pass"
+        )
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="143479-lazy-link",
+            country_code="US",
+            status=Survey.Status.LIVE,
+            entry_link="",
+        )
+        api = APIClient()
+        api.force_authenticate(admin)
+        listing = api.get("/api/v1/surveys/", {"search": survey.source_key})
+        self.assertEqual(listing.status_code, 200)
+        start_link = listing.data["results"][0]["start_link"]
+        self.assertIn(f"surveyId={survey.source_key}", start_link)
+        self.assertIn("supplierCode=1000", start_link)
+
+        def hydrate(target):
+            target.entry_link = "https://samplicio.us/s/default.aspx?SID=lazy-cint&PID="
+            target.targeting_synced_at = timezone.now()
+            target.quota_synced_at = timezone.now()
+            target.detail_synced_at = timezone.now()
+            target.save(update_fields=[
+                "entry_link", "targeting_synced_at", "quota_synced_at",
+                "detail_synced_at", "updated_at",
+            ])
+
+        get_provider_mock.return_value.refresh_details.side_effect = hydrate
+        response = self.client.get(start_link)
+        self.assertEqual(response.status_code, 302)
+        self.assertIn("/survey/start?rid=", response["Location"])
+        get_provider_mock.assert_called_once_with(self.integration)
+        get_provider_mock.return_value.refresh_details.assert_called_once()
+        survey.refresh_from_db()
+        self.assertTrue(survey.entry_link)
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
