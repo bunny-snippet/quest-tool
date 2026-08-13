@@ -310,7 +310,10 @@ class ResearchForGoodProvider(SurveyProvider):
         fingerprint = str(fingerprint or "0").strip()
         if fingerprint != "0" and not re.fullmatch(r"[0-9a-fA-F]{32,128}", fingerprint):
             fingerprint = "0"
-        response = self._command({"command": "livealert/duplicateCheck/1", "rfg_id": survey.source_key, "fingerprint": 0 if fingerprint == "0" else fingerprint, "rid": attempt.rid, "ip": ip_address or ""})
+        rfg_rid = str(attempt.prescreener_uid or "").strip()
+        if not rfg_rid:
+            raise ProviderError("RFG requires the prescreener UID as its persistent RID.")
+        response = self._command({"command": "livealert/duplicateCheck/1", "rfg_id": survey.source_key, "fingerprint": 0 if fingerprint == "0" else fingerprint, "rid": rfg_rid, "ip": ip_address or ""})
         return bool(response.get("isDuplicate"))
 
     @staticmethod
@@ -334,8 +337,12 @@ class ResearchForGoodProvider(SurveyProvider):
             raise ProviderError("Postal code is required for Research For Good.")
         parts = urlsplit(survey.entry_link)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
+        rfg_rid = str(attempt.prescreener_uid or "").strip()
+        if not rfg_rid:
+            raise ProviderError("RFG requires the prescreener UID as its persistent RID.")
         query.update({
-            "rid": attempt.rid,
+            "tid": attempt.rid,
+            "rid": rfg_rid,
             "country": str(survey.country_code or "").upper(),
             "postalCode": postal,
             "gender": str(gender).upper(),

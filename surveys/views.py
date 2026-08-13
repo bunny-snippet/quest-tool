@@ -91,6 +91,7 @@ from .survey_flow import (
     backfill_attempt_entry_audit,
     build_outbound_url,
     create_attempt,
+    ensure_attempt_prescreener_uid,
     get_request_client_data,
     get_request_ip,
     status_rid_from_request,
@@ -1113,6 +1114,11 @@ def survey_start(request):
         answers, errors = _collect_prescreener_answers(request, attempt.survey)
         if not errors:
             try:
+                if (
+                    attempt.survey.integration_id
+                    and attempt.survey.integration.provider_code == "rfg"
+                ):
+                    ensure_attempt_prescreener_uid(attempt)
                 if settings.PRESCREENER_VAULT_ENABLED:
                     capture_prescreener_submission(attempt, answers)
                 provider = (
@@ -1223,13 +1229,30 @@ RFG_CALLBACK_IPS = {
 }
 
 
+def _rfg_attempt_from_request(request):
+    """Resolve new TID tracking first, with old RID/UID callbacks supported."""
+
+    base = SurveyAttempt.objects.select_related("survey__integration").filter(
+        survey__integration__provider_code="rfg"
+    )
+    for name in ("tid", "TID", "trackId"):
+        value = str(request.GET.get(name) or "").strip()
+        if value:
+            attempt = base.filter(rid=value).first()
+            if attempt:
+                return attempt
+    for name in ("rid", "RID", "pid", "PID", "qsid", "QSID"):
+        value = str(request.GET.get(name) or "").strip()
+        if value:
+            attempt = base.filter(Q(rid=value) | Q(prescreener_uid=value)).first()
+            if attempt:
+                return attempt
+    return None
+
+
 @require_http_methods(["GET"])
 def rfg_result(request):
-    rid = status_rid_from_request(request)
-    attempt = SurveyAttempt.objects.select_related("survey__integration").filter(
-        rid=rid,
-        survey__integration__provider_code="rfg",
-    ).first()
+    attempt = _rfg_attempt_from_request(request)
     if not attempt:
         return _invalid_survey_link(
             request, "This RFG result link is invalid.", status_code=404
@@ -1289,7 +1312,8 @@ class RFGCallbackAPIView(APIView):
             "RFG callback preview endpoint to safely understand result/live codes without writing data."
         ),
         parameters=[
-            OpenApiParameter("rid", OpenApiTypes.STR, required=True, description="Platform respondent ID"),
+            OpenApiParameter("tid", OpenApiTypes.STR, required=True, description="Platform 10-character attempt RID echoed from RFG TID"),
+            OpenApiParameter("rid", OpenApiTypes.STR, required=False, description="Persistent prescreener UID echoed from RFG RID"),
             OpenApiParameter("result", OpenApiTypes.STR, required=True, description="RFG result code"),
             OpenApiParameter("ruledOutBy", OpenApiTypes.STR, required=False, description="RFG termination reason"),
             OpenApiParameter("sesskey", OpenApiTypes.STR, required=False, description="RFG session identifier"),
@@ -1301,12 +1325,8 @@ class RFGCallbackAPIView(APIView):
         responses={200: RFGCallbackResponseSerializer},
     )
     def get(self, request):
-        rid = status_rid_from_request(request)
         result = request.GET.get("result", "").strip()
-        attempt = SurveyAttempt.objects.select_related("survey__integration").filter(
-            rid=rid,
-            survey__integration__provider_code="rfg",
-        ).first()
+        attempt = _rfg_attempt_from_request(request)
         if not attempt or result not in RFG_STATUS_MAP:
             return Response({"detail": "Unknown callback."}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1347,7 +1367,12 @@ class RFGCallbackAPIView(APIView):
                 "status_source", "is_verified", "loi_seconds", "upstream_transaction_data", "updated_at",
             ])
             finalize_attempt_capacity(locked)
-        return Response({"ok": True, "rid": rid, "status": locked.status})
+        return Response({
+            "ok": True,
+            "tid": locked.rid,
+            "rid": locked.prescreener_uid,
+            "status": locked.status,
+        })
 
 
 @require_http_methods(["GET"])

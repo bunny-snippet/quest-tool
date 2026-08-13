@@ -258,12 +258,16 @@ class ResearchForGoodIntegrationTests(TestCase):
             str(income.pk): {"question_key": income.key, "upstream_values": ["2"]},
         }
         attempt = SurveyAttempt.objects.create(
-            rid="Abc123Xyz9", survey=survey, user_id="42"
+            rid="Abc123Xyz9",
+            prescreener_uid="RfG1-UId2-Test-0003",
+            survey=survey,
+            user_id="42",
         )
         provider = ResearchForGoodProvider(self.integration)
         self.assertEqual(provider.validate_prescreener(survey, answers), (True, ""))
         outbound = parse_qs(urlsplit(provider.build_outbound_url(survey, attempt, answers)).query)
-        self.assertEqual(outbound["rid"], [attempt.rid])
+        self.assertEqual(outbound["tid"], [attempt.rid])
+        self.assertEqual(outbound["rid"], [attempt.prescreener_uid])
         self.assertEqual(outbound["country"], ["US"])
         self.assertEqual(outbound["postalCode"], ["12345"])
         self.assertEqual(outbound["gender"], ["M"])
@@ -406,7 +410,10 @@ class ResearchForGoodIntegrationTests(TestCase):
             source_key="RFG605150-004",
         )
         attempt = SurveyAttempt.objects.create(
-            rid="Ghi789QrS4", survey=survey, user_id="42"
+            rid="Ghi789QrS4",
+            prescreener_uid="RfG4-UId5-Test-0006",
+            survey=survey,
+            user_id="42",
         )
         session = RecordingSession({"result": 0, "response": {"isDuplicate": False}})
         provider = ResearchForGoodProvider(self.integration, session=session)
@@ -416,7 +423,7 @@ class ResearchForGoodIntegrationTests(TestCase):
         ))
         payload = json.loads(session.request[1]["data"].decode())
         self.assertEqual(payload["fingerprint"], fingerprint)
-        self.assertEqual(payload["rid"], attempt.rid)
+        self.assertEqual(payload["rid"], attempt.prescreener_uid)
         self.assertEqual(payload["ip"], "187.143.120.25")
 
     def test_browser_result_shows_reason_without_trusting_unverified_complete(self):
@@ -568,11 +575,22 @@ class ResearchForGoodIntegrationTests(TestCase):
             entry_link="https://rfg.example/start",
             country_code="US",
         )
-        attempt = SurveyAttempt.objects.create(rid="Abc123Xyz9", survey=survey, user_id="42", status=SurveyAttempt.Status.REDIRECTED)
+        attempt = SurveyAttempt.objects.create(
+            rid="Abc123Xyz9",
+            prescreener_uid="RfG7-UId8-Test-0009",
+            survey=survey,
+            user_id="42",
+            status=SurveyAttempt.Status.REDIRECTED,
+        )
         response = self.client.get("/survey/rfg/callback", {
-            "result": "1", "rid": attempt.rid, "sesskey": "rfg-session-1",
+            "result": "1",
+            "tid": attempt.rid,
+            "rid": attempt.prescreener_uid,
+            "sesskey": "rfg-session-1",
         }, REMOTE_ADDR="15.222.163.99")
         self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["tid"], attempt.rid)
+        self.assertEqual(response.data["rid"], attempt.prescreener_uid)
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, SurveyAttempt.Status.COMPLETED)
         self.assertTrue(attempt.is_verified)
@@ -585,3 +603,33 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertContains(result_page, "Survey completed")
         self.assertContains(result_page, "Result recorded")
         self.assertNotContains(result_page, "Secure server confirmation is still pending")
+
+    def test_rfg_callback_and_result_can_resolve_uid_only_legacy_template(self):
+        self.integration.last_test_status = "success"
+        self.integration.save(update_fields=["last_test_status"])
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG123456-uid",
+            country_code="US",
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="Uid123Map9",
+            prescreener_uid="Uid1-Call-Back2-0003",
+            survey=survey,
+            user_id="42",
+            status=SurveyAttempt.Status.REDIRECTED,
+        )
+        callback = self.client.get("/survey/rfg/callback", {
+            "result": "2",
+            "rid": attempt.prescreener_uid,
+        }, REMOTE_ADDR="15.222.163.99")
+        self.assertEqual(callback.status_code, 200)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)
+
+        result_page = self.client.get("/survey/rfg/result", {
+            "rid": attempt.prescreener_uid,
+            "result": "2",
+        })
+        self.assertEqual(result_page.status_code, 200)

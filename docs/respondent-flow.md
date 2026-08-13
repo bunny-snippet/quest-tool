@@ -30,6 +30,12 @@ Answers are persisted but are not used as an authoritative local rejection. Inno
 
 ## Supplier redirect
 
+For Research For Good, the platform attempt RID and reusable prescreener identity
+remain separate throughout the redirect and callback journey. The 10-character
+platform RID is sent as RFG `tid`, while the 19-character prescreener vault UID is
+sent as RFG `rid`. RFG callbacks are resolved by `tid` first, with UID-based `rid`
+lookup retained for compatibility.
+
 The public copied link always uses the platform-facing supplier code, so an upstream/vendor supplier code is not exposed there. The exact stored `entryLink` is parsed only after validation. Its PID is replaced with RID, `trackId=RID` is added, and captured `QuestionKey=OptionId` pairs are appended. `survNum` and the real upstream `supCode` are preserved from the allocated link; they are never reconstructed from client parameters. This keeps InnovateMR routing intact while allowing the same public code to be used for future providers.
 
 InnovateMR owns the browser redirect after the respondent leaves this application. Configure the account-level or survey-level return URLs in InnovateMR to point to the public deployment, using `%%trackId%%` as the RID, for example:
