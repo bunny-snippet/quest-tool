@@ -143,6 +143,39 @@ LOGIN_URL = "login"
 LOGIN_REDIRECT_URL = "home"
 LOGOUT_REDIRECT_URL = "login"
 
+# Redis is deliberately isolated from Celery's broker/result databases. Local
+# development stays self-contained unless CACHE_ENABLED is explicitly enabled.
+CACHE_ENABLED = env_bool("CACHE_ENABLED", bool(os.getenv("REDIS_CACHE_URL", "").strip()))
+CACHE_DEFAULT_TTL_SECONDS = max(1, int(os.getenv("CACHE_DEFAULT_TTL_SECONDS", "900")))
+CACHE_TTL_JITTER_SECONDS = max(0, int(os.getenv("CACHE_TTL_JITTER_SECONDS", "180")))
+CACHE_KEY_PREFIX = os.getenv("CACHE_KEY_PREFIX", "quest-tool").strip() or "quest-tool"
+VAULT_CACHE_OPTIONS_TTL_SECONDS = max(1, int(os.getenv("VAULT_CACHE_OPTIONS_TTL_SECONDS", "600")))
+VAULT_CACHE_SUMMARY_TTL_SECONDS = max(1, int(os.getenv("VAULT_CACHE_SUMMARY_TTL_SECONDS", "180")))
+VAULT_CACHE_PROFILE_TTL_SECONDS = max(1, int(os.getenv("VAULT_CACHE_PROFILE_TTL_SECONDS", "900")))
+if CACHE_ENABLED:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": os.getenv("REDIS_CACHE_URL", "redis://127.0.0.1:6379/2"),
+            "TIMEOUT": CACHE_DEFAULT_TTL_SECONDS,
+            "KEY_PREFIX": CACHE_KEY_PREFIX,
+            "OPTIONS": {
+                "socket_connect_timeout": float(os.getenv("CACHE_CONNECT_TIMEOUT_SECONDS", "1")),
+                "socket_timeout": float(os.getenv("CACHE_SOCKET_TIMEOUT_SECONDS", "1")),
+                "max_connections": max(1, int(os.getenv("CACHE_MAX_CONNECTIONS", "100"))),
+            },
+        }
+    }
+else:
+    CACHES = {
+        "default": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": f"{CACHE_KEY_PREFIX}-local",
+            "TIMEOUT": CACHE_DEFAULT_TTL_SECONDS,
+            "OPTIONS": {"MAX_ENTRIES": 5000},
+        }
+    }
+
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "DEFAULT_PAGINATION_CLASS": "surveys.pagination.SurveyPagination",

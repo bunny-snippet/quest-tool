@@ -13,6 +13,7 @@ Hostinger Ubuntu VPS deployment with MySQL, Nginx, Gunicorn, Redis and Celery is
 - Immutable 14-digit project IDs in `YYYYMM########` format, for example `20260800000001`.
 - Quota and survey-targeting/pre-screening persistence with stale-data refresh.
 - Environment-configurable Celery Beat jobs (60-second defaults) for inventory and bounded detail refresh.
+- Fail-open Redis application cache isolated from Celery, with TTL jitter and vault cache invalidation; see [`docs/redis-cache.md`](docs/redis-cache.md).
 - Search, multi-select company/market/status filters, date/CPI filters, ordering, pagination, and mobile survey cards.
 - Direct survey detail drawer with equal-width Pre-screening and Quota tabs.
 - Dynamic respondent pre-screener with 10-character RID, answer capture, supplier redirect, four callback outcomes, IP tracking and measured LOI.

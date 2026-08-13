@@ -75,6 +75,11 @@ from prescreener_vault.services import (
     operational_answer_value,
 )
 from prescreener_vault.models import PrescreenerSubmission
+from prescreener_vault.cache import (
+    apply_submission_filters,
+    vault_filter_options,
+    vault_filtered_summary,
+)
 from .providers import ProviderError, get_provider, has_provider
 from .rfg_outcomes import RFG_STATUS_MAP, describe_rfg_outcome
 from .rfg_text import clean_rfg_display_text
@@ -428,29 +433,11 @@ def prescreener_data_page(request):
     else:
         try:
             base = PrescreenerSubmission.objects.using("prescreener_vault").all()
-            options = {
-                "countries": list(base.exclude(country_code="").values("country_code", "country").distinct().order_by("country_code")),
-                "languages": list(base.exclude(language_code="").values("language_code", "language").distinct().order_by("language_code")),
-                "age_groups": list(base.exclude(respondent_age_group="").values_list("respondent_age_group", flat=True).distinct().order_by("respondent_age_group")),
-                "genders": list(base.exclude(respondent_gender="").values_list("respondent_gender", flat=True).distinct().order_by("respondent_gender")),
-            }
-            queryset = base.prefetch_related("question_answers")
-            if selected["search"]:
-                queryset = queryset.filter(Q(uid__icontains=selected["search"]) | Q(rid__icontains=selected["search"]))
-            if selected["country"]:
-                queryset = queryset.filter(country_code__iexact=selected["country"])
-            if selected["language"]:
-                queryset = queryset.filter(language_code__iexact=selected["language"])
-            if selected["age_group"]:
-                queryset = queryset.filter(respondent_age_group__iexact=selected["age_group"])
-            if selected["gender"]:
-                queryset = queryset.filter(respondent_gender__iexact=selected["gender"])
-            summary = queryset.aggregate(
-                total=Count("uid"),
-                countries=Count("country_code", distinct=True),
-                age_groups=Count("respondent_age_group", distinct=True),
-                genders=Count("respondent_gender", distinct=True),
+            options = vault_filter_options()
+            queryset = apply_submission_filters(
+                base.prefetch_related("question_answers"), selected
             )
+            summary = vault_filtered_summary(selected)
             page_obj = Paginator(queryset.order_by("-submitted_at"), 20).get_page(request.GET.get("page", 1))
         except (DatabaseError, PrescreenerVaultError) as exc:
             logger.exception("Unable to read the pre-screener vault")
@@ -494,17 +481,9 @@ def prescreener_data_export(request):
         if value and not filters_access[name]:
             raise PermissionDenied(f"Your account cannot use the {name.replace('_', ' ')} filter.")
 
-    queryset = PrescreenerSubmission.objects.using("prescreener_vault").all()
-    if selected["search"]:
-        queryset = queryset.filter(Q(uid__icontains=selected["search"]) | Q(rid__icontains=selected["search"]))
-    if selected["country"]:
-        queryset = queryset.filter(country_code__iexact=selected["country"])
-    if selected["language"]:
-        queryset = queryset.filter(language_code__iexact=selected["language"])
-    if selected["age_group"]:
-        queryset = queryset.filter(respondent_age_group__iexact=selected["age_group"])
-    if selected["gender"]:
-        queryset = queryset.filter(respondent_gender__iexact=selected["gender"])
+    queryset = apply_submission_filters(
+        PrescreenerSubmission.objects.using("prescreener_vault").all(), selected
+    )
     queryset = queryset.prefetch_related("question_answers").order_by("-submitted_at")
 
     def submission_rows():

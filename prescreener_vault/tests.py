@@ -5,6 +5,7 @@ from io import StringIO
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
@@ -15,6 +16,7 @@ from surveys.survey_flow import create_attempt
 
 from .constants import DATABASE_ALIAS
 from .models import PrescreenerAnswer, PrescreenerSubmission
+from .cache import cached_profile, invalidate_vault_cache, vault_filter_options, vault_filtered_summary
 from .services import increment_profile_usage
 from .services import PrescreenerVaultError
 
@@ -24,6 +26,7 @@ class PrescreenerVaultFlowTests(TestCase):
     databases = {"default", DATABASE_ALIAS}
 
     def setUp(self):
+        cache.clear()
         self.user = get_user_model().objects.create_user(
             username="vault-user",
             first_name="Vault",
@@ -112,6 +115,24 @@ class PrescreenerVaultFlowTests(TestCase):
         self.assertNotEqual(first.rid, second.rid)
         self.assertNotEqual(first.prescreener_uid, second.prescreener_uid)
         self.assertEqual(PrescreenerSubmission.objects.using(DATABASE_ALIAS).count(), 2)
+
+    def test_vault_metadata_and_profile_cache_invalidate_after_write(self):
+        self.assertEqual(vault_filter_options()["countries"], [])
+        self.assertEqual(vault_filtered_summary({})["total"], 0)
+
+        attempt = self._attempt()
+        with self.captureOnCommitCallbacks(using=DATABASE_ALIAS, execute=True):
+            self.assertEqual(self._submit(attempt).status_code, 302)
+        attempt.refresh_from_db()
+
+        self.assertEqual(vault_filtered_summary({})["total"], 1)
+        self.assertEqual(vault_filter_options()["countries"][0]["country_code"], "US")
+        profile = cached_profile(attempt.prescreener_uid)
+        self.assertEqual(profile["uid"], attempt.prescreener_uid)
+        self.assertEqual(profile["respondent_age"], 24)
+
+        invalidate_vault_cache()
+        self.assertEqual(cached_profile(attempt.prescreener_uid)["usage_count"], 1)
 
     def test_admin_can_filter_and_expand_prescreened_data_page(self):
         attempt = self._attempt()

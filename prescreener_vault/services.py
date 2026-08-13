@@ -9,6 +9,7 @@ from django.utils import timezone
 
 from surveys.survey_flow import ensure_attempt_prescreener_uid
 
+from .cache import invalidate_vault_cache
 from .constants import DATABASE_ALIAS
 from .models import PrescreenerAnswer, PrescreenerAnswerValue, PrescreenerSubmission
 
@@ -222,6 +223,7 @@ def capture_prescreener_submission(attempt, answers, *, submitted_at=None):
                         canonical_attribute=snapshot["canonical_attribute"],
                         country_code=survey.country_code.upper(),
                     )
+            transaction.on_commit(invalidate_vault_cache, using=DATABASE_ALIAS)
             return submission, True
     except PrescreenerVaultError:
         raise
@@ -239,8 +241,10 @@ def increment_profile_usage(uid: str) -> int:
         )
         if updated != 1:
             raise PrescreenerVaultError("The reusable profile UID does not exist.")
-        return int(
+        usage_count = int(
             PrescreenerSubmission.objects.using(DATABASE_ALIAS).values_list(
                 "usage_count", flat=True
             ).get(uid=uid)
         )
+        transaction.on_commit(invalidate_vault_cache, using=DATABASE_ALIAS)
+        return usage_count
