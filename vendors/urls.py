@@ -1,3 +1,5 @@
+"""REST router entries for supplier, organization and upstream APIs."""
+
 from django.urls import path
 from rest_framework.routers import DefaultRouter
 

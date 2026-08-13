@@ -1,3 +1,5 @@
+"""Protected Swagger endpoints that execute allow-listed provider operations."""
+
 import json
 import re
 

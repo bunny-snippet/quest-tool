@@ -1,3 +1,5 @@
+"""Django Admin registration for inventory, mappings and attempt audits."""
+
 from django.contrib import admin
 
 from .models import (

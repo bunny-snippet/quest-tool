@@ -1,3 +1,5 @@
+"""Enforce supplier panel delivery-mode restrictions before page views run."""
+
 from django.contrib.auth import logout
 from django.contrib.auth.views import redirect_to_login
 

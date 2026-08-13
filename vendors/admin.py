@@ -1,3 +1,5 @@
+"""Django Admin registration for suppliers, integrations and allocations."""
+
 from django.contrib import admin
 
 from .models import (

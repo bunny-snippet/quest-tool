@@ -1,3 +1,5 @@
+"""Database models for roles, function grants and employee workspace identity."""
+
 from django.conf import settings
 from django.core.validators import MaxValueValidator, MinValueValidator
 from django.db import models

@@ -1,3 +1,5 @@
+"""Validated role/user writes for the Access Control REST API."""
+
 from django.contrib.auth import get_user_model
 from django.db import transaction
 from rest_framework import serializers

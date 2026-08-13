@@ -1,3 +1,5 @@
+"""Research For Good LiveAlert inventory, targeting and respondent adapter."""
+
 import hashlib
 import hmac
 import json
@@ -24,6 +26,8 @@ from .base import (
 
 
 class ResearchForGoodProvider(SurveyProvider):
+    """RFG LiveAlert adapter with signed commands and respondent routing."""
+
     code = "rfg"
     label = "Research For Good"
     default_base_url = "https://api.researchforgood.com/API"
@@ -44,6 +48,8 @@ class ResearchForGoodProvider(SurveyProvider):
     })
 
     def __init__(self, integration, *, session=None, clock=None):
+        """Resolve integration settings and injectable HTTP/time dependencies."""
+
         super().__init__(integration, session=session or requests.Session())
         refs = integration.credential_env_keys or {}
         self.apid = environment_value(refs.get("apid"), "RFG apid")
@@ -66,6 +72,8 @@ class ResearchForGoodProvider(SurveyProvider):
         self.clock = clock or time.time
 
     def _command(self, payload: dict) -> dict:
+        """Sign and execute one RFG JSON command, returning its response object."""
+
         body = json.dumps(payload, separators=(",", ":"), ensure_ascii=False)
         timestamp = str(int(self.clock()))
         signature = hmac.new(
@@ -101,17 +109,23 @@ class ResearchForGoodProvider(SurveyProvider):
         return result
 
     def explorer_read(self, command: str, **parameters) -> dict:
+        """Execute a protected, allow-listed RFG explorer command."""
+
         """Run an explicitly allow-listed RFG command for the admin explorer."""
         if command not in self.explorer_commands:
             raise ProviderConfigurationError("This RFG command is not available in the read-only explorer.")
         return self._command({"command": command, **parameters})
 
     def test_connection(self) -> dict:
+        """Verify configured APID/secret without mutating inventory."""
+
         marker = f"quest-tool-{int(self.clock())}"
         response = self._command({"command": "test/copy/1", "marker": marker})
         return {"provider": self.code, "authenticated": True, "echo_received": response.get("marker") == marker}
 
     def inventory(self) -> list[dict]:
+        """Fetch the current LiveAlert survey opportunity collection."""
+
         config = self.integration.config or {}
         command = {"command": "livealert/inventory/1", "allowRecontacts": bool(config.get("allow_recontacts", False)), "type": 1}
         if config.get("country"):
@@ -125,6 +139,8 @@ class ResearchForGoodProvider(SurveyProvider):
 
     @staticmethod
     def _datetime(value):
+        """Parse supported RFG timestamp representations into aware datetimes."""
+
         if not value:
             return None
         try:
@@ -135,6 +151,8 @@ class ResearchForGoodProvider(SurveyProvider):
 
     @staticmethod
     def _money(value):
+        """Parse provider currency values into a safe Decimal or ``None``."""
+
         try:
             cleaned = re.sub(r"[^0-9.\-]", "", str(value or ""))
             return Decimal(cleaned) if cleaned else None
@@ -142,6 +160,8 @@ class ResearchForGoodProvider(SurveyProvider):
             return None
 
     def normalize_inventory_item(self, payload, seen_at):
+        """Convert one RFG opportunity into the provider-neutral survey DTO."""
+
         desired = max(0, int(payload.get("desiredCompletes") or 0))
         completed = max(0, int(payload.get("currentCompletes") or 0))
         state = int(payload.get("state") or 0)
@@ -185,19 +205,29 @@ class ResearchForGoodProvider(SurveyProvider):
         )
 
     def targeting(self, source_key):
+        """Fetch targeting and embedded quota data for one RFG survey."""
+
         return self._command({"command": "livealert/targeting/1", "rfg_id": source_key, "zipsOnly": False})
 
     def datapoint(self, name):
+        """Fetch localized question/answer metadata for one RFG datapoint."""
+
         return self._command({"command": "livealert/datapoint/1", "name": name})
 
     def create_link(self, source_key):
+        """Request the RFG respondent entry base link for one survey."""
+
         return str(self._command({"command": "livealert/createLink/1", "rfg_id": source_key}).get("link") or "")
 
     @staticmethod
     def _question_id(value):
+        """Derive a stable positive local question ID from a string property."""
+
         return -int(hashlib.sha256(str(value).encode("utf-8")).hexdigest()[:15], 16)
 
     def refresh_details(self, survey):
+        """Replace RFG questions/quotas and store a usable entry link atomically."""
+
         targeting = self.targeting(survey.source_key)
         datapoints = targeting.get("datapoints") if isinstance(targeting.get("datapoints"), list) else []
         age_ranges = []
@@ -307,6 +337,8 @@ class ResearchForGoodProvider(SurveyProvider):
         sync_survey_mappings(survey)
 
     def duplicate_check(self, survey, attempt, ip_address, fingerprint="0"):
+        """Check RFG duplication using the persistent vault UID as RFG ``rid``."""
+
         fingerprint = str(fingerprint or "0").strip()
         if fingerprint != "0" and not re.fullmatch(r"[0-9a-fA-F]{32,128}", fingerprint):
             fingerprint = "0"
@@ -318,9 +350,13 @@ class ResearchForGoodProvider(SurveyProvider):
 
     @staticmethod
     def _answer_map(answers):
+        """Re-key submitted answer records by their provider question key."""
+
         return {str(item.get("question_key") or ""): item.get("upstream_values") or item.get("values") or [] for item in answers.values()}
 
     def build_outbound_url(self, survey, attempt, answers):
+        """Build RFG entry URL with platform RID as TID and vault UID as RID."""
+
         values = self._answer_map(answers)
         age_or_birthday = (values.get("RFG_BIRTHDAY") or [""])[0]
         gender = (values.get("RFG_GENDER") or [""])[0]
@@ -358,6 +394,8 @@ class ResearchForGoodProvider(SurveyProvider):
 
     @staticmethod
     def _age_on(birthday, today=None):
+        """Calculate completed years at ``today`` for an ISO birthday."""
+
         born = datetime.strptime(str(birthday), "%Y-%m-%d").date()
         today = today or date.today()
         return today.year - born.year - ((today.month, today.day) < (born.month, born.day))
@@ -385,6 +423,8 @@ class ResearchForGoodProvider(SurveyProvider):
 
     @classmethod
     def _age_from_age_or_date(cls, value, today=None):
+        """Accept current numeric-age UI values and legacy ISO date values."""
+
         raw_value = str(value or "").strip()
         if raw_value.isdigit():
             age = int(raw_value)
@@ -395,6 +435,8 @@ class ResearchForGoodProvider(SurveyProvider):
 
     @staticmethod
     def _postal_is_valid(country, postal):
+        """Validate known market formats after removing spaces and hyphens."""
+
         compact = re.sub(r"[\s-]", "", str(postal or "").upper())
         patterns = {
             "AU": r"\d{4}", "ZA": r"\d{4}",
@@ -409,6 +451,8 @@ class ResearchForGoodProvider(SurveyProvider):
         return bool(compact and (pattern is None or re.fullmatch(pattern, compact)))
 
     def validate_prescreener(self, survey, answers):
+        """Apply required-profile and optional strict RFG targeting rules."""
+
         values = self._answer_map(answers)
         age_or_birthday = (values.get("RFG_BIRTHDAY") or [""])[0]
         gender = str((values.get("RFG_GENDER") or [""])[0]).upper()

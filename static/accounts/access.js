@@ -1,3 +1,5 @@
+/* Access Control modals, grouped permission selection, CRUD requests and filters. */
+
 (() => {
   const $ = (selector, root = document) => root.querySelector(selector);
   const $$ = (selector, root = document) => [...root.querySelectorAll(selector)];

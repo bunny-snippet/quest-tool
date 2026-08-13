@@ -1,3 +1,5 @@
+"""HTML authentication, setup and Access Control page routes."""
+
 from django.urls import path
 
 from .views import (

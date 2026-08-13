@@ -1,3 +1,5 @@
+"""Surveys application configuration and cache-invalidation signal startup."""
+
 from django.apps import AppConfig
 
 

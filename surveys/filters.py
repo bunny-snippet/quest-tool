@@ -1,3 +1,5 @@
+"""Database-backed API filter definitions for inventory and traffic reports."""
+
 import django_filters
 from django.db.models import Q
 

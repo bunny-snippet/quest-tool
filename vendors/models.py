@@ -1,3 +1,5 @@
+"""Clients, integrations, suppliers, allocations, reservations and organization."""
+
 from decimal import Decimal
 
 from django.conf import settings

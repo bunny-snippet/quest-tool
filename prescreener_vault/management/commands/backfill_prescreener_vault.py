@@ -1,3 +1,5 @@
+"""Idempotently copy legacy attempt answers into the isolated vault database."""
+
 from django.conf import settings
 from django.core.management.base import BaseCommand, CommandError
 from django.db import transaction

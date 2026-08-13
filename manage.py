@@ -1,4 +1,6 @@
 #!/usr/bin/env python
+"""Django management-command entry point."""
+
 import os
 import sys
 
@@ -14,4 +16,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

@@ -1,3 +1,5 @@
+/* Opens and closes the answer-detail drawer without expanding table columns. */
+
 (() => {
   const drawer = document.getElementById('vaultAnswerDrawer');
   const backdrop = document.getElementById('vaultAnswerBackdrop');

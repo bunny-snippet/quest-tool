@@ -1,3 +1,5 @@
+"""Route vault models and migrations exclusively to the vault database alias."""
+
 from .constants import DATABASE_ALIAS
 
 

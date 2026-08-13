@@ -1,7 +1,11 @@
+"""Provider adapter registration and client-integration catalog metadata."""
+
 from .base import ProviderConfigurationError
 
 
 def _provider_classes():
+    """Import specialized adapters lazily to avoid provider/model import cycles."""
+
     from .cint import CintProvider
     from .rfg import ResearchForGoodProvider
 
@@ -12,10 +16,14 @@ def _provider_classes():
 
 
 def has_provider(code: str) -> bool:
+    """Return whether ``code`` has a specialized runtime adapter."""
+
     return str(code or "").lower() in _provider_classes()
 
 
 def provider_catalog() -> list[dict]:
+    """Return provider choices/defaults rendered by client-integration forms."""
+
     installed = [
         {
             "code": provider.code,
@@ -55,6 +63,8 @@ def provider_catalog() -> list[dict]:
 
 
 def get_provider(integration, *, session=None):
+    """Instantiate the adapter selected by a persisted client integration."""
+
     provider_class = _provider_classes().get(integration.provider_code)
     if not provider_class:
         raise ProviderConfigurationError(

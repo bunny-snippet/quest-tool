@@ -1,3 +1,9 @@
+"""Resolve function permissions and organization-scoped user visibility.
+
+UI hiding is only presentation; decorators and DRF permission classes in this
+module are the authoritative enforcement layer.
+"""
+
 from functools import wraps
 
 from django.contrib.auth.views import redirect_to_login

@@ -1,3 +1,5 @@
+/* Supplier policy, client/survey allocations and API-key management modals. */
+
 (() => {
   const workspace = document.querySelector('#vendorWorkspace');
   if (!workspace) return;

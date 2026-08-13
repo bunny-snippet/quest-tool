@@ -1,3 +1,5 @@
+"""Celery maintenance tasks for abandoned allocation reservations."""
+
 from celery import shared_task
 from django.utils import timezone
 

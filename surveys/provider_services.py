@@ -1,3 +1,5 @@
+"""Provider-neutral inventory preview, test, upsert and detail-refresh services."""
+
 import logging
 from django.db import transaction
 from django.utils import timezone

@@ -1,3 +1,5 @@
+"""Authentication, first-admin setup and Access Control HTTP endpoints."""
+
 import re
 
 from django.contrib.auth import get_user_model, login

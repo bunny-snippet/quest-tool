@@ -1,3 +1,5 @@
+"""Authenticate external supplier API requests using stored key hashes."""
+
 from django.utils import timezone
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed

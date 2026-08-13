@@ -1,3 +1,5 @@
+"""Supplier workspace ownership and Branch/Sub-branch/Shift visibility helpers."""
+
 from accounts.models import EmployeeProfile
 
 

@@ -1,3 +1,5 @@
+"""Dedicated InnovateMR HTTP client used by legacy sync and reconciliation."""
+
 import logging
 from dataclasses import dataclass
 from typing import Any

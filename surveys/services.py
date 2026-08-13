@@ -1,3 +1,5 @@
+"""InnovateMR normalization, inventory merge, detail refresh and reconciliation."""
+
 import hashlib
 import json
 import logging

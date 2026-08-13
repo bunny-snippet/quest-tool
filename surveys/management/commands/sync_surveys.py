@@ -1,3 +1,5 @@
+"""Run one provider inventory synchronization outside Celery."""
+
 from django.core.management.base import BaseCommand, CommandError
 
 from surveys.integrations import InnovateMRAPIError
@@ -16,4 +18,3 @@ class Command(BaseCommand):
             f"Sync {summary.run_id} {summary.status}: created={summary.created}, updated={summary.updated}, "
             f"unchanged={summary.unchanged}, closed={summary.closed}, detail_failures={summary.detail_failures}"
         ))
-

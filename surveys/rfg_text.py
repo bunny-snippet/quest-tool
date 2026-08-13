@@ -1,3 +1,5 @@
+"""Decode and sanitize RFG question, option and termination display text."""
+
 import html
 import re
 

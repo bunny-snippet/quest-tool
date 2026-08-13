@@ -1,3 +1,5 @@
+"""Supplier, client-integration and organization management HTTP endpoints."""
+
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.db.models.deletion import ProtectedError

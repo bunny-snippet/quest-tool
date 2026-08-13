@@ -1,3 +1,5 @@
+"""Provider-neutral respondent identifiers, audit capture and redirect helpers."""
+
 import secrets
 import string
 import re
@@ -61,6 +63,8 @@ def ensure_attempt_prescreener_uid(attempt: SurveyAttempt) -> str:
 
 
 def normalize_client_ip(value) -> str | None:
+    """Return a syntactically valid non-loopback/non-unspecified IP or ``None``."""
+
     if not value:
         return None
     try:
@@ -89,11 +93,15 @@ def get_request_ip(request) -> str | None:
 
 
 def supplier_code_from_entry_link(entry_link: str) -> str:
+    """Snapshot the real provider supplier code embedded in an allocated link."""
+
     query = dict(parse_qsl(urlsplit(entry_link).query, keep_blank_values=True))
     return str(query.get("supCode") or query.get("supplierCode") or "")
 
 
 def _versioned_match(user_agent: str, patterns: list[tuple[str, str]]) -> str:
+    """Return the first named user-agent pattern and its normalized version."""
+
     for name, pattern in patterns:
         match = re.search(pattern, user_agent, re.IGNORECASE)
         if match:
@@ -183,6 +191,12 @@ def backfill_attempt_entry_audit(attempt: SurveyAttempt, request) -> SurveyAttem
 
 
 def create_attempt(survey: Survey, platform_user, ip_address: str | None, client_data: dict | None = None) -> SurveyAttempt:
+    """Create one immutable respondent journey with fresh RID/UID and CPI audit.
+
+    The transaction makes identifier allocation and the historical attempt
+    snapshots one unit. Database uniqueness is the final collision guard.
+    """
+
     client_data = client_data or {}
     for _ in range(10):
         try:
@@ -243,6 +257,8 @@ def build_outbound_url(entry_link: str, rid: str, answers: dict) -> str:
 
 
 def status_rid_from_request(request) -> str:
+    """Read the platform RID from supported generic/legacy callback aliases."""
+
     for name in ("rid", "RID", "pid", "PID", "qsid", "QSID", "trackId"):
         value = request.GET.get(name)
         if value:

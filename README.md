@@ -137,3 +137,10 @@ python manage.py collectstatic --noinput
 ```
 
 See [architecture](docs/architecture.md), [client integrations](docs/client-integrations.md), and [synchronization runbook](docs/synchronization.md) for the internal design and operations contract.
+
+For code ownership, provider identifier mapping, connected call chains and a
+production debugging map, start with the [developer handbook](docs/developer-handbook.md).
+The companion [production function reference](docs/function-reference.md) explains
+each business helper's inputs, connections and side effects.
+Use the [complete production symbol index](docs/code-symbol-index.md) to locate
+every Python class/function/method and named browser JavaScript helper.

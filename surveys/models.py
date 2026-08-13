@@ -1,3 +1,5 @@
+"""Operational inventory, targeting, sync-audit and respondent-journey models."""
+
 from datetime import timedelta
 
 from django.conf import settings

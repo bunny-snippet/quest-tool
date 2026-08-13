@@ -1,3 +1,5 @@
+"""Non-destructive Redis cache health management command."""
+
 from django.conf import settings
 from django.core.cache import caches
 from django.core.management.base import BaseCommand, CommandError

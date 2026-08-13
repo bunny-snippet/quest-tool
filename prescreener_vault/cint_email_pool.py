@@ -30,14 +30,20 @@ CACHE_NAMESPACE = "cint-respondent-email:v1"
 
 
 class CintEmailPoolExhausted(PrescreenerVaultError):
+    """Raised when no unassigned real respondent email remains."""
+
     pass
 
 
 class CintEmailPoolConfigurationError(PrescreenerVaultError):
+    """Raised for invalid encryption, UID/RID or disabled identity state."""
+
     pass
 
 
 def _fernet() -> Fernet:
+    """Derive the vault email cipher from the stable deployment secret."""
+
     raw = str(settings.RESPONDENT_EMAIL_ENCRYPTION_KEY).strip()
     if not raw:
         raise CintEmailPoolConfigurationError(
@@ -68,6 +74,8 @@ def clean_cint_email(email: str) -> str:
 
 
 def cint_email_hash(email: str) -> str:
+    """Return Cint's SHA-256 hash of the normalized real email."""
+
     return hashlib.sha256(clean_cint_email(email).encode("utf-8")).hexdigest()
 
 
@@ -110,10 +118,14 @@ def reveal_email(identity: CintRespondentEmail) -> str:
 
 
 def _cache_key(uid: str) -> str:
+    """Create the Redis key for a non-secret UID-to-identity assignment."""
+
     return stable_cache_key(CACHE_NAMESPACE, uid)
 
 
 def _identity_payload(identity: CintRespondentEmail) -> dict:
+    """Return the bounded cache representation; never include decrypted email."""
+
     return {
         "id": identity.pk,
         "uid": identity.assigned_uid,
@@ -122,6 +134,8 @@ def _identity_payload(identity: CintRespondentEmail) -> dict:
 
 
 def _load_or_assign(uid: str) -> dict:
+    """Return UID's stable identity or atomically claim the first available row."""
+
     existing = (
         CintRespondentEmail.objects.using(DATABASE_ALIAS)
         .filter(assigned_uid=uid, status=CintRespondentEmail.Status.ASSIGNED)
@@ -176,6 +190,8 @@ def _load_or_assign(uid: str) -> dict:
 
 
 def _record_distinct_session(identity_id: int, uid: str, rid: str) -> None:
+    """Audit one RID use and update identity counters exactly once."""
+
     with transaction.atomic(using=DATABASE_ALIAS):
         identity = (
             CintRespondentEmail.objects.using(DATABASE_ALIAS)
@@ -245,6 +261,8 @@ def assigned_email_hash(uid: str, rid: str) -> str:
 
 
 def email_pool_status() -> dict:
+    """Return operational counts without exposing any email address or hash."""
+
     rows = (
         CintRespondentEmail.objects.using(DATABASE_ALIAS)
         .values("status")

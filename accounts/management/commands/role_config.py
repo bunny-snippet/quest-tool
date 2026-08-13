@@ -1,3 +1,5 @@
+"""Export, validate and import role/function configuration between deployments."""
+
 import json
 from pathlib import Path
 

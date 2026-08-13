@@ -1,3 +1,5 @@
+"""Accounts application configuration and signal/catalog startup hooks."""
+
 from django.apps import AppConfig
 
 

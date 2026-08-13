@@ -1,3 +1,5 @@
+"""OpenAPI authentication metadata and configured-provider schema filtering."""
+
 from drf_spectacular.extensions import OpenApiAuthenticationExtension
 from django.db import DatabaseError
 

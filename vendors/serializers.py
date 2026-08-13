@@ -1,3 +1,5 @@
+"""Validation and persistence rules for supplier and organization APIs."""
+
 from decimal import Decimal
 import ipaddress
 import re

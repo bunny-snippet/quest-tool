@@ -1,3 +1,5 @@
+"""Supplier/client integration Django application configuration."""
+
 from django.apps import AppConfig
 
 

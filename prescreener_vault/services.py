@@ -1,3 +1,5 @@
+"""Normalize and immutably persist prescreener submissions in the vault DB."""
+
 import copy
 import re
 from datetime import date, datetime

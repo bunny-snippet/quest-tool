@@ -1,3 +1,5 @@
+"""Isolated vault models for reusable answers and stable Cint email identities."""
+
 from django.db import models
 
 

@@ -1,3 +1,10 @@
+"""Workspace pages, respondent flow, callbacks, reports, exports and REST APIs.
+
+Business writes are delegated to survey/provider/allocation/vault services where
+possible. Public respondent endpoints live here because they coordinate several
+of those services inside one guarded request lifecycle.
+"""
+
 import csv
 import ipaddress
 import json
@@ -704,6 +711,8 @@ def workspace_home(request):
 
 
 def _qualifying_option_values(question):
+    """Return provider-approved option IDs, translating RFG gender IDs for UI."""
+
     raw = question.raw_data or {}
     if "targeting_choices" not in raw:
         return None
@@ -719,6 +728,8 @@ def _qualifying_option_values(question):
 
 
 def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_only=True):
+    """Prepare provider targeting rows as safe, responsive form controls and hints."""
+
     prepared = []
     provider_code = (
         survey.integration.provider_code
@@ -877,6 +888,8 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
 
 
 def _collect_prescreener_answers(request, survey):
+    """Validate submitted controls and produce vault plus provider answer values."""
+
     answers = {}
     errors = []
     for prepared in _prescreener_questions(
@@ -939,6 +952,8 @@ def _collect_prescreener_answers(request, survey):
 
 
 def _invalid_survey_link(request, message="This link is invalid or is no longer available.", status_code=400):
+    """Render the generic public error without leaking which validation failed."""
+
     return render(request, "surveys/flow_error.html", {
         "title": "Invalid survey link",
         "message": message,
@@ -953,10 +968,14 @@ def _has_exact_query(request, expected_names):
 
 
 def _rfg_result_url(rid, result):
+    """Build the local RFG browser-result URL for an attempt RID."""
+
     return f"{reverse('rfg-result')}?{urlencode({'rid': rid, 'result': result})}"
 
 
 def _finish_local_rfg_attempt(attempt, answers, request, *, result, reason):
+    """Atomically finalize a strict-mode RFG rejection before provider redirect."""
+
     now = timezone.now()
     with transaction.atomic():
         locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
@@ -991,6 +1010,13 @@ def _finish_local_rfg_attempt(attempt, answers, request, *, result, reason):
 
 @require_http_methods(["GET", "POST"])
 def survey_start(request):
+    """Validate copied links, run the prescreener and redirect one locked attempt.
+
+    Initial GET creates the immutable RID/UID journey; canonical GET renders its
+    questions; POST writes the vault, applies provider checks and records exactly
+    one outbound redirect. See ``docs/developer-handbook.md`` for the call graph.
+    """
+
     if request.method == "GET" and not request.GET.get("rid"):
         required_params = {"surveyId", "supplierCode", "userId", "code"}
         if not _has_exact_query(request, required_params):

@@ -1,3 +1,5 @@
+"""Supplier API-key generation and constant-time hash verification helpers."""
+
 import hashlib
 import hmac
 import secrets

@@ -1,3 +1,5 @@
+"""Django Admin registration for access-control models."""
+
 from django.contrib import admin
 
 from .models import AccessFunction, EmployeeProfile, Role, RoleFunctionPermission, UserFunctionOverride

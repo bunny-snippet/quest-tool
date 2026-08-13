@@ -1,3 +1,5 @@
+"""HTML routes for Suppliers, Client APIs and Organization workspaces."""
+
 from django.urls import path
 
 from .views import client_integrations_page, organization_management_page, vendor_management_page

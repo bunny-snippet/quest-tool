@@ -1,3 +1,5 @@
+"""Shared provider adapter contract, normalized DTO and safe configuration errors."""
+
 import os
 import re
 from dataclasses import dataclass
@@ -26,6 +28,8 @@ class NormalizedSurvey:
 
 
 def environment_value(reference: str, label: str) -> str:
+    """Resolve a validated environment-variable reference without exposing it."""
+
     reference = str(reference or "").strip()
     if not reference or not ENV_NAME_RE.fullmatch(reference):
         raise ProviderConfigurationError(f"Configure a valid environment-variable name for {label}.")
@@ -36,6 +40,8 @@ def environment_value(reference: str, label: str) -> str:
 
 
 class SurveyProvider:
+    """Interface implemented by specialized inventory/respondent providers."""
+
     code = "base"
     label = "Survey provider"
     minimum_sync_interval_seconds = 60
@@ -59,6 +65,8 @@ class SurveyProvider:
         raise NotImplementedError
 
     def duplicate_check(self, survey, attempt, ip_address: str | None) -> bool:
+        """Return provider duplicate state; providers without a check fail open."""
+
         return False
 
     def build_outbound_url(self, survey, attempt, answers: dict[str, Any]) -> str:

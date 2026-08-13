@@ -1,3 +1,5 @@
+/* Shared authenticated-shell behavior: responsive sidebar and mobile dismissal. */
+
 (() => {
   const shell = document.querySelector('.app-shell');
   const menu = document.getElementById('menuButton');
@@ -13,4 +15,3 @@
   window.addEventListener('resize', () => { if (!isMobile() && shell.dataset.sidebar === 'closed') setSidebar(true); });
   if (isMobile()) setSidebar(false);
 })();
-

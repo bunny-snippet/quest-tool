@@ -1,3 +1,5 @@
+"""REST router entries for functions, roles and user access."""
+
 from rest_framework.routers import DefaultRouter
 
 from .views import AccessFunctionViewSet, RoleViewSet, UserAccessViewSet
@@ -8,4 +10,3 @@ router.register("roles", RoleViewSet, basename="access-role")
 router.register("users", UserAccessViewSet, basename="access-user")
 
 urlpatterns = router.urls
-

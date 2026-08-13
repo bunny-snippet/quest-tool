@@ -1,3 +1,5 @@
+"""Prescreener vault Django application configuration."""
+
 from django.apps import AppConfig
 
 

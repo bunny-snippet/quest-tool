@@ -1,3 +1,5 @@
+"""Shared bounded page-number pagination for workspace REST lists."""
+
 from django.core.paginator import InvalidPage
 from rest_framework.exceptions import NotFound
 from rest_framework.pagination import PageNumberPagination

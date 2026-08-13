@@ -1,3 +1,5 @@
+"""Supplier visibility, commercial CPI and transactional capacity services."""
+
 from datetime import timedelta
 from dataclasses import dataclass
 from decimal import Decimal, ROUND_HALF_UP

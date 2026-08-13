@@ -1,3 +1,5 @@
+"""Celery application bootstrap and environment-credential startup audit."""
+
 import os
 
 from celery import Celery

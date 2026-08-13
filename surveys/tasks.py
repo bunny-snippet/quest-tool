@@ -1,3 +1,5 @@
+"""Celery task boundary for scheduled provider work and attempt reconciliation."""
+
 from datetime import timedelta
 
 from celery import shared_task

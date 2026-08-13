@@ -1,3 +1,5 @@
+"""Translate RFG result/live codes into normalized platform status and reasons."""
+
 from .models import SurveyAttempt
 from .rfg_text import clean_rfg_display_text
 

@@ -1,3 +1,5 @@
+"""Cint Exchange Model 2 / Method B polling and respondent-entry adapter."""
+
 import base64
 import hashlib
 import hmac
@@ -45,6 +47,8 @@ class CintProvider(SurveyProvider):
     )
 
     def __init__(self, integration, *, session=None):
+        """Resolve Cint credentials, supplier identity and polling/link policy."""
+
         super().__init__(integration, session=session or requests.Session())
         self.api_key = resolve_integration_token(integration)
         if not self.api_key:
@@ -80,6 +84,8 @@ class CintProvider(SurveyProvider):
         self._study_types = {}
 
     def _request(self, path, *, method="GET", payload=None, allow_not_found=False):
+        """Execute one authenticated Cint call with response and wall-time guards."""
+
         url = urljoin(self.base_url, str(path).lstrip("/"))
         started = time.monotonic()
         try:
@@ -142,12 +148,16 @@ class CintProvider(SurveyProvider):
 
     @staticmethod
     def _rows(data, key):
+        """Return a list-valued response member and reject non-list shapes."""
+
         rows = data.get(key) or []
         if not isinstance(rows, list):
             raise ProviderError(f"Cint Exchange response field {key} must be a list.")
         return [row for row in rows if isinstance(row, dict)]
 
     def _load_definitions(self):
+        """Load country/language, sample and study lookups once per adapter."""
+
         data = self._request(self.DEFINITIONS)
         self._country_languages = {
             str(item.get("Id")): item
@@ -167,6 +177,8 @@ class CintProvider(SurveyProvider):
         return data
 
     def test_connection(self):
+        """Verify API key and Supplier Code with a bounded lookup request."""
+
         definitions = self._load_definitions()
         inventory = self._request(f"Supply/v1/Surveys/Inventory/{self.supplier_code}")
         ids = inventory.get("SupplyAllocationSurveyIDs") or []
@@ -179,6 +191,8 @@ class CintProvider(SurveyProvider):
         }
 
     def inventory(self):
+        """Merge open opportunities and this supplier's allocated surveys."""
+
         self._load_definitions()
         merged = {}
         if self.include_allocated:
@@ -222,6 +236,8 @@ class CintProvider(SurveyProvider):
 
     @staticmethod
     def _integer(value, default=0):
+        """Parse a provider scalar into an integer without raising."""
+
         try:
             return int(value)
         except (TypeError, ValueError):
@@ -229,6 +245,8 @@ class CintProvider(SurveyProvider):
 
     @staticmethod
     def _decimal(value):
+        """Parse a provider money/rate scalar into Decimal or ``None``."""
+
         if isinstance(value, dict):
             value = value.get("Value", value.get("value"))
         if value in (None, ""):
@@ -240,6 +258,8 @@ class CintProvider(SurveyProvider):
 
     @staticmethod
     def _microsoft_datetime(value):
+        """Parse Cint's Microsoft JSON date representation when present."""
+
         match = re.search(r"/Date\((\d+)(?:[+-]\d{4})?\)/", str(value or ""))
         if not match:
             return None
@@ -250,11 +270,15 @@ class CintProvider(SurveyProvider):
 
     @staticmethod
     def _same_supplier(left, right):
+        """Compare supplier identifiers after string normalization."""
+
         left = str(left or "").strip()
         right = str(right or "").strip()
         return left == right or left.lstrip("0") == right.lstrip("0")
 
     def _supplier_allocation(self, payload):
+        """Select this integration's allocation from a Cint survey payload."""
+
         candidates = []
         for field in ("SupplierAllocations", "OfferwallAllocations"):
             candidates.extend(item for item in payload.get(field) or [] if isinstance(item, dict))
@@ -269,6 +293,8 @@ class CintProvider(SurveyProvider):
 
     @staticmethod
     def _supplier_link(payload, allocation=None):
+        """Extract a usable supplier-link object from known Cint envelopes."""
+
         allocation = allocation or {}
         candidates = [
             payload.get("SupplierLink"), payload.get("Target"), payload.get("TargetModel"),
@@ -277,6 +303,8 @@ class CintProvider(SurveyProvider):
         return next((item for item in candidates if isinstance(item, dict)), {})
 
     def _country_language(self, identifier):
+        """Expand CountryLanguageID into normalized market/language fields."""
+
         item = self._country_languages.get(str(identifier), {})
         code = str(item.get("Code") or "").strip().upper()
         name = str(item.get("Name") or "").strip()
@@ -292,6 +320,8 @@ class CintProvider(SurveyProvider):
         }
 
     def _survey_type(self, sample_type_id):
+        """Normalize Cint sample type into the platform's B2B/B2C label."""
+
         item = self._sample_types.get(str(sample_type_id), {})
         value = str(item.get("Code") or item.get("Name") or "").strip()
         compact = re.sub(r"[^A-Z0-9]", "", value.upper())
@@ -302,6 +332,8 @@ class CintProvider(SurveyProvider):
         return value[:20]
 
     def normalize_inventory_item(self, payload, seen_at):
+        """Convert one Cint inventory row into the provider-neutral survey DTO."""
+
         source_key = str(payload.get("SurveyNumber") or "").strip()
         if not source_key.isdigit():
             raise ProviderError("Cint inventory item is missing a numeric SurveyNumber.")
@@ -386,6 +418,8 @@ class CintProvider(SurveyProvider):
         )
 
     def _question_library(self, country_language_id):
+        """Return localized question metadata keyed by numeric QuestionID."""
+
         data = self._request(
             f"Lookup/v1/QuestionLibrary/AllQuestions/{country_language_id}"
         )
@@ -396,6 +430,8 @@ class CintProvider(SurveyProvider):
         }
 
     def _question_metadata(self, country_language_id, question_id, library):
+        """Use the library row or fetch a missing question individually."""
+
         if question_id in library:
             return library[question_id]
         data = self._request(
@@ -405,6 +441,8 @@ class CintProvider(SurveyProvider):
         return data.get("Question") if isinstance(data.get("Question"), dict) else {}
 
     def _question_options(self, country_language_id, question_id):
+        """Fetch localized option/PreCode rows for one question."""
+
         data = self._request(
             f"Lookup/v1/QuestionLibrary/AllQuestionOptions/{country_language_id}/{question_id}",
             allow_not_found=True,
@@ -413,6 +451,8 @@ class CintProvider(SurveyProvider):
 
     @staticmethod
     def _conditions(rows):
+        """Normalize Cint qualification/quota rows into question constraints."""
+
         conditions = []
         for row in rows or []:
             if not isinstance(row, dict):
@@ -451,6 +491,8 @@ class CintProvider(SurveyProvider):
         return ranges
 
     def refresh_details(self, survey):
+        """Hydrate qualifications, quotas, hints, mappings and supplier link."""
+
         survey_number = survey.source_key
         country_language_id = self._integer(
             (survey.raw_data or {}).get("CountryLanguageID"), -1
@@ -627,6 +669,8 @@ class CintProvider(SurveyProvider):
             self.ensure_supplier_link(survey)
 
     def _redirect_payload(self):
+        """Build OWS callbacks that return Cint MID into the platform RID route."""
+
         base = str(settings.PUBLIC_APP_BASE_URL or "").rstrip("/")
         if not base:
             raise ProviderConfigurationError(
@@ -675,6 +719,8 @@ class CintProvider(SurveyProvider):
 
     @staticmethod
     def _entry_signature(unsigned_url, key):
+        """Return Cint's URL-safe HMAC-SHA1 signature for the exact unsigned URL."""
+
         if not unsigned_url.endswith("&"):
             raise ProviderConfigurationError("Cint hash input must include the trailing ampersand.")
         digest = hmac.new(
@@ -683,6 +729,8 @@ class CintProvider(SurveyProvider):
         return base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
 
     def build_outbound_url(self, survey, attempt, answers):
+        """Send UID as PID, RID as MID, email hash and a signed answer payload."""
+
         live_link = survey.entry_link or self.ensure_supplier_link(survey)
         if not live_link:
             raise ProviderConfigurationError("Cint has not returned a live supplier link for this survey.")

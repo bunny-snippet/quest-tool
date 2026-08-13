@@ -18,6 +18,8 @@ _VERSION_KEY = "prescreener-vault:version"
 
 
 def _namespace_version() -> int:
+    """Return the current logical cache generation."""
+
     return int(safe_cache_get(_VERSION_KEY, 1) or 1)
 
 
@@ -28,6 +30,8 @@ def invalidate_vault_cache() -> None:
 
 
 def apply_submission_filters(queryset, selected: dict[str, str]):
+    """Apply the Prescreened Data UI filters to a vault queryset."""
+
     if selected.get("search"):
         value = selected["search"]
         queryset = queryset.filter(Q(uid__icontains=value) | Q(rid__icontains=value))
@@ -43,6 +47,8 @@ def apply_submission_filters(queryset, selected: dict[str, str]):
 
 
 def vault_filter_options() -> dict:
+    """Return cached distinct country/language/age/gender selector values."""
+
     version = _namespace_version()
     key = f"prescreener-vault:v{version}:filter-options"
 
@@ -83,6 +89,8 @@ def vault_filter_options() -> dict:
 
 
 def vault_filtered_summary(selected: dict[str, str]) -> dict:
+    """Return cached filter-aware vault totals."""
+
     version = _namespace_version()
     normalized = {key: str(value or "").strip().lower() for key, value in selected.items()}
     key = stable_cache_key(f"prescreener-vault:v{version}:summary", normalized)

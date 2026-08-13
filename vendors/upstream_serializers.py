@@ -1,3 +1,5 @@
+"""OpenAPI/DRF schemas for protected upstream provider explorer operations."""
+
 from rest_framework import serializers
 
 

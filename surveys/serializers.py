@@ -1,3 +1,5 @@
+"""Read-oriented API schemas and permission-aware survey presentation fields."""
+
 from urllib.parse import urlencode
 from decimal import Decimal, ROUND_HALF_UP
 

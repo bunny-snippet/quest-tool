@@ -1,3 +1,5 @@
+/* Projects inventory filters, pagination, cards/table and survey-detail drawer. */
+
 (() => {
   const $ = (id) => document.getElementById(id);
   if (!$('surveyRows')) return;

@@ -1,3 +1,5 @@
+"""Root routing for workspace apps, APIs, admin and protected documentation."""
+
 from django.contrib import admin
 from django.urls import include, path
 from drf_spectacular.views import SpectacularAPIView, SpectacularRedocView, SpectacularSwaggerView
