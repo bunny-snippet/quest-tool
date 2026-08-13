@@ -38,7 +38,7 @@ class CintProvider(SurveyProvider):
     code = "cint"
     label = "Cint Exchange"
     default_base_url = "https://api.samplicio.us"
-    minimum_sync_interval_seconds = 60
+    minimum_sync_interval_seconds = 30
     credential_fields = (("token", "Authorization API key"),)
     # Creating a supplier link removes an opportunity from the open Marketplace
     # feed. Its lifecycle is therefore closed by the quota/detail API, not by an
