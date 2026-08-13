@@ -170,7 +170,7 @@ regenerate this index after major refactors. Detailed behavior is in
 
 - L20 `_namespace_version` (function) - Return the current logical cache generation.
 - L26 `invalidate_vault_cache` (function) - Logically invalidate all cached vault reads in one constant-time write.
-- L32 `apply_submission_filters` (function) - Apply the Prescreened Data UI filters to a vault queryset.
+- L32 `apply_submission_filters` (function) - Apply the Panelist Data UI filters to a vault queryset.
 - L49 `vault_filter_options` (function) - Return cached distinct country/language/age/gender selector values.
 - L91 `vault_filtered_summary` (function) - Return cached filter-aware vault totals.
 - L116 `cached_profile` (function) - Return a bounded normalized profile snapshot without raw question payloads.
@@ -462,4 +462,3 @@ regenerate this index after major refactors. Detailed behavior is in
 - L156 `reload` - Browser helper; detailed page responsibility is listed in the developer handbook.
 - L169 `deleteUnit` - Browser helper; detailed page responsibility is listed in the developer handbook.
 - L175 `removeClientAccess` - Browser helper; detailed page responsibility is listed in the developer handbook.
-

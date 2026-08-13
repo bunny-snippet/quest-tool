@@ -1,5 +1,6 @@
 import re
 import zipfile
+from datetime import datetime, timezone as dt_timezone
 from io import BytesIO
 from io import StringIO
 from unittest.mock import patch
@@ -9,6 +10,7 @@ from django.core.cache import cache
 from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 from xml.etree import ElementTree
 
 from surveys.models import Survey, SurveyAttempt, TargetingQuestion
@@ -17,7 +19,7 @@ from surveys.survey_flow import create_attempt
 from .constants import DATABASE_ALIAS
 from .models import PrescreenerAnswer, PrescreenerSubmission
 from .cache import cached_profile, invalidate_vault_cache, vault_filter_options, vault_filtered_summary
-from .services import increment_profile_usage
+from .services import _age_from_value, _canonical_attribute, increment_profile_usage
 from .services import PrescreenerVaultError
 
 
@@ -145,13 +147,30 @@ class PrescreenerVaultFlowTests(TestCase):
             "country": "US", "age_group": "18-24", "gender": "male",
         })
         self.assertEqual(response.status_code, 200)
-        self.assertContains(response, "Prescreened Data")
-        self.assertContains(response, attempt.rid)
+        self.assertContains(response, "Panelist Data")
+        self.assertContains(response, "Country / Language")
+        self.assertContains(response, "Profile Specs")
+        self.assertContains(response, "Registered at")
+        self.assertContains(response, "Visits")
+        self.assertContains(response, "Profile Information")
+        self.assertContains(response, "Profile details")
+        self.assertNotContains(response, attempt.rid)
         self.assertContains(response, "What is your age?")
         self.assertContains(response, "Male")
         self.assertContains(response, "All countries")
         self.assertContains(response, "vault-answer-drawer")
         self.assertNotContains(response, "<details")
+
+        rid_search = self.client.get(reverse("prescreened-data"), {
+            "search": attempt.rid,
+        })
+        self.assertContains(rid_search, "No profiles available")
+        uid_search = self.client.get(reverse("prescreened-data"), {
+            "search": PrescreenerSubmission.objects.using(DATABASE_ALIAS).get(
+                rid=attempt.rid
+            ).uid,
+        })
+        self.assertContains(uid_search, "Profile details")
 
         exported = self.client.get(reverse("prescreened-data-export"), {
             "country": "US", "age_group": "18-24", "gender": "male",
@@ -167,9 +186,44 @@ class PrescreenerVaultFlowTests(TestCase):
         answer_text = " ".join(answers.itertext())
         self.assertIn(attempt.rid, submission_text)
         self.assertNotIn("Answer count", submission_text)
-        self.assertIn("Usage count", submission_text)
+        self.assertIn("Visits", submission_text)
         self.assertIn("What is your age?", answer_text)
         self.assertIn("Male", answer_text)
+
+    def test_rfg_birthday_alias_and_display_date_are_normalized_to_age(self):
+        submitted_at = datetime(2026, 8, 13, 12, tzinfo=dt_timezone.utc)
+        self.assertEqual(
+            _canonical_attribute("RFG_BIRTHDAY", "What is your date of birth?"),
+            "date_of_birth",
+        )
+        self.assertEqual(_age_from_value("13-08-2001", submitted_at), 25)
+        self.assertEqual(_age_from_value("2001-08-13", submitted_at), 25)
+
+    def test_repair_command_permanently_rebuilds_old_rfg_profile_specs(self):
+        submission = PrescreenerSubmission.objects.using(DATABASE_ALIAS).create(
+            uid="OldR-FG00-Prof-0001",
+            rid="OldRfg1234",
+            country="United States",
+            country_code="US",
+            language="English",
+            language_code="EN",
+            submitted_at=timezone.now(),
+        )
+        answer = PrescreenerAnswer.objects.using(DATABASE_ALIAS).create(
+            submission=submission,
+            position=1,
+            question_key="RFG_BIRTHDAY",
+            question_text="What is your date of birth?",
+            answer_values=["13-08-2001"],
+        )
+
+        call_command("repair_panelist_profiles", stdout=StringIO())
+
+        submission.refresh_from_db(using=DATABASE_ALIAS)
+        answer.refresh_from_db(using=DATABASE_ALIAS)
+        self.assertEqual(answer.canonical_attribute, "date_of_birth")
+        self.assertIsNotNone(submission.respondent_age)
+        self.assertTrue(submission.respondent_age_group)
 
     def test_vault_failure_does_not_redirect_or_lose_the_retry(self):
         attempt = self._attempt()

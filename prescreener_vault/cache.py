@@ -30,11 +30,11 @@ def invalidate_vault_cache() -> None:
 
 
 def apply_submission_filters(queryset, selected: dict[str, str]):
-    """Apply the Prescreened Data UI filters to a vault queryset."""
+    """Apply the Panelist Data UI filters to a vault queryset."""
 
     if selected.get("search"):
         value = selected["search"]
-        queryset = queryset.filter(Q(uid__icontains=value) | Q(rid__icontains=value))
+        queryset = queryset.filter(uid__icontains=value)
     if selected.get("country"):
         queryset = queryset.filter(country_code__iexact=selected["country"])
     if selected.get("language"):

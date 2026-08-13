@@ -16,7 +16,7 @@
     if (closeTimer) window.clearTimeout(closeTimer);
     body.replaceChildren(template.content.cloneNode(true));
     const answerTotal = body.querySelectorAll('.vault-answer-list article').length;
-    count.textContent = `${answerTotal} captured answer${answerTotal === 1 ? '' : 's'}`;
+    count.textContent = `${answerTotal} profile detail${answerTotal === 1 ? '' : 's'}`;
     drawer.hidden = false;
     backdrop.hidden = false;
     document.body.classList.add('vault-drawer-open');

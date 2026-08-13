@@ -150,7 +150,7 @@ compatibility; the product UI calls these records Suppliers.
 | `templates/surveys/prescreener.html` | Public dynamic prescreener form. |
 | `templates/surveys/status.html` | InnovateMR/Cint terminal status page. |
 | `templates/surveys/rfg_result.html` | RFG-specific human-readable outcome page. |
-| `templates/surveys/*.html` | Dashboard, Projects, Traffic Reports, Term Reports, User Hits and Prescreened Data containers. |
+| `templates/surveys/*.html` | Dashboard, Projects, Traffic Reports, Term Reports, User Hits and Panelist Data containers. |
 | `static/surveys/app.js` | Sidebar behavior. |
 | `static/surveys/projects.js` | Projects filters, pagination, rows/cards, Copy Link and quota/targeting drawer. |
 | `static/surveys/studies.js` | Traffic Report filters, metrics, rows/cards and animations. |
