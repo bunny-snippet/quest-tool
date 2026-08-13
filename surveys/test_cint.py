@@ -118,6 +118,7 @@ class CintProviderTests(TestCase):
             {"ApiResult": 0, "Surveys": [
                 {"SurveyNumber": 76001, "CountryLanguageID": 76, "RPI": {"Value": 4}},
             ]},
+            {"ApiResult": 0, "SupplierAllocationSurveys": []},
         )
         provider = CintProvider(self.integration, session=session)
         with patch.object(provider, "_load_definitions"):
@@ -131,16 +132,21 @@ class CintProviderTests(TestCase):
             provider.rejected_source_keys,
             {"6003", "6004", "6099", "8003"},
         )
-        requested = [call[0].split("/ByCountryLanguage/", 1)[1] for call in session.calls]
+        requested = [
+            call[0].split("/ByCountryLanguage/", 1)[1]
+            for call in session.calls
+            if "/ByCountryLanguage/" in call[0]
+        ]
         self.assertEqual(
             requested,
             ["6/0050", "7/0050", "8/0050", "9/0050", "10/0050", "76/0050"],
         )
-        self.assertEqual(sleep_mock.call_count, 5)
+        self.assertIn("/SupplierAllocations/All/0050", session.calls[-1][0])
+        self.assertEqual(sleep_mock.call_count, 6)
 
     @patch("surveys.providers.cint.time.sleep")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
-    def test_inventory_refreshes_only_existing_rows_from_allocated_feed(self, sleep_mock):
+    def test_inventory_imports_all_allocated_rows_matching_the_same_policy(self, sleep_mock):
         Survey.objects.create(
             client=self.client_record,
             integration=self.integration,
@@ -165,7 +171,16 @@ class CintProviderTests(TestCase):
                 {
                     "SurveyNumber": 9999,
                     "CountryLanguageID": 9,
-                    "RPI": {"Value": 1.25},
+                    "OfferwallAllocations": [{
+                        "SupplierCode": "0050",
+                        "TargetModel": {"RPI": {"value": 1.25}},
+                    }],
+                    "TotalRemaining": 200,
+                },
+                {
+                    "SurveyNumber": 9998,
+                    "CountryLanguageID": 8,
+                    "RPI": {"Value": 2.11},
                     "TotalRemaining": 200,
                 },
             ]},
@@ -174,13 +189,40 @@ class CintProviderTests(TestCase):
         with patch.object(provider, "_load_definitions"):
             rows = provider.inventory()
 
-        self.assertEqual([row["SurveyNumber"] for row in rows], [9001])
+        self.assertEqual([row["SurveyNumber"] for row in rows], [9001, 9999])
         normalized = provider.normalize_inventory_item(rows[0], timezone.now())
         self.assertEqual(normalized.values["loi"], 35)
         self.assertEqual(normalized.values["incidence_rate"], Decimal("50"))
         self.assertEqual(normalized.values["remaining"], 36)
         self.assertEqual(normalized.values["sample_size"], 36)
         self.assertEqual(sleep_mock.call_count, 6)
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_new_allocated_row_with_live_link_uses_put_not_duplicate_create(self):
+        payload = {
+            "SurveyNumber": 9999,
+            "CountryLanguageID": 9,
+            "RPI": {"Value": 1.25},
+            "OfferwallAllocations": [{
+                "SupplierCode": "0050",
+                "TargetModel": {
+                    "LiveSupplierLink": "https://samplicio.us/s/default.aspx?SID=allocated&PID=",
+                    "RPI": {"value": 1.25},
+                },
+            }],
+            "_cint_inventory_source": "supplier_allocations_inventory",
+        }
+        session = RecordingSession({"ApiResult": 0})
+        provider = CintProvider(self.integration, session=session)
+        normalized = provider.normalize_inventory_item(payload, timezone.now())
+
+        prepared = provider.prepare_inventory_item(normalized)
+
+        self.assertEqual(len(session.calls), 1)
+        self.assertIn("/SupplierLinks/Update/9999/0050", session.calls[0][0])
+        self.assertIn("SID=allocated", prepared.values["entry_link"])
+        self.assertEqual(prepared.raw_data["_cint_redirect_method"], "PUT")
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)

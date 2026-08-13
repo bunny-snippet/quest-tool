@@ -243,8 +243,8 @@ class CintProvider(SurveyProvider):
         """Fetch eligible opportunities and refresh metrics for stored linked rows.
 
         Creating a supplier link removes a survey from the open Marketplace
-        feed. The allocated feed is therefore read only for source keys already
-        accepted into this integration; it cannot introduce an unapproved row.
+        feed. The allocated feed is therefore filtered through the exact same
+        locale/RPI policy and merged so those eligible projects remain visible.
         """
 
         self._load_definitions()
@@ -297,46 +297,44 @@ class CintProvider(SurveyProvider):
                 integration=self.integration,
             ).values_list("source_key", "cpi")
         }
-        if tracked:
-            try:
-                allocated_data = self._allocated_inventory_request()
-            except ProviderError as exc:
-                self.inventory_failures.append({
-                    "feed": "allocated_inventory",
-                    "error": str(exc)[:500],
-                })
-                logger.warning(
-                    "Cint allocated inventory refresh failed integration=%s.",
-                    self.integration.pk,
-                    exc_info=True,
+        try:
+            allocated_data = self._allocated_inventory_request()
+        except ProviderError as exc:
+            self.inventory_failures.append({
+                "feed": "allocated_inventory",
+                "error": str(exc)[:500],
+            })
+            logger.warning(
+                "Cint allocated inventory refresh failed integration=%s.",
+                self.integration.pk,
+                exc_info=True,
+            )
+        else:
+            for row in self._rows(allocated_data, "SupplierAllocationSurveys"):
+                survey_number = row.get("SurveyNumber")
+                if survey_number is None:
+                    continue
+                key = str(survey_number)
+                country_language_id = self._integer(
+                    row.get("CountryLanguageID"), -1
                 )
-            else:
-                for row in self._rows(allocated_data, "SupplierAllocationSurveys"):
-                    survey_number = row.get("SurveyNumber")
-                    if survey_number is None:
-                        continue
-                    key = str(survey_number)
-                    if key not in tracked:
-                        continue
-                    country_language_id = self._integer(
-                        row.get("CountryLanguageID"), -1
-                    )
-                    allocation = self._supplier_allocation(row)
-                    rpi = self._decimal(row.get("RPI")) or self._decimal(
-                        allocation.get("RPI")
-                    )
-                    effective_rpi = rpi if rpi is not None else tracked[key]
-                    if not self._marketplace_rpi_allowed(
-                        country_language_id, effective_rpi
-                    ):
-                        self.rejected_source_keys.add(key)
-                        continue
-                    self.rejected_source_keys.discard(key)
-                    merged[key] = {
-                        **row,
-                        "_cint_inventory_source": "supplier_allocations_refresh",
-                        "_cint_country_language_request_id": country_language_id,
-                    }
+                allocation = self._supplier_allocation(row)
+                target = self._supplier_link(row, allocation)
+                rpi = self._decimal(row.get("RPI")) or self._decimal(
+                    target.get("RPI")
+                )
+                effective_rpi = rpi if rpi is not None else tracked.get(key)
+                if not self._marketplace_rpi_allowed(
+                    country_language_id, effective_rpi
+                ):
+                    self.rejected_source_keys.add(key)
+                    continue
+                self.rejected_source_keys.discard(key)
+                merged[key] = {
+                    **row,
+                    "_cint_inventory_source": "supplier_allocations_inventory",
+                    "_cint_country_language_request_id": country_language_id,
+                }
         return list(merged.values())
 
     @staticmethod
@@ -814,13 +812,14 @@ class CintProvider(SurveyProvider):
     def prepare_inventory_item(self, normalized, existing_survey=None):
         """Provision callbacks before allowing one accepted survey into the DB.
 
-        A survey that is new to this integration uses Cint's Create endpoint;
-        an existing local survey uses Update only when this DB has no proof that
-        the current callback contract was already installed for the configured
-        supplier. Provider-side survey metadata can change independently of the
-        callback URLs, so those changes must not cause another redirect request.
-        Any upstream failure aborts this individual row, so an unconfigured
-        survey is never exposed in Projects.
+        A genuinely open survey uses Cint's Create endpoint. A survey discovered
+        in the allocated feed with an existing live supplier link uses Update,
+        preventing a duplicate-link Create call. An existing local survey uses
+        Update only when this DB has no proof that the current callback contract
+        was already installed for the configured supplier. Provider-side survey
+        metadata can change independently of the callback URLs, so those changes
+        must not cause another redirect request. Any upstream failure aborts this
+        individual row, so an unconfigured survey is never exposed in Projects.
         """
 
         if existing_survey is not None:
@@ -834,14 +833,51 @@ class CintProvider(SurveyProvider):
             if current_contract:
                 return normalized
 
-        method = "PUT" if existing_survey is not None else "POST"
-        action = "Update" if existing_survey is not None else "Create"
-        result = self._request(
-            f"Supply/v1/SupplierLinks/{action}/{normalized.source_key}/{self.supplier_code}",
-            method=method,
-            payload=self._redirect_payload(),
+        incoming_allocation = self._supplier_allocation(normalized.raw_data)
+        incoming_link = self._supplier_link(normalized.raw_data, incoming_allocation)
+        incoming_live_link = str(
+            incoming_link.get("LiveLink")
+            or incoming_link.get("LiveSupplierLink")
+            or ""
+        ).strip()
+        is_allocated_inventory = (
+            normalized.raw_data.get("_cint_inventory_source")
+            == "supplier_allocations_inventory"
         )
-        link = self._supplier_link(result)
+        update_existing_link = existing_survey is not None or bool(incoming_live_link)
+        method = "PUT" if update_existing_link else "POST"
+        action = "Update" if update_existing_link else "Create"
+        try:
+            result = self._request(
+                f"Supply/v1/SupplierLinks/{action}/{normalized.source_key}/{self.supplier_code}",
+                method=method,
+                payload=self._redirect_payload(),
+            )
+        except ProviderError:
+            # Some allocated-list responses omit TargetModel even though a link
+            # already exists. Avoid dropping that survey: confirm only after a
+            # failed Create, then install our current callback contract via PUT.
+            if not (
+                existing_survey is None
+                and is_allocated_inventory
+                and action == "Create"
+            ):
+                raise
+            lookup = self._request(
+                "Supply/v1/SupplierLinks/BySurveyNumber/"
+                f"{normalized.source_key}/{self.supplier_code}",
+                allow_not_found=True,
+            )
+            incoming_link = self._supplier_link(lookup)
+            if not incoming_link:
+                raise
+            method = "PUT"
+            result = self._request(
+                f"Supply/v1/SupplierLinks/Update/{normalized.source_key}/{self.supplier_code}",
+                method=method,
+                payload=self._redirect_payload(),
+            )
+        link = self._supplier_link(result) or incoming_link
         if not link and existing_survey is None:
             lookup = self._request(
                 "Supply/v1/SupplierLinks/BySurveyNumber/"
