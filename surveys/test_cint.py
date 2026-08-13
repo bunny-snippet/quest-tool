@@ -304,7 +304,6 @@ class CintProviderTests(TestCase):
             raw_data={
                 "provider": "cint",
                 "targeting_choices": ["18", "19", "20"],
-                "targeting_age_ranges": [{"min": 18, "max": 20}],
             },
         )
         TargetingQuestion.objects.create(

@@ -2,6 +2,7 @@ import csv
 import ipaddress
 import json
 import logging
+import re
 from datetime import date, timedelta
 from decimal import Decimal
 from urllib.parse import quote, urlencode
@@ -762,6 +763,37 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                     })
                 except (KeyError, TypeError, ValueError):
                     continue
+        if (is_dob_question or is_age_question) and not age_ranges and allowed_values:
+            # Compatibility for Cint targeting stored before explicit age
+            # ranges were normalized. Prefer the provider's visible labels so
+            # grouped precodes such as "18-24" are not mistaken for ages 1/2.
+            for option in options:
+                label = str(option["label"]).strip()
+                single_age = re.fullmatch(r"\d{1,3}", label)
+                age_span = re.fullmatch(
+                    r"(\d{1,3})\s*(?:-|\u2013|to)\s*(\d{1,3})",
+                    label,
+                    re.IGNORECASE,
+                )
+                if single_age:
+                    start = end = int(label)
+                elif age_span:
+                    start, end = (int(age_span.group(1)), int(age_span.group(2)))
+                else:
+                    continue
+                if 0 <= start <= end <= 125:
+                    age_ranges.append({"ageStart": start, "ageEnd": end})
+        if age_ranges:
+            merged_age_ranges = []
+            for item in sorted(age_ranges, key=lambda row: int(row["ageStart"])):
+                start, end = int(item["ageStart"]), int(item["ageEnd"])
+                if merged_age_ranges and start <= merged_age_ranges[-1]["ageEnd"] + 1:
+                    merged_age_ranges[-1]["ageEnd"] = max(
+                        merged_age_ranges[-1]["ageEnd"], end
+                    )
+                else:
+                    merged_age_ranges.append({"ageStart": start, "ageEnd": end})
+            age_ranges = merged_age_ranges
         if is_dob_question:
             input_kind = "date_mask"
             display_text = "What is your date of birth?"
