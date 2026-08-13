@@ -266,6 +266,7 @@ class CintProviderTests(TestCase):
         values["raw_data"] = {
             **normalized.raw_data,
             "_cint_redirect_contract": provider.redirect_contract_fingerprint(),
+            "_cint_redirect_supplier_code": provider.supplier_code,
         }
         Survey.objects.create(
             client=self.client_record,
@@ -281,6 +282,53 @@ class CintProviderTests(TestCase):
 
         self.assertEqual(run.unchanged, 1)
         self.assertEqual(provider.session.calls, [])
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_changed_inventory_does_not_repeat_put_when_redirect_contract_is_current(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+        provider._country_languages = {"9": DEFINITIONS["AllCountryLanguages"][3]}
+        old_payload = {
+            "SurveyNumber": 143479,
+            "SurveyName": "Old name",
+            "CountryLanguageID": 9,
+            "RPI": {"Value": 1.50},
+        }
+        normalized = provider.normalize_inventory_item(old_payload, timezone.now())
+        values = dict(normalized.values)
+        values["entry_link"] = "https://samplicio.us/s/default.aspx?SID=stable&PID="
+        values["raw_data"] = {
+            **normalized.raw_data,
+            "_cint_redirect_contract": provider.redirect_contract_fingerprint(),
+            "_cint_redirect_supplier_code": provider.supplier_code,
+        }
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_id=normalized.numeric_source_id,
+            source_key=normalized.source_key,
+            **values,
+        )
+        changed_payload = {
+            **old_payload,
+            "SurveyName": "Updated name",
+            "RPI": {"Value": 2.25},
+        }
+
+        with patch.object(provider, "inventory", return_value=[changed_payload]), patch(
+            "surveys.provider_services.get_provider", return_value=provider
+        ):
+            run = sync_client_integration(self.integration)
+
+        survey.refresh_from_db()
+        self.assertEqual(run.updated, 1)
+        self.assertEqual(survey.name, "Updated name")
+        self.assertEqual(survey.cpi, Decimal("2.25"))
+        self.assertEqual(provider.session.calls, [])
+        self.assertEqual(
+            survey.raw_data["_cint_redirect_contract"],
+            provider.redirect_contract_fingerprint(),
+        )
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
@@ -329,7 +377,10 @@ class CintProviderTests(TestCase):
             client=self.client_record,
             integration=self.integration,
             source_key="82199769",
-            raw_data={"_cint_redirect_contract": fingerprint},
+            raw_data={
+                "_cint_redirect_contract": fingerprint,
+                "_cint_redirect_supplier_code": provider.supplier_code,
+            },
         )
         pending = Survey.objects.create(
             client=self.client_record,

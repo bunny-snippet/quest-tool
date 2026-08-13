@@ -272,7 +272,9 @@ def sync_cint_redirect_contracts(integration: ClientIntegration, *, batch_size=2
     fingerprint = provider.redirect_contract_fingerprint()
     pending = Survey.objects.filter(integration=integration).filter(
         Q(raw_data___cint_redirect_contract__isnull=True)
+        | Q(raw_data___cint_redirect_supplier_code__isnull=True)
         | ~Q(raw_data___cint_redirect_contract=fingerprint)
+        | ~Q(raw_data___cint_redirect_supplier_code=provider.supplier_code)
     ).order_by("pk")
     candidates = list(pending[: max(1, min(int(batch_size), 100))])
     updated = failures = 0
@@ -291,7 +293,9 @@ def sync_cint_redirect_contracts(integration: ClientIntegration, *, batch_size=2
             )
     remaining = Survey.objects.filter(integration=integration).filter(
         Q(raw_data___cint_redirect_contract__isnull=True)
+        | Q(raw_data___cint_redirect_supplier_code__isnull=True)
         | ~Q(raw_data___cint_redirect_contract=fingerprint)
+        | ~Q(raw_data___cint_redirect_supplier_code=provider.supplier_code)
     ).count()
     return {
         "processed": len(candidates),

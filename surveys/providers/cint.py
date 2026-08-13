@@ -756,34 +756,23 @@ class CintProvider(SurveyProvider):
         """Provision callbacks before allowing one accepted survey into the DB.
 
         A survey that is new to this integration uses Cint's Create endpoint;
-        an existing local survey uses Update. Any upstream failure aborts this
-        individual row, so an unconfigured survey is never exposed in Projects.
+        an existing local survey uses Update only when this DB has no proof that
+        the current callback contract was already installed for the configured
+        supplier. Provider-side survey metadata can change independently of the
+        callback URLs, so those changes must not cause another redirect request.
+        Any upstream failure aborts this individual row, so an unconfigured
+        survey is never exposed in Projects.
         """
 
         if existing_survey is not None:
             local_raw = existing_survey.raw_data or {}
-            existing_provider_payload = {
-                key: value for key, value in local_raw.items()
-                if not str(key).startswith("_cint_")
-            }
-            incoming_provider_payload = {
-                key: value for key, value in normalized.raw_data.items()
-                if not str(key).startswith("_cint_")
-            }
             current_contract = (
                 local_raw.get("_cint_redirect_contract")
                 == self.redirect_contract_fingerprint()
+                and str(local_raw.get("_cint_redirect_supplier_code") or "")
+                == str(self.supplier_code)
             )
-            normalized_fields_match = all(
-                getattr(existing_survey, field) == value
-                for field, value in normalized.values.items()
-                if field not in {"raw_data", "last_seen_at", "entry_link", "test_entry_link"}
-            )
-            if (
-                current_contract
-                and existing_provider_payload == incoming_provider_payload
-                and normalized_fields_match
-            ):
+            if current_contract:
                 return normalized
 
         method = "PUT" if existing_survey is not None else "POST"
