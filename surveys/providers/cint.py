@@ -46,12 +46,12 @@ class CintProvider(SurveyProvider):
     close_missing_inventory_items = False
 
     MARKETPLACE_RULES = {
-        6: {"country_code": "CA", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
-        7: {"country_code": "IN", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
-        8: {"country_code": "GB", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("2")},
-        9: {"country_code": "US", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
-        10: {"country_code": "FR", "language_code": "FRE", "minimum": Decimal("1"), "maximum": Decimal("4")},
-        76: {"country_code": "IN", "language_code": "HIN", "minimum": Decimal("1"), "maximum": Decimal("4")},
+        6: {"country_code": "CA", "language_code": "ENG", "minimum": Decimal("0.97"), "maximum": Decimal("4.1")},
+        7: {"country_code": "IN", "language_code": "ENG", "minimum": Decimal("0.97"), "maximum": Decimal("4.1")},
+        8: {"country_code": "GB", "language_code": "ENG", "minimum": Decimal("0.97"), "maximum": Decimal("2.1")},
+        9: {"country_code": "US", "language_code": "ENG", "minimum": Decimal("0.97"), "maximum": Decimal("4.1")},
+        10: {"country_code": "FR", "language_code": "FRE", "minimum": Decimal("0.97"), "maximum": Decimal("4.1")},
+        76: {"country_code": "IN", "language_code": "HIN", "minimum": Decimal("0.97"), "maximum": Decimal("4.1")},
     }
     MARKETPLACE_MIN_REQUEST_INTERVAL_SECONDS = 1.01
 
