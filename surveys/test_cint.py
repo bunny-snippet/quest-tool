@@ -145,6 +145,41 @@ class CintProviderTests(TestCase):
         self.assertEqual([row["SurveyNumber"] for row in rows], [143479])
 
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_inventory_sync_preserves_hydrated_supplier_link_when_list_omits_it(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_id=143479,
+            source_key="143479",
+            company_name="Cint Exchange",
+            entry_link="https://samplicio.us/s/default.aspx?SID=live-sid&PID=",
+            test_entry_link="https://samplicio.us/s/default.aspx?SID=test-sid&PID=",
+            raw_data={"_cint_supplier_link": {"SupplierLinkID": 99}},
+        )
+        session = RecordingSession(
+            DEFINITIONS,
+            {
+                "ApiResult": 0,
+                "SupplierAllocationSurveys": [{
+                    "SurveyNumber": 143479,
+                    "SurveyName": "Allocated survey without embedded link",
+                    "CountryLanguageID": 9,
+                }],
+            },
+            {"ApiResult": 0, "Surveys": []},
+        )
+        provider = CintProvider(self.integration, session=session)
+        with patch("surveys.provider_services.get_provider", return_value=provider):
+            sync_client_integration(self.integration)
+
+        survey.refresh_from_db()
+        self.assertIn("SID=live-sid", survey.entry_link)
+        self.assertIn("SID=test-sid", survey.test_entry_link)
+        self.assertEqual(
+            survey.raw_data["_cint_supplier_link"]["SupplierLinkID"], 99
+        )
+
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
     def test_refresh_details_builds_targeting_and_quota_drawer_data(self):
         survey = Survey.objects.create(
             client=self.client_record,

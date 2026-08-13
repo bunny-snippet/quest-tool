@@ -1148,6 +1148,12 @@ def survey_start(request):
                     logger.exception("Prescreener vault capture failed for rid=%s", attempt.rid)
                     detail = "Secure prescreener storage is temporarily unavailable. Please submit again shortly."
                 else:
+                    logger.exception(
+                        "Survey provider continuation failed for rid=%s provider=%s",
+                        attempt.rid,
+                        attempt.survey.integration.provider_code
+                        if attempt.survey.integration_id else "legacy",
+                    )
                     detail = str(exc) if isinstance(exc, ProviderError) else "The upstream provider is temporarily unavailable."
                 errors.append(f"Survey provider could not continue: {detail}")
     else:

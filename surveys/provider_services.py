@@ -11,6 +11,23 @@ from .providers import ProviderError, get_provider
 logger = logging.getLogger(__name__)
 
 
+def _preserve_provider_local_state(integration, survey, normalized):
+    """Keep provider state hydrated outside inventory when list rows omit it."""
+    if integration.provider_code != "cint" or survey is None:
+        return
+    # Cint's inventory endpoints commonly omit SupplierLink/Target. A later
+    # detail hydration retrieves or creates that link, so an inventory refresh
+    # must not erase it while a respondent is completing the pre-screener.
+    if not normalized.values.get("entry_link") and survey.entry_link:
+        normalized.values["entry_link"] = survey.entry_link
+    if not normalized.values.get("test_entry_link") and survey.test_entry_link:
+        normalized.values["test_entry_link"] = survey.test_entry_link
+    supplier_link = (survey.raw_data or {}).get("_cint_supplier_link")
+    if supplier_link and "_cint_supplier_link" not in normalized.raw_data:
+        normalized.raw_data["_cint_supplier_link"] = supplier_link
+        normalized.values["raw_data"] = normalized.raw_data
+
+
 def provider_preview(integration: ClientIntegration, limit: int = 10) -> dict:
     """Fetch a bounded, read-only inventory preview without changing local surveys."""
     provider = get_provider(integration)
@@ -83,6 +100,7 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
         with transaction.atomic():
             for source_key, normalized in normalized_rows.items():
                 survey = Survey.objects.filter(integration=integration, source_key=source_key).first()
+                _preserve_provider_local_state(integration, survey, normalized)
                 values = {
                     **normalized.values,
                     "client": integration.client,
