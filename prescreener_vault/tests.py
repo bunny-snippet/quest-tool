@@ -265,3 +265,61 @@ class PrescreenerVaultFlowTests(TestCase):
             ).exists()
         )
         self.assertIn("failed=0", output.getvalue())
+
+    def test_reconcile_command_repairs_answers_and_classifies_the_remaining_gap(self):
+        synced = self._attempt()
+        self.assertEqual(self._submit(synced).status_code, 302)
+        pending = self._attempt()
+        recoverable = SurveyAttempt.objects.create(
+            rid="Rec123AbC9",
+            survey=self.survey,
+            platform_user=self.user,
+            user_id=str(self.user.pk),
+            answers={
+                str(self.gender.pk): {
+                    "question_id": self.gender.question_id,
+                    "question_key": self.gender.key,
+                    "question_text": self.gender.text,
+                    "values": ["2"],
+                    "upstream_values": ["2"],
+                }
+            },
+        )
+        lost = SurveyAttempt.objects.create(
+            rid="Lost12AbC9",
+            survey=self.survey,
+            platform_user=self.user,
+            user_id=str(self.user.pk),
+            status=SurveyAttempt.Status.REDIRECTED,
+            submitted_at=timezone.now(),
+            redirected_at=timezone.now(),
+            answers={},
+        )
+
+        output = StringIO()
+        call_command(
+            "reconcile_prescreener_vault",
+            "--repair",
+            "--show-missing=10",
+            stdout=output,
+        )
+
+        recoverable.refresh_from_db()
+        self.assertTrue(
+            PrescreenerSubmission.objects.using(DATABASE_ALIAS).filter(
+                rid=recoverable.rid,
+                uid=recoverable.prescreener_uid,
+            ).exists()
+        )
+        self.assertFalse(
+            PrescreenerSubmission.objects.using(DATABASE_ALIAS).filter(rid=pending.rid).exists()
+        )
+        self.assertFalse(
+            PrescreenerSubmission.objects.using(DATABASE_ALIAS).filter(rid=lost.rid).exists()
+        )
+        report = output.getvalue()
+        self.assertIn('"linked": 1', report)
+        self.assertIn('"repairable": 1', report)
+        self.assertIn('"repaired": 1', report)
+        self.assertIn('"not_submitted": 1', report)
+        self.assertIn('"submitted_payload_missing": 1', report)
