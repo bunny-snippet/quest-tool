@@ -6680,7 +6680,8 @@ paths:
         name: rid
         schema:
           type: string
-        description: Platform respondent ID
+        description: Persistent prescreener UID echoed from RFG RID; used to resolve
+          the canonical platform RID
         required: true
       - in: query
         name: ruledOutBy
@@ -6692,6 +6693,11 @@ paths:
         schema:
           type: string
         description: RFG session identifier
+      - in: query
+        name: tid
+        schema:
+          type: string
+        description: Platform 10-character attempt RID echoed from RFG TID
       tags:
       - RFG Callbacks
       security:

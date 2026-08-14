@@ -131,11 +131,10 @@ The notation is:
   qualifying datapoint questions and quota rows, transactionally replaces old
   detail rows, stores the entry link, then refreshes canonical mappings.
 - `duplicate_check(survey, attempt, ip, fingerprint)` sanitizes fingerprint and
-  sends the **platform attempt RID as RFG `rid`** with survey/IP. It runs before
-  browser redirect.
+  sends **UID as RFG `rid`** with survey/IP. It runs before browser redirect.
 - `_answer_map(answers)` converts record-keyed form answers to RFG-keyed values.
 - `build_outbound_url(survey, attempt, answers)` validates required profile data,
-  converts age to birthday, removes stale `tid`, and sends only the **platform RID
+  converts age to birthday, and sends **platform RID as RFG `tid`** plus **vault UID
   as RFG `rid`**. It also sends country, postal, gender, integration, Project ID
   and selected RFG datapoints.
 - `_age_on`, `_birthday_from_age_or_date`, `_age_from_age_or_date` preserve legacy

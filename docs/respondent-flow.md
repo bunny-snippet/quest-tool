@@ -30,9 +30,11 @@ Answers are persisted but are not used as an authoritative local rejection. Inno
 
 ## Supplier redirect
 
-For Research For Good, the 10-character platform attempt RID is the only tracking
-identity sent upstream. It is sent as RFG `rid`; no RFG `tid` and no prescreener
-vault UID are added to the provider URL. RFG callbacks resolve that RID directly.
+For Research For Good, the platform attempt RID and reusable prescreener identity
+remain separate throughout the redirect and callback journey. The 10-character
+platform RID is sent as RFG `tid`, while the 19-character prescreener vault UID is
+sent as RFG `rid`. RFG callbacks resolve `tid` first and UID-based `rid` second,
+then always update the matched attempt under its canonical platform RID.
 
 The public copied link always uses the platform-facing supplier code, so an upstream/vendor supplier code is not exposed there. The exact stored `entryLink` is parsed only after validation. Its PID is replaced with RID, `trackId=RID` is added, and captured `QuestionKey=OptionId` pairs are appended. `survNum` and the real upstream `supCode` are preserved from the allocated link; they are never reconstructed from client parameters. This keeps InnovateMR routing intact while allowing the same public code to be used for future providers.
 

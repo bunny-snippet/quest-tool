@@ -46,25 +46,25 @@ BioBrain is provisioned in both Quest and Quant as a hidden client integration. 
 
 The adapter uses `https://partner-api.voqall.com/api/v1/surveys`, sends the key only in `EQ-PARTNER-ACCESS-KEY`, and normalizes BioBrain inventory, quota and qualification payloads into the same internal survey models used by other providers. Each deployment has its own environment, so the client remains independently hidden in Quest or Quant until that deployment receives a valid key and inventory.
 
-Inventory sync stores normalized projects first, then runs a bounded detail refresh outside the inventory transaction. The detail adapter stores targeting, quotas, every displayable provider answer and the permanent entry link. The respondent flow collects birthday, gender and country-valid postal code plus relevant targeting answers. Non-matching answers end locally with a recorded reason. Immediately before an eligible redirect it obtains RFG's official browser fingerprint when available, calls `duplicateCheck` with the platform's 10-character attempt RID plus IP/fingerprint, then appends tracking and profile parameters to the provider link. The same platform RID is sent as RFG `rid`; RFG receives no `tid` and no prescreener vault UID. If fingerprint generation is unavailable, RFG's documented `fingerprint: 0` fallback is used.
+Inventory sync stores normalized projects first, then runs a bounded detail refresh outside the inventory transaction. The detail adapter stores targeting, quotas, every displayable provider answer and the permanent entry link. The respondent flow collects birthday, gender and country-valid postal code plus relevant targeting answers. Non-matching answers end locally with a recorded reason. Immediately before an eligible redirect it obtains RFG's official browser fingerprint when available, calls `duplicateCheck` with the persistent prescreener UID as RFG RID plus IP/fingerprint, then appends tracking and profile parameters to the provider link. The platform's 10-character attempt RID is sent as RFG `tid`; its 19-character vault UID is sent as RFG `rid`. If fingerprint generation is unavailable, RFG's documented `fingerprint: 0` fallback is used.
 
 Every visible live RFG inventory row can expose the platform Copy Link even while its bounded background detail refresh is pending. On the first valid platform start, a missing permanent RFG link and targeting snapshot are hydrated before an attempt is created. The raw URL returned by `livealert/createLink/1` is never treated as respondent-ready on its own because it does not yet contain the mandatory RID and profile parameters.
 
 Configure the RFG server callback to the production HTTPS endpoint:
 
 ```text
-https://api.exchange-ip.com/survey/rfg/callback?result={start.result}&rid={params.rid}&ruledOutBy={start.ruledOutBy}&sesskey={sesskey}
+https://api.exchange-ip.com/survey/rfg/callback?result={start.result}&tid={params.tid}&rid={params.rid}&ruledOutBy={start.ruledOutBy}&sesskey={sesskey}
 ```
 
-Use RFG's server-to-server callback mode. RFG echoes the platform attempt RID from `{params.rid}`. The endpoint resolves only this canonical RID; `{start.result}` supplies the documented terminal result. The endpoint records exit IP/time, LOI, the human-readable outcome and raw callback metadata, then finalizes allocation capacity. It rejects unknown tracking values and requests outside the documented RFG callback IP allowlist. If RFG changes its callback addresses, update `config.callback_ip_allowlist` through an audited integration update before switching traffic.
+Use RFG's server-to-server callback mode. RFG echoes the platform attempt key from `{params.tid}` and the persistent vault identity from `{params.rid}`. The endpoint resolves `tid` first and UID-based `rid` second. A successful UID lookup always returns and updates the matched row's canonical 10-character platform RID; the provider's field name never replaces it. `{start.result}` supplies the documented terminal result. The endpoint records exit IP/time, LOI, the human-readable outcome and raw callback metadata, then finalizes allocation capacity. It rejects unknown tracking values and requests outside the documented RFG callback IP allowlist.
 
 Status pages, Traffic Reports and callback acknowledgements use the matched row's
-10-character `SurveyAttempt.rid`; RFG and the platform now use that same value.
+10-character `SurveyAttempt.rid`; RFG's UID-valued `rid` never replaces it.
 
 Configure the respondent-facing complete and non-complete page redirects to the dedicated outcome page:
 
 ```text
-https://api.exchange-ip.com/survey/rfg/result?result={start.result}&rid={params.rid}&ruledOutBy={start.ruledOutBy}&sesskey={sesskey}
+https://api.exchange-ip.com/survey/rfg/result?result={start.result}&tid={params.tid}&rid={params.rid}&ruledOutBy={start.ruledOutBy}&sesskey={sesskey}
 ```
 
 The browser outcome page explains complete, terminate, quota, duplicate, paused, profile-validation and security result codes. A browser redirect is display-only and never marks a completion verified or payable; only the trusted server callback does that. RFG may also append `liveP`, `liveS`, `liveI` and `quotaThrottle`, which are retained in the attempt audit and used to improve the displayed reason.

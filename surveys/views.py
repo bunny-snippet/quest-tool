@@ -1438,18 +1438,34 @@ RFG_CALLBACK_IPS = {
 
 
 def _rfg_attempt_from_request(request):
-    """Resolve an RFG callback using the platform RID sent as RFG ``rid``."""
+    """Resolve RFG TID first, then the UID echoed in RFG's ``rid`` field.
+
+    Provider parameter names never replace platform identity. A successful UID
+    lookup returns its SurveyAttempt row, whose immutable 10-character ``rid``
+    remains the canonical journey key in callbacks, reports and status logic.
+    """
 
     base = SurveyAttempt.objects.select_related("survey__integration").filter(
         survey__integration__provider_code="rfg"
     )
-    for name in ("rid", "RID"):
+    matched_attempt = None
+    for name in ("tid", "TID", "trackId"):
         value = str(request.GET.get(name) or "").strip()
         if value:
             attempt = base.filter(rid=value).first()
             if attempt:
-                return attempt
-    return None
+                if matched_attempt and matched_attempt.pk != attempt.pk:
+                    return None
+                matched_attempt = attempt
+    for name in ("rid", "RID", "pid", "PID", "qsid", "QSID"):
+        value = str(request.GET.get(name) or "").strip()
+        if value:
+            attempt = base.filter(Q(rid=value) | Q(prescreener_uid=value)).first()
+            if attempt:
+                if matched_attempt and matched_attempt.pk != attempt.pk:
+                    return None
+                matched_attempt = attempt
+    return matched_attempt
 
 
 @require_http_methods(["GET"])
@@ -1514,7 +1530,8 @@ class RFGCallbackAPIView(APIView):
             "RFG callback preview endpoint to safely understand result/live codes without writing data."
         ),
         parameters=[
-            OpenApiParameter("rid", OpenApiTypes.STR, required=True, description="Platform 10-character attempt RID echoed from RFG RID"),
+            OpenApiParameter("tid", OpenApiTypes.STR, required=False, description="Platform 10-character attempt RID echoed from RFG TID"),
+            OpenApiParameter("rid", OpenApiTypes.STR, required=True, description="Persistent prescreener UID echoed from RFG RID; used to resolve the canonical platform RID"),
             OpenApiParameter("result", OpenApiTypes.STR, required=True, description="RFG result code"),
             OpenApiParameter("ruledOutBy", OpenApiTypes.STR, required=False, description="RFG termination reason"),
             OpenApiParameter("sesskey", OpenApiTypes.STR, required=False, description="RFG session identifier"),
@@ -1604,6 +1621,11 @@ def survey_status(request):
         }, status=400)
     attempt = matching_attempts[0] if matching_attempts else None
     canonical_rid = attempt.rid if attempt else callback_identifier
+    provider_code = (
+        attempt.survey.integration.provider_code
+        if attempt and attempt.survey.integration_id
+        else ""
+    )
     ip_address = get_request_ip(request)
     if attempt:
         canonical_query = set(request.GET.keys()) == {"status", "pid"} and (
@@ -1642,10 +1664,6 @@ def survey_status(request):
                 # plaintext audit JSON.
                 if "hash" in callback_data:
                     callback_data["hash"] = "[redacted]"
-                provider_code = (
-                    attempt.survey.integration.provider_code
-                    if attempt.survey.integration_id else ""
-                )
                 audit_key = (
                     "rfg_browser_return" if provider_code == "rfg"
                     else "cint_browser_return" if provider_code == "cint"
@@ -1675,6 +1693,7 @@ def survey_status(request):
         "status_label": status_label,
         "rid": canonical_rid,
         "pid": attempt.pid if attempt else callback_identifier,
+        "display_rid": provider_code == "rfg",
         "ip_address": ip_address,
         "loi_seconds": attempt.loi_seconds if attempt else None,
         "attempt_found": bool(attempt),
