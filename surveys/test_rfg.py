@@ -257,11 +257,27 @@ class ResearchForGoodIntegrationTests(TestCase):
                 {"OptionId": 2, "OptionText": "Target answer"},
             ], raw_data={"targeting_choices": [2]},
         )
+        health_insurance = TargetingQuestion.objects.create(
+            survey=survey,
+            question_id=-5,
+            key="Type of health insurance",
+            text="Type of health insurance",
+            question_type="single",
+            options=[{"OptionId": 4, "OptionText": "Employer plan"}],
+            raw_data={
+                "datapoint": {"property": "HealthInsurance"},
+                "targeting_choices": [4],
+            },
+        )
         answers = {
             str(birthday.pk): {"question_key": birthday.key, "upstream_values": ["2000-01-01"]},
             str(gender.pk): {"question_key": gender.key, "upstream_values": ["M"]},
             str(postal.pk): {"question_key": postal.key, "upstream_values": ["12 345"]},
             str(income.pk): {"question_key": income.key, "upstream_values": ["2"]},
+            str(health_insurance.pk): {
+                "question_key": health_insurance.key,
+                "upstream_values": ["4"],
+            },
         }
         attempt = SurveyAttempt.objects.create(
             rid="Abc123Xyz9",
@@ -279,6 +295,8 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual(outbound["gender"], ["M"])
         self.assertEqual(outbound["birthday"], ["2000-01-01"])
         self.assertEqual(outbound["household_income"], ["2"])
+        self.assertEqual(outbound["HealthInsurance"], ["4"])
+        self.assertNotIn("Type of health insurance", outbound)
         self.assertEqual(outbound["code"], [survey.local_id])
 
         answers[str(birthday.pk)]["upstream_values"] = ["32"]
@@ -334,7 +352,8 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual([item["OptionId"] for item in question.options], [1, 2])
         self.assertEqual(question.options[1]["OptionText"], "Target")
         self.assertEqual(question.raw_data["targeting_choices"], [2])
-        self.assertEqual(question.raw_data["adapter_version"], 2)
+        self.assertEqual(question.raw_data["adapter_version"], 3)
+        self.assertEqual(question.raw_data["outbound_property"], "income")
         serialized = TargetingQuestionSerializer(question).data
         self.assertFalse(serialized["options"][0]["Qualifies"])
         self.assertTrue(serialized["options"][1]["Qualifies"])

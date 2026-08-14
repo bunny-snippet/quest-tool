@@ -318,15 +318,22 @@ class ResearchForGoodProvider(SurveyProvider):
                     ),
                     "Disposition": int(answer.get("disposition") or 0),
                 })
+            outbound_property = str(metadata.get("property") or target["name"])
             questions.append(TargetingQuestion(
                 survey=survey,
-                question_id=self._question_id(metadata.get("property") or target["name"]),
-                key=str(metadata.get("property") or target["name"]),
+                question_id=self._question_id(outbound_property),
+                key=outbound_property,
                 text=localized_question,
                 question_type="multi" if question_type == 1 else "single",
                 category="RFG targeting",
                 options=options,
-                raw_data={"adapter_version": 2, "targeting": target, "datapoint": metadata, "targeting_choices": sorted(allowed)},
+                raw_data={
+                    "adapter_version": 3,
+                    "outbound_property": outbound_property,
+                    "targeting": target,
+                    "datapoint": metadata,
+                    "targeting_choices": sorted(allowed),
+                },
             ))
         quotas = targeting.get("quotas") if isinstance(targeting.get("quotas"), list) else []
         quota_rows = []
@@ -396,10 +403,56 @@ class ResearchForGoodProvider(SurveyProvider):
 
         return {str(item.get("question_key") or ""): item.get("upstream_values") or item.get("values") or [] for item in answers.values()}
 
+    @staticmethod
+    def _outbound_property(question):
+        """Return RFG's machine property, never its human-readable datapoint name.
+
+        Older rows may have saved the display name in ``TargetingQuestion.key``.
+        Their original datapoint metadata is still retained in ``raw_data``, so
+        prefer the API's ``property`` value at redirect time. This makes the fix
+        effective immediately without waiting for every survey to be refreshed.
+        """
+
+        raw = question.raw_data if isinstance(question.raw_data, dict) else {}
+        datapoint = raw.get("datapoint") if isinstance(raw.get("datapoint"), dict) else {}
+        for value in (
+            raw.get("outbound_property"),
+            datapoint.get("property"),
+            raw.get("property"),
+            question.key,
+        ):
+            value = str(value or "").strip()
+            if value:
+                return value
+        return ""
+
+    def _outbound_answer_map(self, survey, answers):
+        """Map submitted question IDs to RFG datapoint property names."""
+
+        answer_ids = []
+        for answer_id in answers:
+            try:
+                answer_ids.append(int(answer_id))
+            except (TypeError, ValueError):
+                continue
+        questions = {
+            str(question.pk): question
+            for question in survey.targeting_questions.filter(pk__in=answer_ids)
+        }
+        values = {}
+        for answer_id, item in answers.items():
+            question = questions.get(str(answer_id))
+            key = self._outbound_property(question) if question else str(item.get("question_key") or "")
+            selected = item.get("upstream_values") or item.get("values") or []
+            if key:
+                values[key] = selected
+        return values
+
     def build_outbound_url(self, survey, attempt, answers):
         """Build RFG entry URL with platform RID as TID and vault UID as RID."""
 
         values = self._answer_map(answers)
+        outbound_values = self._outbound_answer_map(survey, answers)
         age_or_birthday = (values.get("RFG_BIRTHDAY") or [""])[0]
         gender = (values.get("RFG_GENDER") or [""])[0]
         postal = re.sub(
@@ -434,7 +487,7 @@ class ResearchForGoodProvider(SurveyProvider):
             "integration": str(self.integration.pk),
             "code": survey.local_id,
         })
-        for key, selected in values.items():
+        for key, selected in outbound_values.items():
             if key.startswith("RFG_") or not selected:
                 continue
             query[key] = ",".join(str(value) for value in selected)
