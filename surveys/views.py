@@ -101,7 +101,7 @@ from .survey_flow import (
     ensure_attempt_prescreener_uid,
     get_request_client_data,
     get_request_ip,
-    status_rid_from_request,
+    status_identifiers_from_request,
 )
 from .tasks import sync_innovatemr_surveys_task
 from .user_hits import aggregate_user_hits, user_hit_filter_options
@@ -135,7 +135,8 @@ PROJECT_FILTER_PERMISSIONS = {
 STUDY_COLUMN_PERMISSIONS = {
     "project_id": "studies.column.project_id", "survey_id": "studies.column.survey_id",
     "country": "studies.column.country", "cpi": "studies.column.cpi",
-    "respondent_id": "studies.column.respondent_id", "user": "studies.column.user",
+    "respondent_id": "studies.column.respondent_id", "pid": "studies.column.pid",
+    "user": "studies.column.user",
     "device": "studies.column.device", "ip": "studies.column.ip", "loi": "studies.column.loi",
     "status": "studies.column.status", "start": "studies.column.start", "end": "studies.column.end",
 }
@@ -1155,7 +1156,13 @@ def survey_start(request):
     """
 
     if request.method == "GET" and not request.GET.get("rid"):
+        # New copied links include the internal platform PID. The legacy
+        # four-parameter shape remains accepted so already-shared links do not
+        # break during rollout; those attempts receive a server-generated PID.
+        has_pid_parameter = "pid" in request.GET
         required_params = {"surveyId", "supplierCode", "userId", "code"}
+        if has_pid_parameter:
+            required_params.add("pid")
         if not _has_exact_query(request, required_params):
             return _invalid_survey_link(request)
 
@@ -1163,12 +1170,17 @@ def survey_start(request):
         supplier_code = request.GET.get("supplierCode", "").strip()
         internal_code = request.GET.get("code", "").strip()
         user_id = request.GET.get("userId", "").strip()
+        platform_pid = request.GET.get("pid", "").strip()
         if (
             not survey_id
             or len(survey_id) > 160
             or not user_id.isdigit()
             or not internal_code.isdigit()
             or len(internal_code) != 14
+            or (
+                has_pid_parameter
+                and (not platform_pid.isalnum() or not 6 <= len(platform_pid) <= 9)
+            )
         ):
             return _invalid_survey_link(request)
 
@@ -1197,6 +1209,30 @@ def survey_start(request):
         expected_supplier_code = settings.PUBLIC_SUPPLIER_CODE
         if supplier_code != expected_supplier_code:
             return _invalid_survey_link(request)
+
+        if provider_code == "cint":
+            try:
+                cint_provider = get_provider(survey.integration)
+                redirect_ready = cint_provider.redirect_contract_is_current(survey)
+            except Exception:
+                logger.exception(
+                    "Could not validate Cint supplier-link state survey=%s", survey.pk
+                )
+                redirect_ready = False
+            if not redirect_ready:
+                try:
+                    from .tasks import sync_cint_redirects_task
+
+                    sync_cint_redirects_task.delay(survey.integration_id, batch_size=25)
+                except Exception:
+                    logger.exception(
+                        "Could not queue Cint supplier-link repair survey=%s", survey.pk
+                    )
+                return _invalid_survey_link(
+                    request,
+                    "This survey link is still being secured. Please try again shortly.",
+                    status_code=503,
+                )
 
         stale = survey.targeting_synced_at is None or (
             survey.source_modified_at and survey.targeting_synced_at < survey.source_modified_at
@@ -1247,6 +1283,7 @@ def survey_start(request):
                     platform_user,
                     get_request_ip(request),
                     client_data=get_request_client_data(request),
+                    pid=platform_pid or None,
                 )
                 if allocation_context:
                     reserve_attempt_capacity(
@@ -1358,6 +1395,7 @@ def survey_start(request):
             "tone": "info",
             "status_label": attempt.get_status_display(),
             "rid": attempt.rid,
+            "pid": attempt.pid,
             "ip_address": attempt.callback_ip or attempt.initiation_ip,
             "loi_seconds": attempt.loi_seconds,
             "attempt_found": True,
@@ -1531,23 +1569,44 @@ class RFGCallbackAPIView(APIView):
 @require_http_methods(["GET"])
 def survey_status(request):
     status_code = request.GET.get("status", "").strip()
-    callback_identifier = status_rid_from_request(request)
+    callback_identifiers = status_identifiers_from_request(request)
+    callback_identifier = callback_identifiers[0] if callback_identifiers else ""
     page = STATUS_PAGES.get(status_code)
     if page is None or not callback_identifier:
         return render(request, "surveys/flow_error.html", {
             "title": "Invalid survey status",
-            "message": "A valid status (1–4) and RID are required.",
+            "message": "A valid status (1-4) and tracking ID are required.",
         }, status=400)
 
-    # Public callbacks now accept only the canonical 10-character attempt RID.
-    attempt = SurveyAttempt.objects.filter(rid=callback_identifier).first()
+    # Providers name their echoed identifiers differently. Resolve every value
+    # against our three non-overlapping identifier shapes, keep the internal
+    # RID immutable, and expose only status + platform PID after recording.
+    matching_attempts = list(
+        SurveyAttempt.objects.select_related("survey__integration").filter(
+            Q(rid__in=callback_identifiers)
+            | Q(pid__in=callback_identifiers)
+            | Q(prescreener_uid__in=callback_identifiers)
+        )[:2]
+    )
+    if len(matching_attempts) > 1:
+        return render(request, "surveys/flow_error.html", {
+            "title": "Ambiguous survey status",
+            "message": "The callback contains conflicting tracking identifiers.",
+        }, status=400)
+    attempt = matching_attempts[0] if matching_attempts else None
     canonical_rid = attempt.rid if attempt else callback_identifier
     ip_address = get_request_ip(request)
     if attempt:
+        canonical_query = set(request.GET.keys()) == {"status", "pid"} and (
+            request.GET.get("pid", "").strip() == attempt.pid
+        )
         with transaction.atomic():
-            attempt = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
+            attempt = SurveyAttempt.objects.select_related(
+                "survey__integration"
+            ).select_for_update().get(pk=attempt.pk)
             now = timezone.now()
             exit_client_data = get_request_client_data(request)
+            first_callback = attempt.callback_at is None
             if attempt.callback_at is None:
                 attempt.callback_at = now
                 attempt.callback_ip = ip_address
@@ -1559,15 +1618,46 @@ def survey_status(request):
                 attempt.exit_os = exit_client_data.get("os", "")
                 attempt.exit_client_data = exit_client_data
                 attempt.status_source = "browser_callback"
-            attempt.last_callback_at = now
-            attempt.callback_count += 1
-            attempt.save(update_fields=[
+            update_fields = [
                 "callback_at", "callback_ip", "loi_seconds", "status", "exit_user_agent", "exit_browser",
-                "exit_device", "exit_os", "exit_client_data", "status_source", "last_callback_at",
-                "callback_count", "updated_at"
-            ])
+                "exit_device", "exit_os", "exit_client_data", "status_source",
+            ]
+            if first_callback or not canonical_query:
+                attempt.last_callback_at = now
+                attempt.callback_count += 1
+                update_fields.extend(["last_callback_at", "callback_count"])
+            if not canonical_query:
+                callback_data = dict(request.GET.items())
+                # The Cint respondent hash is an upstream transport signature.
+                # It is neither shown in the clean result URL nor persisted in
+                # plaintext audit JSON.
+                if "hash" in callback_data:
+                    callback_data["hash"] = "[redacted]"
+                provider_code = (
+                    attempt.survey.integration.provider_code
+                    if attempt.survey.integration_id else ""
+                )
+                audit_key = (
+                    "rfg_browser_return" if provider_code == "rfg"
+                    else "cint_browser_return" if provider_code == "cint"
+                    else "browser_return"
+                )
+                audit = {
+                    **(attempt.upstream_transaction_data or {}),
+                    audit_key: callback_data,
+                }
+                if provider_code == "rfg":
+                    audit["rfg_outcome"] = describe_rfg_outcome(
+                        callback_data, attempt=attempt
+                    )
+                attempt.upstream_transaction_data = audit
+                update_fields.append("upstream_transaction_data")
+            attempt.save(update_fields=list(dict.fromkeys(update_fields + ["updated_at"])))
             finalize_attempt_capacity(attempt)
         status_label = attempt.get_status_display()
+        if not canonical_query:
+            clean_query = urlencode({"status": status_code, "pid": attempt.pid})
+            return HttpResponseRedirect(f"{reverse('survey-status')}?{clean_query}")
     else:
         status_label = "Unknown attempt"
 
@@ -1575,6 +1665,7 @@ def survey_status(request):
         **page,
         "status_label": status_label,
         "rid": canonical_rid,
+        "pid": attempt.pid if attempt else callback_identifier,
         "ip_address": ip_address,
         "loi_seconds": attempt.loi_seconds if attempt else None,
         "attempt_found": bool(attempt),
@@ -1865,7 +1956,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_class = SurveyAttemptFilter
     search_fields = [
-        "rid", "prescreener_uid", "user_id", "survey__local_id", "=survey__source_key", "=survey__source_id", "survey__name", "survey__company_name",
+        "rid", "pid", "prescreener_uid", "user_id", "survey__local_id", "=survey__source_key", "=survey__source_id", "survey__name", "survey__company_name",
         "platform_user__username", "platform_user__first_name", "platform_user__last_name", "platform_user__email",
         "initiation_ip", "callback_ip", "entry_browser", "entry_device", "entry_os",
     ]
@@ -2285,7 +2376,7 @@ def _attempt_excel_rows(queryset, requesting_user=None):
             yield [
                 survey.local_id,
                 survey.source_identifier,
-                attempt.user_id or (user.pk if user else ""),
+                attempt.pid,
                 attempt.rid,
                 status_label,
                 attempt.status_source,

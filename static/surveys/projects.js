@@ -37,6 +37,24 @@
   };
 
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' }[char]));
+  function generatePlatformPid() {
+    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+    const length = 6 + Math.floor(Math.random() * 4);
+    const randomValues = new Uint32Array(length);
+    let candidate = '';
+    do {
+      window.crypto.getRandomValues(randomValues);
+      candidate = [...randomValues].map((value) => alphabet[value % alphabet.length]).join('');
+    } while (!/[A-Z]/.test(candidate) || !/[a-z]/.test(candidate) || !/[0-9]/.test(candidate));
+    return candidate;
+  }
+  function entryLinkWithPid(rawLink) {
+    const url = new URL(rawLink, window.location.origin);
+    // Internal tracking PID only. Provider adapters keep their own PID/MID
+    // mappings, so this never changes Cint/RFG respondent parameters.
+    url.searchParams.set('pid', generatePlatformPid());
+    return url.toString();
+  }
   const formatDate = (value) => value ? new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
   const money = (value) => value == null ? '—' : `$${Number(value).toFixed(2)}`;
   const filterDefaults = {
@@ -307,7 +325,7 @@
     if (projectColumns.has('completes')) cells.push(`<td><div class="complete-value"><strong>${survey.completes.toLocaleString()} / ${survey.sample_size.toLocaleString()}</strong><span><i style="width:${percent}%"></i></span></div></td>`);
     if (projectColumns.has('cpi')) cells.push(`<td><strong class="cpi">${money(survey.cpi)}</strong></td>`);
     if (projectColumns.has('loi_ir')) cells.push(`<td><div class="metric-pair"><span><b>${survey.loi ?? '—'}</b> min</span><span><b>${survey.incidence_rate ?? '—'}</b>%</span></div><small class="survey-type-tag">${escapeHtml(survey.survey_type || survey.group_type || 'Type unavailable')}</small></td>`);
-    if (projectColumns.has('entry_link')) cells.push(`<td><button class="copy-link" data-copy-link="${escapeHtml(survey.start_link)}">Copy link</button></td>`);
+    if (projectColumns.has('entry_link')) cells.push(`<td>${survey.start_link ? `<button class="copy-link" data-copy-link="${escapeHtml(survey.start_link)}">Copy link</button>` : '<button class="copy-link" type="button" disabled title="The supplier callback link is still being verified">Preparing link...</button>'}</td>`);
     if (projectColumns.has('modified')) cells.push(`<td><div class="source-timestamp">${sourceTimestamp(survey.source_modified_display, survey.source_modified_at)}</div><small class="created-date">Created ${escapeHtml(survey.source_created_display || formatDate(survey.source_created_at))}</small><small class="status ${survey.status}"><i></i>${escapeHtml(survey.status)}</small></td>`);
     if (projectColumns.has('actions')) cells.push(`<td><button class="eye-button" data-action="${escapeHtml(survey.local_id)}" aria-label="View details for ${escapeHtml(survey.name)}">◉</button></td>`);
     return `<tr>${cells.length ? cells.join('') : '<td><div class="column-denied">No project columns are assigned to your account.</div></td>'}</tr>`;
@@ -323,7 +341,7 @@
     if (projectColumns.has('completes')) metrics.push(`<span><small>Completes</small><b>${survey.completes} / ${survey.sample_size}</b></span>`);
     if (projectColumns.has('cpi')) metrics.push(`<span><small>CPI</small><b>${money(survey.cpi)}</b></span>`);
     if (projectColumns.has('loi_ir')) metrics.push(`<span><small>LOI / IR · Type</small><b>${survey.loi ?? '—'}m · ${survey.incidence_rate ?? '—'}% · ${escapeHtml(survey.survey_type || survey.group_type || '—')}</b></span>`);
-    const bottom = `${projectColumns.has('modified') ? `<div class="source-timestamp"><small>Updated</small>${sourceTimestamp(survey.source_modified_display, survey.source_modified_at)}</div>` : ''}${projectColumns.has('entry_link') ? `<button class="copy-link" data-copy-link="${escapeHtml(survey.start_link)}">Copy link</button>` : ''}`;
+    const bottom = `${projectColumns.has('modified') ? `<div class="source-timestamp"><small>Updated</small>${sourceTimestamp(survey.source_modified_display, survey.source_modified_at)}</div>` : ''}${projectColumns.has('entry_link') ? (survey.start_link ? `<button class="copy-link" data-copy-link="${escapeHtml(survey.start_link)}">Copy link</button>` : '<button class="copy-link" type="button" disabled title="The supplier callback link is still being verified">Preparing link...</button>') : ''}`;
     return `<article class="survey-card"><div class="card-top"><div>${top}</div>${projectColumns.has('actions') ? `<button class="eye-button" data-action="${escapeHtml(survey.local_id)}" aria-label="View survey details">◉</button>` : ''}</div>${projectColumns.has('survey') ? `<h3>${escapeHtml(survey.source_id ?? '—')}</h3><p>${survey.buyer_id ? escapeHtml(survey.buyer_id) : 'Buyer ID unavailable'}</p>` : ''}${metrics.length ? `<div class="card-grid">${metrics.join('')}</div>` : ''}${bottom ? `<div class="card-bottom">${bottom}</div>` : ''}</article>`;
   }
 
@@ -368,7 +386,10 @@
     const copy = event.target.closest('[data-copy]');
     if (copy) { await navigator.clipboard.writeText(copy.dataset.copy); toast('Project ID copied'); }
     const copyLink = event.target.closest('[data-copy-link]');
-    if (copyLink && copyLink.dataset.copyLink) { await navigator.clipboard.writeText(copyLink.dataset.copyLink); toast('Entry link copied'); }
+    if (copyLink && copyLink.dataset.copyLink) {
+      await navigator.clipboard.writeText(entryLinkWithPid(copyLink.dataset.copyLink));
+      toast('Entry link copied with PID');
+    }
     const action = event.target.closest('[data-action]');
     if (action) {
       const survey = state.results.find((item) => item.local_id === action.dataset.action);

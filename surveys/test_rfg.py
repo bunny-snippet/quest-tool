@@ -14,6 +14,7 @@ from rest_framework.test import APIClient
 from vendors.models import Client, ClientIntegration
 
 from .models import Survey, SurveyAttempt, SurveyQuota, TargetingQuestion
+from .outcomes import provider_outcome
 from .provider_services import sync_client_integration
 from .providers.base import NormalizedSurvey, ProviderConfigurationError
 from .providers.rfg import ResearchForGoodProvider
@@ -492,6 +493,44 @@ class ResearchForGoodIntegrationTests(TestCase):
             attempt.upstream_transaction_data["rfg_browser_return"]["result"], "41"
         )
 
+    def test_universal_rfg_callback_keeps_reason_and_redirects_to_platform_pid(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-redirect",
+            local_id="20260812345688",
+            country_code="US",
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="Fg7Hi8Jk9L",
+            prescreener_uid="RfG7-UiD8-Test-0011",
+            survey=survey,
+            user_id="42",
+            status=SurveyAttempt.Status.REDIRECTED,
+        )
+
+        response = self.client.get("/survey", {
+            "status": "2",
+            "rid": attempt.prescreener_uid,
+            "tid": attempt.rid,
+            "result": "41",
+            "ruledOutBy": "Postal code failed provider validation %%3867%%",
+            "integration": "2",
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], f"/survey?status=2&pid={attempt.pid}")
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.rid, "Fg7Hi8Jk9L")
+        self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)
+        self.assertEqual(
+            attempt.upstream_transaction_data["rfg_browser_return"]["ruledOutBy"],
+            "Postal code failed provider validation %%3867%%",
+        )
+        outcome = provider_outcome(attempt)
+        self.assertEqual(outcome["status"], "Invalid postal code")
+        self.assertIn("Postal code failed provider validation", outcome["reason"])
+
     @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
     def test_non_matching_prescreener_finishes_locally_with_reason_page(self):
         user = get_user_model().objects.create_superuser(
@@ -690,7 +729,7 @@ class ResearchForGoodIntegrationTests(TestCase):
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)
 
-    def test_generic_status_rejects_uid_and_resolves_platform_rid(self):
+    def test_generic_status_resolves_uid_or_rid_and_displays_only_platform_pid(self):
         survey = Survey.objects.create(
             client=self.client_record,
             integration=self.integration,
@@ -710,14 +749,19 @@ class ResearchForGoodIntegrationTests(TestCase):
             "rid": attempt.prescreener_uid,
         })
 
-        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], f"/survey?status=2&pid={attempt.pid}")
+        clean_page = self.client.get(response["Location"])
+        self.assertEqual(clean_page.status_code, 200)
+        self.assertContains(clean_page, attempt.pid)
+        self.assertNotContains(clean_page, attempt.rid)
+        self.assertNotContains(clean_page, attempt.prescreener_uid)
 
         response = self.client.get("/survey", {
             "status": "2",
             "rid": attempt.rid,
         })
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, attempt.rid)
-        self.assertNotContains(response, attempt.prescreener_uid)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response["Location"], f"/survey?status=2&pid={attempt.pid}")
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)

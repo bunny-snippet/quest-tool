@@ -3,6 +3,7 @@
 from django.contrib import admin
 
 from .models import (
+    CintWebhookDelivery,
     CanonicalOption,
     CanonicalQuestion,
     ProviderOptionMapping,
@@ -42,14 +43,26 @@ class SyncRunAdmin(admin.ModelAdmin):
     readonly_fields = [field.name for field in SyncRun._meta.fields]
 
 
+@admin.register(CintWebhookDelivery)
+class CintWebhookDeliveryAdmin(admin.ModelAdmin):
+    list_display = [
+        "id", "integration", "status", "item_count", "created_count",
+        "updated_count", "closed_count", "skipped_count", "error_count",
+        "received_at", "processed_at",
+    ]
+    search_fields = ["event_key", "payload_sha256", "signature_key_id", "error"]
+    list_filter = ["status", "integration", "received_at"]
+    readonly_fields = [field.name for field in CintWebhookDelivery._meta.fields]
+
+
 @admin.register(SurveyAttempt)
 class SurveyAttemptAdmin(admin.ModelAdmin):
     list_display = [
-        "rid", "prescreener_uid", "survey", "platform_user", "vendor", "client", "status", "status_source", "initiated_at", "loi_seconds", "initiation_ip",
+        "rid", "pid", "prescreener_uid", "survey", "platform_user", "vendor", "client", "status", "status_source", "initiated_at", "loi_seconds", "initiation_ip",
         "callback_ip", "entry_browser", "entry_device", "is_verified",
     ]
     search_fields = [
-        "rid", "prescreener_uid", "user_id", "platform_user__username", "platform_user__email", "survey__local_id",
+        "rid", "pid", "prescreener_uid", "user_id", "platform_user__username", "platform_user__email", "survey__local_id",
         "survey__source_key", "survey__source_id", "initiation_ip", "callback_ip",
     ]
     list_filter = ["status", "status_source", "supplier_code", "entry_device", "entry_browser", "is_verified", "initiated_at"]

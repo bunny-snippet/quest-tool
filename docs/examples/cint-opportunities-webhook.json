@@ -1,0 +1,46 @@
+[
+  {
+    "survey_id": 99000001,
+    "survey_name": "Local Cint webhook test",
+    "account_name": "Local Test Buyer",
+    "buyer_id": 9001,
+    "country_language": "eng_us",
+    "industry": "other",
+    "study_type": "adhoc",
+    "bid_length_of_interview": 12,
+    "bid_incidence": 45,
+    "collects_pii": false,
+    "is_live": true,
+    "survey_quota_calc_type": "completes",
+    "revenue_per_interview": {
+      "value": 2.25,
+      "currency_code": "USD"
+    },
+    "total_client_entrants": 10,
+    "total_remaining": 36,
+    "completion_percentage": 0.1,
+    "conversion": 0.4,
+    "length_of_interview": 11,
+    "overall_completes": 4,
+    "relationship_type": "open",
+    "respondent_pids": [],
+    "recontact_count": 0,
+    "message_reason": "new",
+    "survey_quotas": [
+      {
+        "survey_quota_id": 9900000101,
+        "survey_quota_type": "Total",
+        "conversion": 0.4,
+        "number_of_respondents": 36,
+        "questions": null
+      }
+    ],
+    "survey_qualifications": [
+      {
+        "logical_operator": "OR",
+        "precodes": ["1"],
+        "question_id": 43
+      }
+    ]
+  }
+]

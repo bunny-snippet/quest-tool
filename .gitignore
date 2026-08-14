@@ -8,9 +8,9 @@ db.sqlite3
 .pytest_cache/
 .coverage
 htmlcov/
+*.log
 staticfiles/
 media/
 celerybeat-schedule*
 .idea/
 .vscode/
-

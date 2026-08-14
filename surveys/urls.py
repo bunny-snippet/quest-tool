@@ -25,6 +25,7 @@ from .views import (
     survey_status,
     workspace_home,
 )
+from .webhook_views import cint_opportunities_webhook
 
 router = DefaultRouter()
 router.register("surveys", SurveyViewSet, basename="survey")
@@ -34,6 +35,7 @@ router.register("sync-runs", SyncRunViewSet, basename="sync-run")
 router.register("survey-attempts", SurveyAttemptViewSet, basename="survey-attempt")
 
 urlpatterns = [
+    path("api/cint/webhook/surveys", cint_opportunities_webhook, name="cint-opportunities-webhook"),
     path("survey/start", survey_start, name="survey-start"),
     path("survey/rfg/callback", RFGCallbackAPIView.as_view(), name="rfg-callback"),
     path("survey/rfg/result", rfg_result, name="rfg-result"),

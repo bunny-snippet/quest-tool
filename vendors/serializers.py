@@ -223,6 +223,12 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 "manage_supplier_links", "create_missing_supplier_links", "hash_key_env",
                 "request_wall_timeout_seconds",
                 "profile_reuse_enabled", "profile_reuse_percentage", "country_strict_reuse",
+                "opportunities_webhook_enabled", "opportunities_callback_url",
+                "opportunities_public_key", "opportunities_key_id",
+                "opportunities_send_interval_seconds", "opportunities_max_survey_count",
+                # Accepted only to migrate installations that used the first
+                # local webhook prototype. New UI writes the explicit names.
+                "public_key", "key_id",
             }
             unexpected = set(config) - allowed_config
             if unexpected:
@@ -233,6 +239,7 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 "include_open_opportunities", "include_allocated_surveys",
                 "manage_supplier_links", "create_missing_supplier_links",
                 "profile_reuse_enabled", "country_strict_reuse",
+                "opportunities_webhook_enabled",
             ):
                 if flag in config and not isinstance(config[flag], bool):
                     raise serializers.ValidationError({"config": f"{flag} must be true or false."})
@@ -261,6 +268,65 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     "config": "request_wall_timeout_seconds must be between 30 and 300."
                 })
+            webhook_enabled = config.get("opportunities_webhook_enabled") is True
+            callback_url = str(config.get("opportunities_callback_url") or "").strip()
+            public_key = "".join(str(
+                config.get("opportunities_public_key") or config.get("public_key") or ""
+            ).split())
+            key_id = str(
+                config.get("opportunities_key_id") or config.get("key_id") or ""
+            ).strip()
+            if webhook_enabled:
+                if not callback_url:
+                    raise serializers.ValidationError({
+                        "config": "Cint Opportunities callback URL is required when its webhook is enabled."
+                    })
+                try:
+                    from urllib.parse import urlsplit
+
+                    parsed_callback = urlsplit(callback_url)
+                except ValueError as exc:
+                    raise serializers.ValidationError({
+                        "config": "Cint Opportunities callback URL is invalid."
+                    }) from exc
+                expected_path = "/api/cint/webhook/surveys"
+                if (
+                    parsed_callback.scheme != "https"
+                    or not parsed_callback.netloc
+                    or parsed_callback.path.rstrip("/") != expected_path
+                    or parsed_callback.query
+                    or parsed_callback.fragment
+                ):
+                    raise serializers.ValidationError({
+                        "config": (
+                            "Use an HTTPS callback ending exactly in "
+                            "/api/cint/webhook/surveys, without query parameters."
+                        )
+                    })
+                if not public_key or not key_id:
+                    raise serializers.ValidationError({
+                        "config": "Cint Opportunities public key and key ID are required."
+                    })
+                try:
+                    from surveys.cint_webhooks import validate_public_key
+
+                    validate_public_key(public_key)
+                except Exception as exc:
+                    raise serializers.ValidationError({
+                        "config": "Cint Opportunities public key is not a valid ECDSA key."
+                    }) from exc
+                if len(key_id) > 80:
+                    raise serializers.ValidationError({
+                        "config": "Cint Opportunities key ID cannot exceed 80 characters."
+                    })
+            config["opportunities_callback_url"] = callback_url
+            config["opportunities_public_key"] = public_key
+            config["opportunities_key_id"] = key_id
+            config["opportunities_send_interval_seconds"] = 5
+            config["opportunities_max_survey_count"] = 1000
+            config.pop("public_key", None)
+            config.pop("key_id", None)
+            attrs["config"] = config
             try:
                 interval = int(attrs.get(
                     "sync_interval_seconds", getattr(self.instance, "sync_interval_seconds", 60)

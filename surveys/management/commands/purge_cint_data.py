@@ -13,7 +13,7 @@ from prescreener_vault.models import (
     CintRespondentEmailUse,
     PrescreenerSubmission,
 )
-from surveys.models import Survey, SurveyAttempt, SyncLease, SyncRun
+from surveys.models import CintWebhookDelivery, Survey, SurveyAttempt, SyncLease, SyncRun
 from surveys.project_cache import invalidate_project_cache
 from vendors.models import (
     AllocationReservation,
@@ -97,6 +97,9 @@ class Command(BaseCommand):
             "sync_runs": SyncRun.objects.filter(
                 integration__in=integrations
             ).count(),
+            "webhook_deliveries": CintWebhookDelivery.objects.filter(
+                integration__in=integrations
+            ).count(),
             "vault_submissions": vault_submissions,
             "email_uses": email_uses,
             "email_identities_to_release": identities,
@@ -110,7 +113,7 @@ class Command(BaseCommand):
         self.stdout.write("Cint purge scope:")
         for key in (
             "integrations", "surveys", "attempts", "survey_allocations",
-            "reservations", "sync_runs", "vault_submissions", "email_uses",
+            "reservations", "sync_runs", "webhook_deliveries", "vault_submissions", "email_uses",
             "email_identities_to_release",
         ):
             self.stdout.write(f"  {key}={counts[key]}")
@@ -203,6 +206,7 @@ class Command(BaseCommand):
         for batch in _chunks(integration_ids):
             with transaction.atomic():
                 SyncRun.objects.filter(integration_id__in=batch).delete()
+                CintWebhookDelivery.objects.filter(integration_id__in=batch).delete()
 
         with transaction.atomic():
             VendorClientAllocation.objects.filter(client_id__in=client_ids).update(

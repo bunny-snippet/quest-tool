@@ -58,7 +58,12 @@ def provider_outcome(attempt):
     integration = attempt.survey.integration if attempt.survey.integration_id else None
     provider_code = (integration.provider_code if integration else "innovatemr").lower()
     if provider_code == "rfg":
-        parameters = data.get("rfg_callback") or data.get("rfg_local_outcome") or {}
+        parameters = (
+            data.get("rfg_callback")
+            or data.get("rfg_browser_return")
+            or data.get("rfg_local_outcome")
+            or {}
+        )
         outcome = data.get("rfg_outcome") or describe_rfg_outcome(parameters, attempt=attempt)
         return {
             "status": _text(outcome.get("title") or outcome.get("status") or attempt.get_status_display()),

@@ -225,6 +225,30 @@ class SurveySyncTests(TestCase):
         self.assertNotIn(integration.pk, result["queued"])
         delay.assert_not_called()
 
+    @patch("surveys.tasks.sync_client_integration_task.delay")
+    def test_dispatcher_does_not_poll_cint_when_opportunities_webhook_is_enabled(self, delay):
+        from .tasks import dispatch_due_integrations_task
+
+        ClientIntegration.objects.all().delete()
+        client = Client.objects.create(
+            code="webhook-cint", name="Webhook Cint", provider_code="cint"
+        )
+        integration = ClientIntegration.objects.create(
+            client=client,
+            name="Cint Feed Opportunities",
+            provider_code="cint",
+            base_url="https://api.samplicio.us",
+            supplier_code="6528",
+            last_test_status="success",
+            last_sync_started_at=timezone.now() - timedelta(minutes=2),
+            config={"opportunities_webhook_enabled": True},
+        )
+
+        result = dispatch_due_integrations_task()
+
+        self.assertNotIn(integration.pk, result["queued"])
+        delay.assert_not_called()
+
     @patch("surveys.tasks.sync_surveys")
     def test_successful_biobrain_inventory_publishes_hidden_client(self, sync_mock):
         from types import SimpleNamespace
@@ -489,9 +513,16 @@ class SurveyFlowTests(TestCase):
             reverse("survey-status"), {"status": "1", "rid": rid}, REMOTE_ADDR="20.20.20.20",
             HTTP_USER_AGENT="Mozilla/5.0 (Linux; Android 14; Mobile) Chrome/126.0.0.0",
         )
-        self.assertEqual(callback.status_code, 200)
-        self.assertContains(callback, "Thank you for participating!")
+        self.assertEqual(callback.status_code, 302)
         attempt = SurveyAttempt.objects.get(rid=rid)
+        self.assertEqual(
+            callback["Location"],
+            f"{reverse('survey-status')}?status=1&pid={attempt.pid}",
+        )
+        clean_result = self.client.get(callback["Location"])
+        self.assertEqual(clean_result.status_code, 200)
+        self.assertContains(clean_result, "Thank you for participating!")
+        self.assertContains(clean_result, attempt.pid)
         self.assertEqual(attempt.status, SurveyAttempt.Status.COMPLETED)
         self.assertEqual(attempt.platform_user, self.platform_user)
         self.assertEqual(attempt.user_id, "294")
@@ -503,6 +534,38 @@ class SurveyFlowTests(TestCase):
         self.assertEqual(attempt.exit_device, "Mobile")
         self.assertEqual(attempt.exit_os, "Android 14")
         self.assertIsNotNone(attempt.loi_seconds)
+
+    def test_copied_platform_pid_is_preserved_and_separate_from_rid_and_uid(self):
+        copied_pid = "A1bcD2eF3"
+        start = self.client.get(reverse("survey-start"), {
+            "surveyId": self.survey.source_id,
+            "supplierCode": "1000",
+            "userId": self.platform_user.pk,
+            "code": self.survey.local_id,
+            "pid": copied_pid,
+        })
+
+        self.assertEqual(start.status_code, 302)
+        rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
+        attempt = SurveyAttempt.objects.get(rid=rid)
+        self.assertEqual(attempt.pid, copied_pid)
+        self.assertEqual(len(attempt.rid), 10)
+        self.assertEqual(len(attempt.prescreener_uid), 19)
+        self.assertNotEqual(attempt.pid, attempt.rid)
+        self.assertNotEqual(attempt.pid, attempt.prescreener_uid)
+        self.assertNotEqual(attempt.rid, attempt.prescreener_uid)
+
+    def test_invalid_platform_pid_never_creates_an_attempt(self):
+        response = self.client.get(reverse("survey-start"), {
+            "surveyId": self.survey.source_id,
+            "supplierCode": "1000",
+            "userId": self.platform_user.pk,
+            "code": self.survey.local_id,
+            "pid": "bad-pid-value",
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(SurveyAttempt.objects.count(), 0)
 
     def test_repeated_submission_keeps_the_first_redirect_immutable(self):
         start = self.client.get(reverse("survey-start"), {
@@ -554,7 +617,11 @@ class SurveyFlowTests(TestCase):
 
         response = self.client.get(reverse("survey-status"), {"status": "1", "rid": attempt.rid})
 
-        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response["Location"],
+            f"{reverse('survey-status')}?status=1&pid={attempt.pid}",
+        )
         attempt.refresh_from_db()
         self.assertGreaterEqual(attempt.loi_seconds, 3900)
         self.assertLess(attempt.loi_seconds, 3910)
@@ -572,11 +639,92 @@ class SurveyFlowTests(TestCase):
             reverse("survey-status"), {"status": "2", "rid": rid}, REMOTE_ADDR="127.0.0.1",
             HTTP_X_REAL_IP="1.1.1.1",
         )
-        self.assertEqual(callback.status_code, 200)
+        self.assertEqual(callback.status_code, 302)
         attempt = SurveyAttempt.objects.get(rid=rid)
         self.assertEqual(attempt.initiation_ip, "8.8.8.8")
         self.assertEqual(attempt.callback_ip, "1.1.1.1")
         self.assertEqual(attempt.status_source, "browser_callback")
+
+    def test_provider_uid_callback_resolves_attempt_and_exposes_only_platform_pid(self):
+        attempt = SurveyAttempt.objects.create(
+            rid="Rt7Yu8Io9P",
+            prescreener_uid="Ab1c-De2f-Gh3i-Jk4l",
+            survey=self.survey,
+            platform_user=self.platform_user,
+            user_id=str(self.platform_user.pk),
+            status=SurveyAttempt.Status.REDIRECTED,
+        )
+
+        callback = self.client.get(reverse("survey-status"), {
+            "status": "3",
+            "rid": attempt.prescreener_uid,
+            "hash": "provider-transport-secret",
+            "reason": "Quota capacity reached",
+        })
+
+        self.assertEqual(callback.status_code, 302)
+        self.assertEqual(
+            callback["Location"],
+            f"{reverse('survey-status')}?status=3&pid={attempt.pid}",
+        )
+        self.assertNotIn("hash", callback["Location"])
+        self.assertNotIn(attempt.rid, callback["Location"])
+        self.assertNotIn(attempt.prescreener_uid, callback["Location"])
+
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.status, SurveyAttempt.Status.OVER_QUOTA)
+        self.assertEqual(attempt.callback_count, 1)
+        self.assertEqual(
+            attempt.upstream_transaction_data["browser_return"]["hash"],
+            "[redacted]",
+        )
+
+        clean_result = self.client.get(callback["Location"])
+        self.assertEqual(clean_result.status_code, 200)
+        self.assertContains(clean_result, attempt.pid)
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.callback_count, 1)
+
+    def test_cint_callback_hash_is_redacted_before_clean_pid_result(self):
+        cint_client = Client.objects.create(
+            code="cint-universal-callback",
+            name="Cint Exchange",
+            provider_code="cint",
+        )
+        cint_integration = ClientIntegration.objects.create(
+            client=cint_client,
+            name="Cint callback",
+            provider_code="cint",
+            supplier_code="6528",
+        )
+        self.survey.client = cint_client
+        self.survey.integration = cint_integration
+        self.survey.save(update_fields=["client", "integration", "updated_at"])
+        attempt = SurveyAttempt.objects.create(
+            rid="Ci7Nt8Ri9D",
+            survey=self.survey,
+            platform_user=self.platform_user,
+            user_id=str(self.platform_user.pk),
+            status=SurveyAttempt.Status.REDIRECTED,
+        )
+
+        response = self.client.get(reverse("survey-status"), {
+            "status": "4",
+            "rid": attempt.rid,
+            "hash": "signed-provider-value",
+            "surveyId": self.survey.source_id,
+        })
+
+        self.assertEqual(response.status_code, 302)
+        self.assertEqual(
+            response["Location"],
+            f"{reverse('survey-status')}?status=4&pid={attempt.pid}",
+        )
+        attempt.refresh_from_db()
+        self.assertEqual(
+            attempt.upstream_transaction_data["cint_browser_return"]["hash"],
+            "[redacted]",
+        )
 
     def test_direct_localhost_is_not_saved_as_respondent_network_ip(self):
         start = self.client.get(reverse("survey-start"), {
@@ -735,6 +883,7 @@ class StudiesTrackingTests(TestCase):
         self.assertContains(page, "Canada · CA")
         self.assertContains(page, '<th class="study-col-cpi">CPI</th>', html=True)
         self.assertContains(page, '<th class="study-col-rid">RID / UID</th>', html=True)
+        self.assertContains(page, '<th class="study-col-pid">PID</th>', html=True)
         self.assertContains(page, 'data-multi-filter="branch"')
         self.assertContains(page, 'data-multi-filter="sub_branch"')
         self.assertContains(page, 'data-multi-filter="shift"')
@@ -760,6 +909,7 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(response.data["count"], 1)
         result = response.data["results"][0]
         self.assertEqual(result["rid"], self.complete.rid)
+        self.assertEqual(result["pid"], self.complete.pid)
         self.assertEqual(result["prescreener_uid"], self.complete.prescreener_uid)
         self.assertEqual(result["user_name"], "Kanik Sharma")
         self.assertEqual(result["entry_ip"], "10.0.0.1")
@@ -906,6 +1056,7 @@ class StudiesTrackingTests(TestCase):
         ])
         self.assertIn("Kanik Sharma", rows[1])
         self.assertIn(self.complete.rid, rows[1])
+        self.assertIn(self.complete.pid, rows[1])
         self.assertNotIn("Pre-screener answers", rows[0])
         self.assertNotIn("Outbound supplier URL", rows[0])
         self.assertNotIn("Ee4Ff5Gg6H", str(rows))

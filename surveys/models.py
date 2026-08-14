@@ -7,6 +7,8 @@ from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.utils import timezone
 
+from .identifiers import generate_platform_pid
+
 
 class LocalIdSequence(models.Model):
     """Monthly counter used to issue 14-digit IDs such as 20260800000001."""
@@ -329,6 +331,48 @@ class SyncRun(models.Model):
         ordering = ["-started_at"]
 
 
+class CintWebhookDelivery(models.Model):
+    """Auditable, replay-safe receipt for one Cint Opportunities callback."""
+
+    class Status(models.TextChoices):
+        RECEIVED = "received", "Received"
+        PROCESSING = "processing", "Processing"
+        PROCESSED = "processed", "Processed"
+        PARTIAL = "partial", "Partial"
+        FAILED = "failed", "Failed"
+
+    integration = models.ForeignKey(
+        "vendors.ClientIntegration",
+        on_delete=models.PROTECT,
+        related_name="cint_webhook_deliveries",
+    )
+    event_key = models.CharField(max_length=64, unique=True, db_index=True)
+    payload_sha256 = models.CharField(max_length=64, db_index=True)
+    signature_timestamp = models.PositiveBigIntegerField(null=True, blank=True)
+    signature_key_id = models.CharField(max_length=80, blank=True)
+    signature_header = models.TextField(blank=True)
+    payload = models.JSONField(default=list)
+    status = models.CharField(
+        max_length=16,
+        choices=Status.choices,
+        default=Status.RECEIVED,
+        db_index=True,
+    )
+    item_count = models.PositiveIntegerField(default=0)
+    created_count = models.PositiveIntegerField(default=0)
+    updated_count = models.PositiveIntegerField(default=0)
+    closed_count = models.PositiveIntegerField(default=0)
+    skipped_count = models.PositiveIntegerField(default=0)
+    error_count = models.PositiveIntegerField(default=0)
+    error = models.TextField(blank=True)
+    received_at = models.DateTimeField(auto_now_add=True, db_index=True)
+    processed_at = models.DateTimeField(null=True, blank=True)
+
+    class Meta:
+        ordering = ["-received_at"]
+        indexes = [models.Index(fields=["integration", "status", "received_at"])]
+
+
 class SurveyAttempt(models.Model):
     class Status(models.TextChoices):
         INITIATED = "initiated", "Initiated"
@@ -339,6 +383,17 @@ class SurveyAttempt(models.Model):
         QUALITY_TERMINATED = "4", "Quality terminated"
 
     rid = models.CharField(max_length=10, unique=True, db_index=True)
+    pid = models.CharField(
+        max_length=9,
+        unique=True,
+        db_index=True,
+        editable=False,
+        default=generate_platform_pid,
+        help_text=(
+            "Platform tracking ID. Generated as 6-9 mixed alphanumeric characters; "
+            "kept separate from the provider-specific PID parameter."
+        ),
+    )
     prescreener_uid = models.CharField(
         max_length=19,
         unique=True,
@@ -426,7 +481,7 @@ class SurveyAttempt(models.Model):
         indexes = [models.Index(fields=["survey", "user_id", "-initiated_at"])]
 
     def __str__(self):
-        return f"{self.rid} · {self.survey.source_id} · {self.user_id}"
+        return f"{self.rid} · {self.pid} · {self.survey.source_id} · {self.user_id}"
 
     @property
     def loi_started_at(self):

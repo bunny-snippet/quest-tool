@@ -228,25 +228,27 @@ html,body,.app-shell{max-width:100%;overflow-x:clip}.main-area{width:calc(100% -
   table-layout:fixed!important;
 }
 .studies-table th.study-col-project,
-.studies-table td.study-col-project{width:9%!important}
+.studies-table td.study-col-project{width:8.5%!important}
 .studies-table th.study-col-survey,
-.studies-table td.study-col-survey{width:7.5%!important}
+.studies-table td.study-col-survey{width:7%!important}
 .studies-table th.study-col-country,
-.studies-table td.study-col-country{width:6%!important}
+.studies-table td.study-col-country{width:5.5%!important}
 .studies-table th.study-col-cpi,
-.studies-table td.study-col-cpi{width:6.5%!important}
+.studies-table td.study-col-cpi{width:6%!important}
 .studies-table th.study-col-rid,
-.studies-table td.study-col-rid{width:8.5%!important}
+.studies-table td.study-col-rid{width:8%!important}
+.studies-table th.study-col-pid,
+.studies-table td.study-col-pid{width:6%!important}
 .studies-table th.study-col-user,
-.studies-table td.study-col-user{width:12.5%!important}
+.studies-table td.study-col-user{width:11.5%!important}
 .studies-table th.study-col-device,
-.studies-table td.study-col-device{width:5%!important}
+.studies-table td.study-col-device{width:4.5%!important}
 .studies-table th.study-col-ip,
-.studies-table td.study-col-ip{width:12%!important}
+.studies-table td.study-col-ip{width:11.5%!important}
 .studies-table th.study-col-loi,
-.studies-table td.study-col-loi{width:6%!important}
+.studies-table td.study-col-loi{width:5.5%!important}
 .studies-table th.study-col-status,
-.studies-table td.study-col-status{width:10%!important}
+.studies-table td.study-col-status{width:9%!important}
 .studies-table th.study-col-start,
 .studies-table td.study-col-start,
 .studies-table th.study-col-end,
@@ -272,6 +274,7 @@ html,body,.app-shell{max-width:100%;overflow-x:clip}.main-area{width:calc(100% -
 .studies-table .study-project-id,
 .studies-table .study-survey-id,
 .studies-table .respondent-id,
+.studies-table .study-pid,
 .studies-table .study-user-name,
 .studies-table .study-secondary,
 .studies-table .study-country b,
@@ -288,7 +291,9 @@ html,body,.app-shell{max-width:100%;overflow-x:clip}.main-area{width:calc(100% -
 }
 .studies-table .study-project-id,
 .studies-table .study-survey-id,
-.studies-table .respondent-id{font-size:10px}
+.studies-table .respondent-id,
+.studies-table .study-pid{font-size:10px}
+.studies-table .study-pid{display:block;color:var(--cyan-dark);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .studies-table .study-secondary{margin-top:4px;font-size:8px}
 .study-card-head>div small{max-width:220px;margin-top:3px;color:#7f8da2;font-size:9px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 @media(max-width:900px){

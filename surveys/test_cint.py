@@ -788,6 +788,10 @@ class CintProviderTests(TestCase):
             country_code="US",
             language_code="ENG",
             entry_link="https://samplicio.us/s/default.aspx?SID=live-sid&PID=",
+            raw_data={
+                "_cint_redirect_verified_at": timezone.now().isoformat(),
+                "_cint_redirect_supplier_code": "0050",
+            },
         )
         user.is_superuser = True
         user.is_staff = True
@@ -836,10 +840,7 @@ class CintProviderTests(TestCase):
         self.assertEqual(identity.assigned_uid, attempt.prescreener_uid)
         self.assertEqual(identity.use_count, 1)
 
-    @patch("surveys.views.get_provider")
-    def test_unsynced_live_cint_survey_has_copy_link_and_hydrates_on_first_start(
-        self, get_provider_mock
-    ):
+    def test_unsynced_cint_survey_is_not_copyable_until_redirect_contract_is_verified(self):
         admin = get_user_model().objects.create_superuser(
             "cint-link-owner", "cint-link-owner@example.com", "pass"
         )
@@ -856,27 +857,19 @@ class CintProviderTests(TestCase):
         listing = api.get("/api/v1/surveys/", {"search": survey.source_key})
         self.assertEqual(listing.status_code, 200)
         start_link = listing.data["results"][0]["start_link"]
+        self.assertIsNone(start_link)
+
+        survey.entry_link = "https://samplicio.us/s/default.aspx?SID=lazy-cint&PID="
+        survey.raw_data = {
+            "_cint_redirect_verified_at": timezone.now().isoformat(),
+            "_cint_redirect_supplier_code": self.integration.supplier_code,
+        }
+        survey.save(update_fields=["entry_link", "raw_data", "updated_at"])
+
+        listing = api.get("/api/v1/surveys/", {"search": survey.source_key})
+        start_link = listing.data["results"][0]["start_link"]
         self.assertIn(f"surveyId={survey.source_key}", start_link)
         self.assertIn("supplierCode=1000", start_link)
-
-        def hydrate(target):
-            target.entry_link = "https://samplicio.us/s/default.aspx?SID=lazy-cint&PID="
-            target.targeting_synced_at = timezone.now()
-            target.quota_synced_at = timezone.now()
-            target.detail_synced_at = timezone.now()
-            target.save(update_fields=[
-                "entry_link", "targeting_synced_at", "quota_synced_at",
-                "detail_synced_at", "updated_at",
-            ])
-
-        get_provider_mock.return_value.refresh_details.side_effect = hydrate
-        response = self.client.get(start_link)
-        self.assertEqual(response.status_code, 302)
-        self.assertIn("/survey/start?rid=", response["Location"])
-        get_provider_mock.assert_called_once_with(self.integration)
-        get_provider_mock.return_value.refresh_details.assert_called_once()
-        survey.refresh_from_db()
-        self.assertTrue(survey.entry_link)
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)

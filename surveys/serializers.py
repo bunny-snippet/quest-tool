@@ -310,6 +310,15 @@ class SurveyListSerializer(serializers.ModelSerializer):
         supports_lazy_entry_link = bool(
             obj.integration_id and obj.integration.provider_code in {"rfg", "cint"}
         )
+        if obj.integration_id and obj.integration.provider_code == "cint":
+            redirect_state = obj.raw_data or {}
+            if not (
+                obj.entry_link
+                and redirect_state.get("_cint_redirect_verified_at")
+                and str(redirect_state.get("_cint_redirect_supplier_code") or "")
+                == str(obj.integration.supplier_code or "")
+            ):
+                return None
         if not obj.entry_link and not supports_lazy_entry_link:
             return None
         query = urlencode({
@@ -525,7 +534,7 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     class Meta:
         model = SurveyAttempt
         fields = [
-            "rid", "prescreener_uid", "survey_local_id", "survey_source_id", "survey_name", "company_name", "country", "country_code",
+            "rid", "pid", "prescreener_uid", "survey_local_id", "survey_source_id", "survey_name", "company_name", "country", "country_code",
             "language_code", "platform_user", "user_id", "user_name", "username", "user_email", "supplier",
             "supplier_name", "vendor", "vendor_name", "client", "client_name", "client_allocation", "survey_allocation", "supplier_code",
             "buyer_id", "source_cpi_snapshot", "cpi_snapshot_source", "cpi_cut_percent_snapshot", "payable_cpi_snapshot", "cpi_currency_snapshot",

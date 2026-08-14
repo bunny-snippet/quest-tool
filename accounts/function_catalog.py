@@ -81,6 +81,7 @@ FUNCTION_CATALOG = (
     ("studies.column.country", "Show Country column", "Traffic Reports - Table columns", "Display the survey country captured through the related project.", TRACKING_ROLES),
     ("studies.column.cpi", "Show snapshot CPI column", "Traffic Reports - Table columns", "Display the CPI frozen when the respondent hit the survey.", TRACKING_ROLES),
     ("studies.column.respondent_id", "Show RID / UID column", "Traffic Reports - Table columns", "Display the platform respondent RID and its prescreener profile UID.", TRACKING_ROLES),
+    ("studies.column.pid", "Show PID column", "Traffic Reports - Table columns", "Display the platform's independent per-attempt PID tracking identifier.", TRACKING_ROLES),
     ("studies.column.user", "Show Name column", "Traffic Reports - Table columns", "Display respondent user name and email.", TRACKING_ROLES),
     ("studies.column.device", "Show Device column", "Traffic Reports - Table columns", "Display the captured device type.", TRACKING_ROLES),
     ("studies.column.ip", "Show IP address column", "Traffic Reports - Table columns", "Display captured entry and exit network IPs.", TRACKING_ROLES),

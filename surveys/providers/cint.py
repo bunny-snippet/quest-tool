@@ -813,6 +813,18 @@ class CintProvider(SurveyProvider):
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
+    def redirect_contract_is_current(self, survey):
+        """Confirm this survey has a verified supplier link for today's callback contract."""
+
+        raw_data = survey.raw_data or {}
+        return bool(
+            survey.entry_link
+            and raw_data.get("_cint_redirect_verified_at")
+            and raw_data.get("_cint_redirect_contract") == self.redirect_contract_fingerprint()
+            and str(raw_data.get("_cint_redirect_supplier_code") or "")
+            == self.supplier_code
+        )
+
     def _assert_redirect_contract(self, link):
         """Reject a successful-looking response that still contains old callbacks."""
 

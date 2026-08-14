@@ -282,15 +282,17 @@ def sync_cint_redirect_contracts(
         # A local fingerprint proves what this application previously sent, not
         # what is currently stored upstream. Force mode deliberately ignores it
         # so externally overwritten/legacy callbacks are reasserted via PUT.
-        pending = base.filter(pk__gt=max(0, int(after_id or 0))).order_by("pk")
+        pending_query = base
     else:
-        pending = base.filter(
+        pending_query = base.filter(
             Q(raw_data___cint_redirect_contract__isnull=True)
             | Q(raw_data___cint_redirect_supplier_code__isnull=True)
             | Q(raw_data___cint_redirect_verified_at__isnull=True)
             | ~Q(raw_data___cint_redirect_contract=fingerprint)
             | ~Q(raw_data___cint_redirect_supplier_code=provider.supplier_code)
-        ).order_by("pk")
+        )
+    cursor = max(0, int(after_id or 0))
+    pending = pending_query.filter(pk__gt=cursor).order_by("pk")
     candidates = list(pending[: max(1, min(int(batch_size), 100))])
     updated = failures = 0
     errors = []
@@ -306,22 +308,18 @@ def sync_cint_redirect_contracts(
                 integration.pk,
                 survey.pk,
             )
-    next_after_id = candidates[-1].pk if force and candidates else max(0, int(after_id or 0))
-    if force:
-        remaining = base.filter(pk__gt=next_after_id).count()
-    else:
-        remaining = base.filter(
-            Q(raw_data___cint_redirect_contract__isnull=True)
-            | Q(raw_data___cint_redirect_supplier_code__isnull=True)
-            | Q(raw_data___cint_redirect_verified_at__isnull=True)
-            | ~Q(raw_data___cint_redirect_contract=fingerprint)
-            | ~Q(raw_data___cint_redirect_supplier_code=provider.supplier_code)
-        ).count()
+    next_after_id = candidates[-1].pk if candidates else cursor
+    # Continue past individual failures so one bad upstream survey cannot hold
+    # every later webhook opportunity behind it. A later callback/maintenance
+    # run starts again at zero and retries any still-pending failed records.
+    remaining = pending_query.filter(pk__gt=next_after_id).count()
+    pending_total = pending_query.count()
     return {
         "processed": len(candidates),
         "updated": updated,
         "failures": failures,
         "remaining": remaining,
+        "pending_total": pending_total,
         "force": bool(force),
         "next_after_id": next_after_id,
         "errors": errors,

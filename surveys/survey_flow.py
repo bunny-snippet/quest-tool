@@ -9,6 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from django.conf import settings
 from django.db import IntegrityError, transaction
 
+from .identifiers import generate_platform_pid
 from .models import Survey, SurveyAttempt
 
 
@@ -190,19 +191,37 @@ def backfill_attempt_entry_audit(attempt: SurveyAttempt, request) -> SurveyAttem
     return attempt
 
 
-def create_attempt(survey: Survey, platform_user, ip_address: str | None, client_data: dict | None = None) -> SurveyAttempt:
-    """Create one immutable respondent journey with fresh RID/UID and CPI audit.
+def create_attempt(
+    survey: Survey,
+    platform_user,
+    ip_address: str | None,
+    client_data: dict | None = None,
+    pid: str | None = None,
+) -> SurveyAttempt:
+    """Create one immutable respondent journey with fresh RID/PID/UID and CPI audit.
 
     The transaction makes identifier allocation and the historical attempt
     snapshots one unit. Database uniqueness is the final collision guard.
     """
 
     client_data = client_data or {}
-    for _ in range(10):
+    requested_pid = str(pid or "").strip()
+    if requested_pid and (
+        not requested_pid.isalnum() or not 6 <= len(requested_pid) <= 9
+    ):
+        raise ValueError("Invalid platform PID.")
+    for attempt_number in range(10):
         try:
             with transaction.atomic():
                 return SurveyAttempt.objects.create(
                     rid=generate_rid(),
+                    # Preserve the PID copied in the entry URL on the first try.
+                    # A database collision retries with a fresh server PID.
+                    pid=(
+                        requested_pid
+                        if requested_pid and attempt_number == 0
+                        else generate_platform_pid()
+                    ),
                     prescreener_uid=generate_prescreener_uid(),
                     survey=survey,
                     platform_user=platform_user,
@@ -223,7 +242,7 @@ def create_attempt(survey: Survey, platform_user, ip_address: str | None, client
                 )
         except IntegrityError:
             continue
-    raise RuntimeError("Could not allocate a unique RID")
+    raise RuntimeError("Could not allocate unique RID, PID and UID identifiers")
 
 
 def build_outbound_url(entry_link: str, rid: str, answers: dict) -> str:
@@ -256,17 +275,26 @@ def build_outbound_url(entry_link: str, rid: str, answers: dict) -> str:
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(outbound), parts.fragment))
 
 
-def status_rid_from_request(request) -> str:
-    """Read a callback tracking identifier, preferring the platform RID alias.
+def status_identifiers_from_request(request) -> list[str]:
+    """Return every distinct tracking identifier supplied by a provider.
 
     Some providers echo our canonical RID as ``tid``/``trackId`` while their
-    field named ``rid`` contains our persistent prescreener UID.  Callers must
-    resolve the returned value against both model fields and then display the
-    matched attempt's canonical ``SurveyAttempt.rid``.
+    field named ``rid`` contains a prescreener UID or provider PID.  Keeping all
+    values lets the callback resolver find the correct attempt even when an
+    upstream system includes an unrelated identifier before our own.
     """
 
+    values = []
     for name in ("tid", "TID", "trackId", "rid", "RID", "pid", "PID", "qsid", "QSID"):
         value = request.GET.get(name)
-        if value:
-            return value.strip()
-    return ""
+        value = str(value or "").strip()
+        if value and value not in values:
+            values.append(value)
+    return values
+
+
+def status_rid_from_request(request) -> str:
+    """Backward-compatible first callback identifier accessor."""
+
+    values = status_identifiers_from_request(request)
+    return values[0] if values else ""
