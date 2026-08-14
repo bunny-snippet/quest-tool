@@ -6,6 +6,7 @@ import time
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
+from django.conf import settings
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
@@ -25,6 +26,12 @@ from .models import CintWebhookDelivery, Survey
     CINT_OPPORTUNITIES_SIGNATURE_TOLERANCE_SECONDS=300,
 )
 class CintOpportunitiesWebhookTests(TestCase):
+    def test_django_request_body_limit_allows_configured_webhook_payload(self):
+        self.assertGreater(
+            settings.DATA_UPLOAD_MAX_MEMORY_SIZE,
+            settings.CINT_OPPORTUNITIES_MAX_PAYLOAD_BYTES,
+        )
+
     def setUp(self):
         self.private_key = ec.generate_private_key(ec.SECP256R1())
         public_der = self.private_key.public_key().public_bytes(

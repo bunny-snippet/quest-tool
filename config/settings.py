@@ -31,6 +31,19 @@ CINT_OPPORTUNITIES_SIGNATURE_TOLERANCE_SECONDS = int(
 CINT_OPPORTUNITIES_MAX_PAYLOAD_BYTES = int(
     os.getenv("CINT_OPPORTUNITIES_MAX_PAYLOAD_BYTES", str(10 * 1024 * 1024))
 )
+# Django otherwise rejects request bodies larger than its ~2.5 MiB default
+# before the Cint webhook view can authenticate or return its own 413 response.
+# Keep a small margin above the provider-specific limit so an 8 MiB Feed
+# Opportunities batch can reach the view unchanged for signature verification.
+DATA_UPLOAD_MAX_MEMORY_SIZE = max(
+    int(
+        os.getenv(
+            "DJANGO_DATA_UPLOAD_MAX_MEMORY_SIZE",
+            str(CINT_OPPORTUNITIES_MAX_PAYLOAD_BYTES + 64 * 1024),
+        )
+    ),
+    CINT_OPPORTUNITIES_MAX_PAYLOAD_BYTES + 64 * 1024,
+)
 CINT_OPPORTUNITIES_MAX_SURVEY_COUNT = int(
     os.getenv("CINT_OPPORTUNITIES_MAX_SURVEY_COUNT", "1000")
 )
