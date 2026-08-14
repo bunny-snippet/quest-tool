@@ -33,6 +33,7 @@ def _preserve_provider_local_state(integration, survey, normalized):
         "_cint_redirect_synced_at",
         "_cint_redirect_supplier_code",
         "_cint_redirect_method",
+        "_cint_redirect_verified_at",
     ):
         value = local_raw_data.get(key)
         if value not in (None, "") and key not in normalized.raw_data:
@@ -261,7 +262,13 @@ def refresh_client_integration_details(integration: ClientIntegration, *, limit=
     return {"refreshed": refreshed, "failures": failures}
 
 
-def sync_cint_redirect_contracts(integration: ClientIntegration, *, batch_size=25) -> dict:
+def sync_cint_redirect_contracts(
+    integration: ClientIntegration,
+    *,
+    batch_size=25,
+    force=False,
+    after_id=0,
+) -> dict:
     """Update one bounded batch of Cint redirects not on the current contract."""
 
     if integration.provider_code != "cint":
@@ -270,12 +277,20 @@ def sync_cint_redirect_contracts(integration: ClientIntegration, *, batch_size=2
         raise ProviderError("This Cint integration is inactive.")
     provider = get_provider(integration)
     fingerprint = provider.redirect_contract_fingerprint()
-    pending = Survey.objects.filter(integration=integration).filter(
-        Q(raw_data___cint_redirect_contract__isnull=True)
-        | Q(raw_data___cint_redirect_supplier_code__isnull=True)
-        | ~Q(raw_data___cint_redirect_contract=fingerprint)
-        | ~Q(raw_data___cint_redirect_supplier_code=provider.supplier_code)
-    ).order_by("pk")
+    base = Survey.objects.filter(integration=integration)
+    if force:
+        # A local fingerprint proves what this application previously sent, not
+        # what is currently stored upstream. Force mode deliberately ignores it
+        # so externally overwritten/legacy callbacks are reasserted via PUT.
+        pending = base.filter(pk__gt=max(0, int(after_id or 0))).order_by("pk")
+    else:
+        pending = base.filter(
+            Q(raw_data___cint_redirect_contract__isnull=True)
+            | Q(raw_data___cint_redirect_supplier_code__isnull=True)
+            | Q(raw_data___cint_redirect_verified_at__isnull=True)
+            | ~Q(raw_data___cint_redirect_contract=fingerprint)
+            | ~Q(raw_data___cint_redirect_supplier_code=provider.supplier_code)
+        ).order_by("pk")
     candidates = list(pending[: max(1, min(int(batch_size), 100))])
     updated = failures = 0
     errors = []
@@ -291,16 +306,23 @@ def sync_cint_redirect_contracts(integration: ClientIntegration, *, batch_size=2
                 integration.pk,
                 survey.pk,
             )
-    remaining = Survey.objects.filter(integration=integration).filter(
-        Q(raw_data___cint_redirect_contract__isnull=True)
-        | Q(raw_data___cint_redirect_supplier_code__isnull=True)
-        | ~Q(raw_data___cint_redirect_contract=fingerprint)
-        | ~Q(raw_data___cint_redirect_supplier_code=provider.supplier_code)
-    ).count()
+    next_after_id = candidates[-1].pk if force and candidates else max(0, int(after_id or 0))
+    if force:
+        remaining = base.filter(pk__gt=next_after_id).count()
+    else:
+        remaining = base.filter(
+            Q(raw_data___cint_redirect_contract__isnull=True)
+            | Q(raw_data___cint_redirect_supplier_code__isnull=True)
+            | Q(raw_data___cint_redirect_verified_at__isnull=True)
+            | ~Q(raw_data___cint_redirect_contract=fingerprint)
+            | ~Q(raw_data___cint_redirect_supplier_code=provider.supplier_code)
+        ).count()
     return {
         "processed": len(candidates),
         "updated": updated,
         "failures": failures,
         "remaining": remaining,
+        "force": bool(force),
+        "next_after_id": next_after_id,
         "errors": errors,
     }

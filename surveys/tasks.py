@@ -139,7 +139,7 @@ def sync_client_integration_task(integration_id):
     soft_time_limit=240,
     time_limit=270,
 )
-def sync_cint_redirects_task(integration_id, batch_size=25):
+def sync_cint_redirects_task(integration_id, batch_size=25, force=False, after_id=0):
     """Configure new/backfill Cint survey callbacks in serialized batches."""
 
     lease_name = f"cint-redirects-{integration_id}"
@@ -152,7 +152,12 @@ def sync_cint_redirects_task(integration_id, batch_size=25):
             is_active=True,
             provider_code="cint",
         )
-        result = sync_cint_redirect_contracts(integration, batch_size=batch_size)
+        result = sync_cint_redirect_contracts(
+            integration,
+            batch_size=batch_size,
+            force=force,
+            after_id=after_id,
+        )
         continue_batching = result["remaining"] > 0 and result["failures"] == 0
         result["status"] = "success" if not result["failures"] else "partial"
         return result
@@ -161,7 +166,11 @@ def sync_cint_redirects_task(integration_id, batch_size=25):
         if continue_batching:
             sync_cint_redirects_task.apply_async(
                 args=[integration_id],
-                kwargs={"batch_size": batch_size},
+                kwargs={
+                    "batch_size": batch_size,
+                    "force": force,
+                    "after_id": result.get("next_after_id", 0),
+                },
                 countdown=1,
             )
 

@@ -90,6 +90,19 @@ class CintProviderTests(TestCase):
             detail_refresh_batch=1,
         )
 
+    @override_settings(
+        PUBLIC_APP_BASE_URL="https://old-callback.example",
+        CINT_CALLBACK_BASE_URL="https://api.exchange-ip.com",
+    )
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_redirect_payload_uses_dedicated_cint_callback_domain(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+
+        self.assertEqual(
+            provider._redirect_payload()["SuccessLink"],
+            "https://api.exchange-ip.com/survey?status=1&rid=[%MID%]",
+        )
+
     @patch("surveys.providers.cint.time.sleep")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
     def test_inventory_uses_only_approved_locales_and_inclusive_rpi_bands(self, sleep_mock):
@@ -213,7 +226,19 @@ class CintProviderTests(TestCase):
             }],
             "_cint_inventory_source": "supplier_allocations_inventory",
         }
-        session = RecordingSession({"ApiResult": 0})
+        session = RecordingSession({
+            "ApiResult": 0,
+            "SupplierLink": {
+                "SupplierLinkTypeCode": "OWS",
+                "TrackingTypeCode": "NONE",
+                "DefaultLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+                "SuccessLink": "https://api.exchange-ip.com/survey?status=1&rid=[%MID%]",
+                "FailureLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+                "OverQuotaLink": "https://api.exchange-ip.com/survey?status=3&rid=[%MID%]",
+                "QualityTerminationLink": "https://api.exchange-ip.com/survey?status=4&rid=[%MID%]",
+                "LiveLink": "https://samplicio.us/s/default.aspx?SID=allocated&PID=",
+            },
+        })
         provider = CintProvider(self.integration, session=session)
         normalized = provider.normalize_inventory_item(payload, timezone.now())
 
@@ -427,7 +452,19 @@ class CintProviderTests(TestCase):
             company_name="Cint Exchange",
             entry_link="https://samplicio.us/s/default.aspx?SID=existing&PID=",
         )
-        session = RecordingSession({"ApiResult": 0})
+        session = RecordingSession({
+            "ApiResult": 0,
+            "SupplierLink": {
+                "SupplierLinkTypeCode": "OWS",
+                "TrackingTypeCode": "NONE",
+                "DefaultLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+                "SuccessLink": "https://api.exchange-ip.com/survey?status=1&rid=[%MID%]",
+                "FailureLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+                "OverQuotaLink": "https://api.exchange-ip.com/survey?status=3&rid=[%MID%]",
+                "QualityTerminationLink": "https://api.exchange-ip.com/survey?status=4&rid=[%MID%]",
+                "LiveLink": "https://samplicio.us/s/default.aspx?SID=existing&PID=",
+            },
+        })
         provider = CintProvider(self.integration, session=session)
 
         provider.update_supplier_link_redirects(survey)
@@ -457,7 +494,20 @@ class CintProviderTests(TestCase):
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
     def test_redirect_batch_skips_surveys_already_on_current_contract(self):
-        provider = CintProvider(self.integration, session=RecordingSession({"ApiResult": 0}))
+        redirect_response = {
+            "ApiResult": 0,
+            "SupplierLink": {
+                "SupplierLinkTypeCode": "OWS",
+                "TrackingTypeCode": "NONE",
+                "DefaultLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+                "SuccessLink": "https://api.exchange-ip.com/survey?status=1&rid=[%MID%]",
+                "FailureLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+                "OverQuotaLink": "https://api.exchange-ip.com/survey?status=3&rid=[%MID%]",
+                "QualityTerminationLink": "https://api.exchange-ip.com/survey?status=4&rid=[%MID%]",
+                "LiveLink": "https://samplicio.us/s/default.aspx?SID=verified&PID=",
+            },
+        }
+        provider = CintProvider(self.integration, session=RecordingSession(redirect_response))
         fingerprint = provider.redirect_contract_fingerprint()
         configured = Survey.objects.create(
             client=self.client_record,
@@ -466,6 +516,7 @@ class CintProviderTests(TestCase):
             raw_data={
                 "_cint_redirect_contract": fingerprint,
                 "_cint_redirect_supplier_code": provider.supplier_code,
+                "_cint_redirect_verified_at": timezone.now().isoformat(),
             },
         )
         pending = Survey.objects.create(
@@ -485,6 +536,57 @@ class CintProviderTests(TestCase):
         pending.refresh_from_db()
         self.assertEqual(configured.raw_data["_cint_redirect_contract"], fingerprint)
         self.assertEqual(pending.raw_data["_cint_redirect_contract"], fingerprint)
+        self.assertIn("_cint_redirect_verified_at", pending.raw_data)
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_force_redirect_batch_reasserts_even_verified_local_contracts(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+        fingerprint = provider.redirect_contract_fingerprint()
+        first = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199768",
+            entry_link="https://samplicio.us/s/default.aspx?SID=first&PID=",
+            raw_data={
+                "_cint_redirect_contract": fingerprint,
+                "_cint_redirect_supplier_code": provider.supplier_code,
+                "_cint_redirect_verified_at": timezone.now().isoformat(),
+            },
+        )
+        second = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199769",
+            entry_link="https://samplicio.us/s/default.aspx?SID=second&PID=",
+            raw_data={
+                "_cint_redirect_contract": fingerprint,
+                "_cint_redirect_supplier_code": provider.supplier_code,
+                "_cint_redirect_verified_at": timezone.now().isoformat(),
+            },
+        )
+        responses = []
+        for survey in (first, second):
+            responses.append({
+                "ApiResult": 0,
+                "SupplierLink": {
+                    **provider._redirect_payload(),
+                    "LiveLink": survey.entry_link,
+                },
+            })
+        provider.session.payloads.extend(responses)
+
+        with patch("surveys.provider_services.get_provider", return_value=provider):
+            result = sync_cint_redirect_contracts(
+                self.integration,
+                batch_size=25,
+                force=True,
+            )
+
+        self.assertEqual(result["updated"], 2)
+        self.assertEqual(result["remaining"], 0)
+        self.assertEqual(len(provider.session.calls), 2)
+        self.assertTrue(all("/SupplierLinks/Update/" in call[0] for call in provider.session.calls))
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
@@ -500,7 +602,17 @@ class CintProviderTests(TestCase):
                 "LiveLink": "https://samplicio.us/s/default.aspx?SID=new&PID=",
                 "TestLink": "https://samplicio.us/s/default.aspx?SID=test&PID=test",
             }},
-            {"ApiResult": 0},
+            {"ApiResult": 0, "SupplierLink": {
+                "SupplierLinkTypeCode": "OWS",
+                "TrackingTypeCode": "NONE",
+                "DefaultLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+                "SuccessLink": "https://api.exchange-ip.com/survey?status=1&rid=[%MID%]",
+                "FailureLink": "https://api.exchange-ip.com/survey?status=2&rid=[%MID%]",
+                "OverQuotaLink": "https://api.exchange-ip.com/survey?status=3&rid=[%MID%]",
+                "QualityTerminationLink": "https://api.exchange-ip.com/survey?status=4&rid=[%MID%]",
+                "LiveLink": "https://samplicio.us/s/default.aspx?SID=new&PID=",
+                "TestLink": "https://samplicio.us/s/default.aspx?SID=test&PID=test",
+            }},
         )
         provider = CintProvider(self.integration, session=session)
 

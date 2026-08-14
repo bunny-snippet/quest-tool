@@ -783,14 +783,18 @@ class CintProvider(SurveyProvider):
     def _redirect_payload(self):
         """Build OWS callbacks that return Cint MID into the platform RID route."""
 
-        base = str(settings.PUBLIC_APP_BASE_URL or "").rstrip("/")
+        base = str(
+            getattr(settings, "CINT_CALLBACK_BASE_URL", "")
+            or settings.PUBLIC_APP_BASE_URL
+            or ""
+        ).rstrip("/")
         if not base:
             raise ProviderConfigurationError(
-                "Set PUBLIC_APP_BASE_URL before Cint can create callback-enabled supplier links."
+                "Set CINT_CALLBACK_BASE_URL or PUBLIC_APP_BASE_URL before Cint can configure callback-enabled supplier links."
             )
         parsed = urlsplit(base)
         if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ProviderConfigurationError("PUBLIC_APP_BASE_URL must be an absolute HTTP(S) URL.")
+            raise ProviderConfigurationError("The Cint callback base URL must be an absolute HTTP(S) URL.")
         callback = f"{base}/survey"
         return {
             "SupplierLinkTypeCode": "OWS",
@@ -808,6 +812,20 @@ class CintProvider(SurveyProvider):
         payload = self._redirect_payload()
         encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+    def _assert_redirect_contract(self, link):
+        """Reject a successful-looking response that still contains old callbacks."""
+
+        expected = self._redirect_payload()
+        mismatched = [
+            key for key, value in expected.items()
+            if str(link.get(key) or "").strip() != str(value).strip()
+        ]
+        if mismatched:
+            raise ProviderError(
+                "Cint supplier-link verification returned stale fields: "
+                + ", ".join(mismatched)
+            )
 
     def prepare_inventory_item(self, normalized, existing_survey=None):
         """Provision callbacks before allowing one accepted survey into the DB.
@@ -930,18 +948,32 @@ class CintProvider(SurveyProvider):
         if not survey.entry_link:
             self.ensure_supplier_link(survey)
         payload = self._redirect_payload()
+        self._wait_for_inventory_request_slot()
         result = self._request(
             f"Supply/v1/SupplierLinks/Update/{survey.source_key}/{self.supplier_code}",
             method="PUT",
             payload=payload,
         )
+        link = self._supplier_link(result)
+        if not link or any(key not in link for key in payload):
+            self._wait_for_inventory_request_slot()
+            lookup = self._request(
+                "Supply/v1/SupplierLinks/BySurveyNumber/"
+                f"{survey.source_key}/{self.supplier_code}"
+            )
+            link = self._supplier_link(lookup)
+        if not link:
+            raise ProviderError("Cint did not return the supplier link after redirect update.")
+        self._assert_redirect_contract(link)
+
         raw_data = dict(survey.raw_data or {})
         raw_data["_cint_redirect_contract"] = self.redirect_contract_fingerprint()
         raw_data["_cint_redirect_synced_at"] = timezone.now().isoformat()
         raw_data["_cint_redirect_supplier_code"] = self.supplier_code
-        link = self._supplier_link(result)
-        live_link = str(link.get("LiveLink") or "").strip() if link else ""
-        test_link = str(link.get("TestLink") or "").strip() if link else ""
+        raw_data["_cint_redirect_method"] = "PUT"
+        raw_data["_cint_redirect_verified_at"] = timezone.now().isoformat()
+        live_link = str(link.get("LiveLink") or "").strip()
+        test_link = str(link.get("TestLink") or "").strip()
         update_fields = ["raw_data", "updated_at"]
         survey.raw_data = raw_data
         if live_link:
@@ -958,9 +990,11 @@ class CintProvider(SurveyProvider):
         if survey.entry_link:
             return survey.entry_link
         path = f"Supply/v1/SupplierLinks/BySurveyNumber/{survey.source_key}/{self.supplier_code}"
+        self._wait_for_inventory_request_slot()
         result = self._request(path, allow_not_found=True)
         link = self._supplier_link(result)
         if not link and self.create_missing_supplier_links:
+            self._wait_for_inventory_request_slot()
             link = self._supplier_link(self._request(
                 f"Supply/v1/SupplierLinks/Create/{survey.source_key}/{self.supplier_code}",
                 method="POST",

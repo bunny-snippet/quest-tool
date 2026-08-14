@@ -14,6 +14,11 @@ class Command(BaseCommand):
         parser.add_argument("--integration-id", type=int)
         parser.add_argument("--batch-size", type=int, default=25)
         parser.add_argument(
+            "--force",
+            action="store_true",
+            help="Ignore local fingerprints and PUT the callback contract to every Cint survey.",
+        )
+        parser.add_argument(
             "--wait",
             action="store_true",
             help="Run batches in this process instead of queueing Celery work.",
@@ -30,9 +35,14 @@ class Command(BaseCommand):
         if not integrations:
             raise CommandError("No active Cint integration was found.")
         batch_size = max(1, min(int(options["batch_size"]), 100))
+        force = bool(options["force"])
         for integration in integrations:
             if not options["wait"]:
-                sync_cint_redirects_task.delay(integration.pk, batch_size=batch_size)
+                sync_cint_redirects_task.delay(
+                    integration.pk,
+                    batch_size=batch_size,
+                    force=force,
+                )
                 self.stdout.write(
                     self.style.SUCCESS(
                         f"Queued Cint redirect backfill for integration {integration.pk}."
@@ -40,10 +50,13 @@ class Command(BaseCommand):
                 )
                 continue
             totals = {"updated": 0, "failures": 0}
+            after_id = 0
             while True:
                 result = sync_cint_redirect_contracts(
                     integration,
                     batch_size=batch_size,
+                    force=force,
+                    after_id=after_id,
                 )
                 totals["updated"] += result["updated"]
                 totals["failures"] += result["failures"]
@@ -53,6 +66,7 @@ class Command(BaseCommand):
                 )
                 if not result["remaining"] or result["failures"] or not result["processed"]:
                     break
+                after_id = result.get("next_after_id", 0)
             self.stdout.write(self.style.SUCCESS(
                 f"Integration {integration.pk}: updated={totals['updated']} "
                 f"failures={totals['failures']}."
