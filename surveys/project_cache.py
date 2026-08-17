@@ -31,6 +31,7 @@ def project_filter_metadata(
     user_id: int,
     client_scoped: bool,
     include_cpi: bool,
+    cpi_field: str = "cpi",
 ) -> dict:
     key = stable_cache_key(
         f"projects:v{_version()}:filters",
@@ -38,6 +39,7 @@ def project_filter_metadata(
             "user_id": user_id,
             "client_scoped": client_scoped,
             "include_cpi": include_cpi,
+            "cpi_field": cpi_field,
         },
     )
 
@@ -68,7 +70,10 @@ def project_filter_metadata(
             .order_by("survey_type")
         )
         cpi_bounds = (
-            queryset.aggregate(minimum=Min("cpi"), maximum=Max("cpi"))
+            queryset.aggregate(
+                minimum=Min(cpi_field),
+                maximum=Max(cpi_field),
+            )
             if include_cpi
             else {"minimum": None, "maximum": None}
         )
