@@ -98,6 +98,7 @@ from prescreener_vault.services import (
 )
 from prescreener_vault.cint_email_pool import CintEmailPoolExhausted
 from prescreener_vault.models import PrescreenerSubmission
+from prescreener_vault.reuse import maybe_assign_reusable_profile
 from prescreener_vault.cache import (
     apply_submission_filters,
     vault_filter_options,
@@ -1495,6 +1496,10 @@ def survey_start(request):
                         )
                         return HttpResponseRedirect(_rfg_result_url(attempt.rid, "8"))
                 if not errors:
+                    # Capture keeps this journey's own UID immutable. Reuse, when
+                    # enabled for the client, selects a separate provider-facing
+                    # UID from the fair demographic queue.
+                    maybe_assign_reusable_profile(attempt, answers)
                     # URL construction may use the vault DB. Keep it outside a
                     # main-DB row lock, then claim the redirect with one short,
                     # conditional UPDATE to avoid MySQL 1205/1213 failures.
@@ -1591,7 +1596,16 @@ def _rfg_attempt_from_request(request):
     for name in ("rid", "RID", "pid", "PID", "qsid", "QSID"):
         value = str(request.GET.get(name) or "").strip()
         if value:
-            attempt = base.filter(Q(rid=value) | Q(prescreener_uid=value)).first()
+            if matched_attempt and value in {
+                matched_attempt.rid,
+                matched_attempt.pid,
+                matched_attempt.prescreener_uid,
+                matched_attempt.provider_profile_uid,
+            }:
+                continue
+            attempt = base.filter(
+                Q(rid=value) | Q(prescreener_uid=value) | Q(provider_profile_uid=value)
+            ).order_by("-initiated_at").first()
             if attempt:
                 if matched_attempt and matched_attempt.pk != attempt.pk:
                     return None
@@ -1738,19 +1752,19 @@ def survey_status(request):
     # Providers name their echoed identifiers differently. Resolve every value
     # against our three non-overlapping identifier shapes, keep the internal
     # RID immutable, and expose only status + platform PID after recording.
-    matching_attempts = list(
-        SurveyAttempt.objects.select_related("survey__integration").filter(
-            Q(rid__in=callback_identifiers)
-            | Q(pid__in=callback_identifiers)
-            | Q(prescreener_uid__in=callback_identifiers)
-        )[:2]
-    )
-    if len(matching_attempts) > 1:
-        return render(request, "surveys/flow_error.html", {
-            "title": "Ambiguous survey status",
-            "message": "The callback contains conflicting tracking identifiers.",
-        }, status=400)
-    attempt = matching_attempts[0] if matching_attempts else None
+    attempts = SurveyAttempt.objects.select_related("survey__integration")
+    # Canonical journey IDs always win. Provider profile UIDs may deliberately
+    # repeat, so that fallback resolves to the newest matching journey only
+    # when no RID/PID/new registration UID was returned.
+    attempt = attempts.filter(rid__in=callback_identifiers).first()
+    if attempt is None:
+        attempt = attempts.filter(pid__in=callback_identifiers).first()
+    if attempt is None:
+        attempt = attempts.filter(prescreener_uid__in=callback_identifiers).first()
+    if attempt is None:
+        attempt = attempts.filter(
+            provider_profile_uid__in=callback_identifiers
+        ).order_by("-initiated_at").first()
     canonical_rid = attempt.rid if attempt else callback_identifier
     provider_code = (
         attempt.survey.integration.provider_code

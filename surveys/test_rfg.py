@@ -722,13 +722,14 @@ class ResearchForGoodIntegrationTests(TestCase):
         attempt = SurveyAttempt.objects.create(
             rid="Uid123Map9",
             prescreener_uid="Uid1-Call-Back2-0003",
+            provider_profile_uid="Old1-Call-Back2-0004",
             survey=survey,
             user_id="42",
             status=SurveyAttempt.Status.REDIRECTED,
         )
         callback = self.client.get("/survey/rfg/callback", {
             "result": "2",
-            "rid": attempt.prescreener_uid,
+            "rid": attempt.provider_profile_uid,
         }, REMOTE_ADDR="15.222.163.99")
         self.assertEqual(callback.status_code, 200)
         self.assertEqual(callback.data["rid"], attempt.rid)
@@ -736,12 +737,13 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)
 
         result_page = self.client.get("/survey/rfg/result", {
-            "rid": attempt.prescreener_uid,
+            "rid": attempt.provider_profile_uid,
             "result": "2",
         })
         self.assertEqual(result_page.status_code, 200)
         self.assertContains(result_page, attempt.rid)
         self.assertNotContains(result_page, attempt.prescreener_uid)
+        self.assertNotContains(result_page, attempt.provider_profile_uid)
 
         # Legacy callbacks that still echo the platform RID remain compatible.
         legacy_result = self.client.get("/survey/rfg/result", {

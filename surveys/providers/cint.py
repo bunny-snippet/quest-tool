@@ -12,6 +12,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import requests
+from prescreener_vault.reuse import effective_profile_uid
 from django.conf import settings
 from django.db import transaction
 from django.utils import timezone
@@ -1095,7 +1096,7 @@ class CintProvider(SurveyProvider):
         hostname = (parsed.hostname or "").lower()
         if hostname != "samplicio.us" and not hostname.endswith(".samplicio.us"):
             raise ProviderConfigurationError("Cint returned an unexpected supplier-link hostname.")
-        pid = str(attempt.prescreener_uid or "").strip()
+        pid = effective_profile_uid(attempt)
         if not pid:
             raise ProviderConfigurationError("Cint requires the pre-screener UID as persistent PID.")
         email_digest = assigned_email_hash(pid, attempt.rid)

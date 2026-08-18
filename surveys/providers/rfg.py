@@ -10,6 +10,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 import requests
+from prescreener_vault.reuse import effective_profile_uid
 from django.db import transaction
 from django.utils import timezone
 
@@ -391,7 +392,7 @@ class ResearchForGoodProvider(SurveyProvider):
         fingerprint = str(fingerprint or "0").strip()
         if fingerprint != "0" and not re.fullmatch(r"[0-9a-fA-F]{32,128}", fingerprint):
             fingerprint = "0"
-        rfg_rid = str(attempt.prescreener_uid or "").strip()
+        rfg_rid = effective_profile_uid(attempt)
         if not rfg_rid:
             raise ProviderError("RFG requires the prescreener UID as its persistent RID.")
         response = self._command({"command": "livealert/duplicateCheck/1", "rfg_id": survey.source_key, "fingerprint": 0 if fingerprint == "0" else fingerprint, "rid": rfg_rid, "ip": ip_address or ""})
@@ -468,7 +469,7 @@ class ResearchForGoodProvider(SurveyProvider):
             raise ProviderError("Postal code is required for Research For Good.")
         parts = urlsplit(survey.entry_link)
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
-        rfg_rid = str(attempt.prescreener_uid or "").strip()
+        rfg_rid = effective_profile_uid(attempt)
         if not rfg_rid:
             raise ProviderError("RFG requires the prescreener UID as its persistent RID.")
         # A stored createLink URL may carry an old tracking placeholder. Replace
