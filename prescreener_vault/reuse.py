@@ -54,33 +54,65 @@ def _target_from_baseline(integration, baseline):
     ))
 
 
-def _monthly_target(integration, reference=None):
+def _monthly_baseline(integration, reference=None):
+    """Return the volume used to budget profile reuse for this month.
+
+    Normal months use the completed previous calendar month's attempt volume.
+    A brand-new integration has no such history, so using zero permanently
+    deadlocks its first reuse month. In that one bootstrap case we use the
+    current month's attempt volume as a rolling baseline. Once the next month
+    starts, the regular previous-month rule takes over automatically.
+    """
+
     previous_start, current_start, period_start = _calendar_bounds(reference)
-    baseline = SurveyAttempt.objects.filter(
+    previous_attempts = SurveyAttempt.objects.filter(
         survey__integration_id=integration.pk,
         initiated_at__gte=previous_start,
         initiated_at__lt=current_start,
     ).count()
+    if previous_attempts > 0:
+        return period_start, previous_attempts, previous_attempts, "previous_month"
+
+    current_attempts = SurveyAttempt.objects.filter(
+        survey__integration_id=integration.pk,
+        initiated_at__gte=current_start,
+    ).count()
+    return period_start, previous_attempts, current_attempts, "current_month_bootstrap"
+
+
+def _monthly_target(integration, reference=None):
+    period_start, _, baseline, _ = _monthly_baseline(integration, reference)
     return period_start, baseline, _target_from_baseline(integration, baseline)
 
 
 def profile_reuse_month_status(integration, reference=None):
     """Read-only status used by the integration card."""
 
-    _, _, period_start = _calendar_bounds(reference)
+    period_start, previous_attempts, live_baseline, baseline_source = _monthly_baseline(
+        integration, reference
+    )
     counter = ProfileReuseMonthlyCounter.objects.filter(
         integration_id=integration.pk, period_start=period_start
     ).first()
     if counter:
-        baseline = counter.baseline_attempts
+        # During first-month bootstrap the baseline grows with live traffic.
+        # Never shrink it if an older status read happens around midnight.
+        baseline = (
+            max(counter.baseline_attempts, live_baseline)
+            if baseline_source == "current_month_bootstrap"
+            else live_baseline
+        )
         target = _target_from_baseline(integration, baseline)
         used = counter.allocated_reuses
     else:
-        _, baseline, target = _monthly_target(integration, reference)
+        baseline = live_baseline
+        target = _target_from_baseline(integration, baseline)
         used = 0
     return {
         "period": period_start.isoformat(),
-        "previous_month_attempts": baseline,
+        "previous_month_attempts": previous_attempts,
+        "baseline_attempts": baseline,
+        "baseline_source": baseline_source,
         "target_reuses": target,
         "used_reuses": used,
         "remaining_reuses": max(0, target - used),
@@ -88,20 +120,21 @@ def profile_reuse_month_status(integration, reference=None):
 
 
 def _claim_month_slot(integration):
-    _, _, period_start = _calendar_bounds()
+    period_start, _, live_baseline, baseline_source = _monthly_baseline(integration)
     with transaction.atomic():
         counter, created = ProfileReuseMonthlyCounter.objects.select_for_update().get_or_create(
             integration_id=integration.pk,
             period_start=period_start,
             defaults={"baseline_attempts": 0, "target_reuses": 0},
         )
-        # The prior month is immutable now, so snapshot its count once. Every
-        # later prescreener request only locks this indexed counter row.
-        if created:
-            _, baseline, _ = _monthly_target(integration)
-            counter.baseline_attempts = baseline
-        else:
-            baseline = counter.baseline_attempts
+        # Previous-month volume is immutable. First-month bootstrap volume is
+        # deliberately rolling, otherwise a counter first created at zero
+        # would prevent reuse for the entire month.
+        if created or baseline_source == "previous_month":
+            counter.baseline_attempts = live_baseline
+        elif live_baseline > counter.baseline_attempts:
+            counter.baseline_attempts = live_baseline
+        baseline = counter.baseline_attempts
         target = _target_from_baseline(integration, baseline)
         counter.target_reuses = target
         if target <= 0:
