@@ -149,6 +149,8 @@ class CintOpportunitiesWebhookTests(TestCase):
         self.assertEqual(survey.loi, 12)
         self.assertEqual(str(survey.incidence_rate), "45.00")
         self.assertEqual(survey.remaining, 36)
+        self.assertIsNotNone(survey.source_created_at)
+        self.assertEqual(survey.source_created_at, survey.source_modified_at)
         self.assertEqual(survey.quotas.count(), 1)
         self.assertEqual(survey.targeting_questions.count(), 1)
         self.assertEqual(
@@ -226,6 +228,7 @@ class CintOpportunitiesWebhookTests(TestCase):
         question.refresh_from_db()
         self.assertEqual(question.text, "Hydrated localized question")
         self.assertIsNotNone(survey.targeting_synced_at)
+        self.assertGreater(survey.source_modified_at, survey.source_created_at)
 
     def test_same_signed_delivery_is_idempotent(self):
         payload = self.opportunity()

@@ -411,8 +411,11 @@ def upsert_opportunity(integration, payload, seen_at):
         if existing and existing.status != Survey.Status.CLOSED:
             existing.status = Survey.Status.CLOSED
             existing.last_seen_at = seen_at
+            existing.source_modified_at = seen_at
             existing.raw_data = {**(existing.raw_data or {}), **payload}
-            existing.save(update_fields=["status", "last_seen_at", "raw_data", "updated_at"])
+            existing.save(update_fields=[
+                "status", "last_seen_at", "source_modified_at", "raw_data", "updated_at"
+            ])
             return "closed", existing
         return "skipped", existing
 
@@ -465,6 +468,14 @@ def upsert_opportunity(integration, payload, seen_at):
         "has_quota": bool(payload.get("survey_quotas")),
         "is_pii_required": bool(payload.get("collects_pii")),
         "is_recontact": bool(payload.get("respondent_pids") or payload.get("recontact_count")),
+        # Feed Opportunities has no provider-created/provider-modified fields.
+        # The signed delivery receipt is therefore the authoritative source
+        # timestamp: creation remains stable, while modified tracks the newest
+        # accepted Cint event for this survey.
+        "source_created_at": (
+            existing.source_created_at if existing and existing.source_created_at else seen_at
+        ),
+        "source_modified_at": seen_at,
         "last_seen_at": seen_at,
         "raw_data": raw_data,
     }
