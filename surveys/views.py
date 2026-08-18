@@ -982,6 +982,12 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             input_kind = "checkbox"
         elif "single" in lowered_type and options:
             input_kind = "radio"
+        elif options:
+            # Providers sometimes label derived/boolean qualifications as
+            # ``Dummy`` (for example Region or Mobile Device) even though
+            # they supply a closed option list. A fixed list must never fall
+            # back to a free-text field: one respondent value is selected.
+            input_kind = "radio"
         elif question.key.upper() == "AGE" or "numeric" in lowered_type:
             input_kind = "number"
         else:

@@ -840,6 +840,58 @@ class CintProviderTests(TestCase):
             "Enter a ZIP/postal code accepted by this survey.",
         )
 
+    def test_cint_dummy_qualifications_with_options_are_selectable(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_id=143481,
+            source_key="143481",
+            company_name="Cint Exchange",
+        )
+        TargetingQuestion.objects.create(
+            survey=survey,
+            question_id=5001,
+            key="REGION",
+            text="What is your REGION?",
+            question_type="Dummy",
+            category="Cint qualification",
+            options=[
+                {"OptionId": "midwest", "OptionText": "Midwest"},
+                {"OptionId": "south", "OptionText": "South"},
+                {"OptionId": "west", "OptionText": "West"},
+            ],
+            raw_data={
+                "provider": "cint",
+                "targeting_choices": ["midwest", "south"],
+            },
+        )
+        TargetingQuestion.objects.create(
+            survey=survey,
+            question_id=5002,
+            key="MOBILE_DEVICE",
+            text="Are you using a mobile device?",
+            question_type="Dummy",
+            category="Cint qualification",
+            options=[
+                {"OptionId": "true", "OptionText": "Yes"},
+                {"OptionId": "false", "OptionText": "No"},
+            ],
+            raw_data={"provider": "cint", "targeting_choices": ["false"]},
+        )
+
+        region, mobile = _prescreener_questions(survey)
+
+        self.assertEqual(region["input_kind"], "radio")
+        self.assertEqual(
+            [(item["value"], item["label"]) for item in region["options"]],
+            [("midwest", "Midwest"), ("south", "South")],
+        )
+        self.assertEqual(mobile["input_kind"], "radio")
+        self.assertEqual(
+            [(item["value"], item["label"]) for item in mobile["options"]],
+            [("false", "No")],
+        )
+
     @patch.dict(
         "os.environ",
         {"TEST_CINT_API_KEY": "cint-secret", "CINT_HASH_KEY": "hash-secret"},
