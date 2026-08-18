@@ -881,7 +881,8 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             or ("your age" in normalized_text and not is_dob_question)
         )
         is_postal_question = (
-            normalized_key in {"ZIP", "ZIP_CODE", "POSTAL_CODE"}
+            normalized_key in {"ZIP", "ZIP_CODE", "ZIPCODES", "POSTAL_CODE"}
+            or "zipcode" in normalized_text
             or "zip code" in normalized_text
             or "postal code" in normalized_text
         )
@@ -1123,7 +1124,14 @@ def _collect_prescreener_answers(request, survey):
                 and int(option["ageStart"]) <= numeric_value <= int(option["ageEnd"])
                 and option.get("OptionId") is not None
             ]
-            upstream_values = matched or [str(numeric_value)]
+            exact_option_ids = [
+                str(option.get("OptionId"))
+                for option in question.options
+                if option.get("OptionId") is not None
+                and str(option.get("OptionText") or "").strip().casefold()
+                == values[0].casefold()
+            ]
+            upstream_values = matched or exact_option_ids or [str(numeric_value)]
         elif prepared.get("is_postal_question") and prepared.get("allowed_values"):
             accepted = {str(value).casefold() for value in prepared["allowed_values"]}
             if values[0].casefold() not in accepted:
@@ -1131,6 +1139,17 @@ def _collect_prescreener_answers(request, survey):
                     f"Enter a ZIP/postal code accepted by this survey for: {prepared['display_text']}"
                 )
                 continue
+
+        if prepared["input_kind"] not in {"radio", "checkbox", "number"}:
+            exact_option_ids = [
+                str(option.get("OptionId"))
+                for option in question.options
+                if option.get("OptionId") is not None
+                and str(option.get("OptionText") or "").strip().casefold()
+                == values[0].casefold()
+            ]
+            if exact_option_ids:
+                upstream_values = exact_option_ids
 
         platform_only = bool((question.raw_data or {}).get("platform_only"))
         if platform_only:
