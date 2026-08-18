@@ -1463,11 +1463,6 @@ def survey_start(request):
                     and attempt.survey.integration.provider_code == "rfg"
                 ):
                     ensure_attempt_prescreener_uid(attempt)
-                if settings.PRESCREENER_VAULT_ENABLED:
-                    capture_prescreener_submission(
-                        attempt,
-                        answers_with_entry_postal_code(attempt, answers),
-                    )
                 provider = (
                     get_provider(attempt.survey.integration)
                     if attempt.survey.integration_id
@@ -1477,10 +1472,28 @@ def survey_start(request):
                 if provider and attempt.survey.integration.provider_code == "rfg":
                     eligible, reason = provider.validate_prescreener(attempt.survey, answers)
                     if not eligible:
+                        if settings.PRESCREENER_VAULT_ENABLED:
+                            capture_prescreener_submission(
+                                attempt,
+                                answers_with_entry_postal_code(attempt, answers),
+                            )
                         _finish_local_rfg_attempt(
                             attempt, answers, request, result="7", reason=reason
                         )
                         return HttpResponseRedirect(_rfg_result_url(attempt.rid, "7"))
+
+                # Select reuse before writing a new vault row. A reused
+                # respondent keeps the original vault RID + UID pair and only
+                # that row's Visits counter increases. The SurveyAttempt RID is
+                # still unique so callbacks cannot collide between journeys.
+                reuse_event = maybe_assign_reusable_profile(attempt, answers)
+                if settings.PRESCREENER_VAULT_ENABLED and reuse_event is None:
+                    capture_prescreener_submission(
+                        attempt,
+                        answers_with_entry_postal_code(attempt, answers),
+                    )
+
+                if provider and attempt.survey.integration.provider_code == "rfg":
                     if provider.duplicate_check(
                         attempt.survey,
                         attempt,
@@ -1496,10 +1509,6 @@ def survey_start(request):
                         )
                         return HttpResponseRedirect(_rfg_result_url(attempt.rid, "8"))
                 if not errors:
-                    # Capture keeps this journey's own UID immutable. Reuse, when
-                    # enabled for the client, selects a separate provider-facing
-                    # UID from the fair demographic queue.
-                    maybe_assign_reusable_profile(attempt, answers)
                     # URL construction may use the vault DB. Keep it outside a
                     # main-DB row lock, then claim the redirect with one short,
                     # conditional UPDATE to avoid MySQL 1205/1213 failures.

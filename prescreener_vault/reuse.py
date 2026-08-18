@@ -176,12 +176,13 @@ def _undo_vault_reservation(uid):
 
 
 def maybe_assign_reusable_profile(attempt, answers):
-    """Assign one older matching UID while retaining this attempt's unique RID/UID.
+    """Assign one older matching vault RID/UID pair to this unique journey.
 
     Fairness is enforced by the vault ``usage_count`` ordering: every matching
     UID at the lowest use count is exhausted before any UID can enter its next
-    reuse round. Row locking prevents concurrent respondents from taking the
-    same queue item simultaneously.
+    reuse round. The selected vault row remains immutable; only its usage count
+    (shown as Visits) is incremented. Row locking prevents concurrent
+    respondents from taking the same queue item simultaneously.
     """
 
     integration = getattr(attempt.survey, "integration", None)
@@ -242,6 +243,7 @@ def maybe_assign_reusable_profile(attempt, answers):
                 integration_id=integration.pk,
                 attempt_id=attempt.pk,
                 registered_uid=attempt.prescreener_uid,
+                reused_rid=candidate.rid,
                 reused_uid=candidate.uid,
                 source_registered_at=candidate.submitted_at,
                 source_usage_number=candidate.usage_count,
