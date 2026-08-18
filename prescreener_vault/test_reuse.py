@@ -5,6 +5,7 @@ from django.test import TestCase, override_settings
 from django.utils import timezone
 
 from surveys.models import ProfileReuseEvent, Survey, SurveyAttempt, TargetingQuestion
+from surveys.serializers import SurveyAttemptSerializer
 from surveys.survey_flow import create_attempt
 from vendors.models import Client, ClientIntegration
 
@@ -31,6 +32,9 @@ class ReusableProfileQueueTests(TestCase):
             profile_reuse_country_codes=["US"],
             profile_reuse_age_groups=["18-24"],
             profile_reuse_genders=["male"],
+            profile_rereuse_enabled=True,
+            profile_rereuse_percentage=50,
+            profile_rereuse_cooldown_days=30,
         )
         self.survey = Survey.objects.create(
             integration=self.integration,
@@ -65,10 +69,14 @@ class ReusableProfileQueueTests(TestCase):
             str(self.gender.pk): {"values": [gender], "upstream_values": [gender]},
         }
 
-    def candidate(self, uid, rid, *, submitted_days=90, usage_count=1):
+    def candidate(
+        self, uid, rid, *, submitted_days=90, usage_count=1,
+        source_client_code=None, last_reused_days=None,
+    ):
         return PrescreenerSubmission.objects.using(DATABASE_ALIAS).create(
             uid=uid,
             rid=rid,
+            source_client_code=source_client_code or self.integration.client.code,
             country="United States",
             country_code="US",
             language="English",
@@ -77,28 +85,66 @@ class ReusableProfileQueueTests(TestCase):
             respondent_age_group="18-24",
             respondent_gender="male",
             usage_count=usage_count,
+            last_reused_at=(
+                timezone.now() - timedelta(days=last_reused_days)
+                if last_reused_days is not None else None
+            ),
             submitted_at=timezone.now() - timedelta(days=submitted_days),
         )
 
-    def test_lowest_usage_round_is_exhausted_before_a_uid_repeats(self):
-        first = self.candidate("Aa11-Bb22-Cc33-Dd44", "OldRid0001", submitted_days=100)
-        second = self.candidate("Ee55-Ff66-Gg77-Hh88", "OldRid0002", submitted_days=90)
+    def test_monthly_target_is_split_between_first_and_returning_pools(self):
+        fresh = self.candidate("Aa11-Bb22-Cc33-Dd44", "OldRid0001", submitted_days=100)
+        returning = self.candidate(
+            "Ee55-Ff66-Gg77-Hh88", "OldRid0002", submitted_days=120,
+            usage_count=2, last_reused_days=60,
+        )
 
-        selected = []
-        for _ in range(3):
-            attempt = create_attempt(self.survey, self.user, "8.8.8.8")
-            event = maybe_assign_reusable_profile(attempt, self.answers())
-            self.assertIsNotNone(event)
-            attempt.refresh_from_db()
-            selected.append(attempt.provider_profile_uid)
-            self.assertNotEqual(attempt.prescreener_uid, attempt.provider_profile_uid)
-            self.assertEqual(event.reused_rid, first.rid if len(selected) != 2 else second.rid)
+        first_attempt = create_attempt(self.survey, self.user, "8.8.8.8")
+        first_event = maybe_assign_reusable_profile(first_attempt, self.answers())
+        second_attempt = create_attempt(self.survey, self.user, "8.8.8.8")
+        second_event = maybe_assign_reusable_profile(second_attempt, self.answers())
 
-        self.assertEqual(selected, [first.uid, second.uid, first.uid])
-        first.refresh_from_db(using=DATABASE_ALIAS)
-        second.refresh_from_db(using=DATABASE_ALIAS)
-        self.assertEqual((first.usage_count, second.usage_count), (3, 2))
-        self.assertEqual(ProfileReuseEvent.objects.count(), 3)
+        self.assertEqual((first_event.reuse_pool, first_event.reused_uid), ("first", fresh.uid))
+        self.assertEqual(
+            (second_event.reuse_pool, second_event.reused_uid),
+            ("returning", returning.uid),
+        )
+        status = profile_reuse_month_status(self.integration)
+        self.assertEqual(status["first_reuse_target"], 5)
+        self.assertEqual(status["repeat_reuse_target"], 5)
+        self.assertEqual(status["first_reuse_used"], 1)
+        self.assertEqual(status["repeat_reuse_used"], 1)
+
+    def test_returning_pool_uses_lowest_visit_round_first(self):
+        lower = self.candidate(
+            "Ii11-Jj22-Kk33-Ll44", "OldRid0005", usage_count=2,
+            submitted_days=120, last_reused_days=60,
+        )
+        self.candidate(
+            "Mm55-Nn66-Oo77-Pp88", "OldRid0006", usage_count=3,
+            submitted_days=130, last_reused_days=70,
+        )
+        # Consume the first-pool slot selector attempt so the next proportional
+        # slot belongs to the returning pool.
+        self.candidate("Qq11-Rr22-Ss33-Tt44", "OldRid0007", submitted_days=100)
+        first_attempt = create_attempt(self.survey, self.user, "8.8.8.8")
+        self.assertEqual(
+            maybe_assign_reusable_profile(first_attempt, self.answers()).reuse_pool,
+            "first",
+        )
+        returning_attempt = create_attempt(self.survey, self.user, "8.8.8.8")
+        event = maybe_assign_reusable_profile(returning_attempt, self.answers())
+        self.assertEqual((event.reuse_pool, event.reused_uid), ("returning", lower.uid))
+
+    def test_profile_never_crosses_client_boundary(self):
+        other_client = Client.objects.create(code="other-client", name="Other client")
+        self.candidate(
+            "Uv11-Wx22-Yz33-Ab44", "OldRid0010", submitted_days=100,
+            source_client_code=other_client.code,
+        )
+        attempt = create_attempt(self.survey, self.user, "8.8.8.8")
+        self.assertIsNone(maybe_assign_reusable_profile(attempt, self.answers()))
+        self.assertEqual(ProfileReuseEvent.objects.count(), 0)
 
     def test_reuse_keeps_original_vault_pair_and_only_increments_visits(self):
         candidate = self.candidate(
@@ -118,6 +164,24 @@ class ReusableProfileQueueTests(TestCase):
         self.assertEqual((event.reused_rid, event.reused_uid), (candidate.rid, candidate.uid))
         self.assertEqual(candidate.usage_count, 2)
 
+    def test_reused_profile_has_a_new_traffic_journey_row(self):
+        candidate = self.candidate(
+            "Tr11-Af22-Fi33-Cu44", "OldRid0042", submitted_days=90
+        )
+        attempt = create_attempt(self.survey, self.user, "8.8.8.8")
+        registered_uid = attempt.prescreener_uid
+
+        event = maybe_assign_reusable_profile(attempt, self.answers())
+        attempt.refresh_from_db()
+        traffic_row = SurveyAttemptSerializer(attempt).data
+
+        self.assertNotEqual(attempt.rid, candidate.rid)
+        self.assertEqual(event.reused_rid, candidate.rid)
+        self.assertEqual(traffic_row["rid"], attempt.rid)
+        self.assertEqual(traffic_row["prescreener_uid"], candidate.uid)
+        self.assertEqual(traffic_row["registered_profile_uid"], registered_uid)
+        self.assertTrue(traffic_row["profile_was_reused"])
+
         retry_event = maybe_assign_reusable_profile(attempt, self.answers())
         candidate.refresh_from_db(using=DATABASE_ALIAS)
         self.assertEqual(retry_event.pk, event.pk)
@@ -130,15 +194,10 @@ class ReusableProfileQueueTests(TestCase):
         self.assertEqual(profile_reuse_month_status(self.integration)["used_reuses"], 0)
 
         self.candidate("Mm33-Nn44-Oo55-Pp66", "OldRid0004", submitted_days=90)
-        self.integration.profile_reuse_country_codes = ["IN"]
-        self.integration.save(update_fields=["profile_reuse_country_codes"])
-        blocked = create_attempt(self.survey, self.user, "8.8.8.8")
-        self.assertIsNone(maybe_assign_reusable_profile(blocked, self.answers()))
-
-        self.integration.profile_reuse_country_codes = ["US"]
         self.integration.profile_reuse_monthly_percentage = 10
+        self.integration.profile_rereuse_enabled = False
         self.integration.save(update_fields=[
-            "profile_reuse_country_codes", "profile_reuse_monthly_percentage",
+            "profile_reuse_monthly_percentage", "profile_rereuse_enabled",
         ])
         allowed = create_attempt(self.survey, self.user, "8.8.8.8")
         self.assertIsNotNone(maybe_assign_reusable_profile(allowed, self.answers()))
@@ -181,7 +240,10 @@ class ReusableProfileQueueTests(TestCase):
             question_type="Single Punch", category="Demographic",
             options=[{"OptionId": 1, "OptionText": "Male"}],
         )
-        self.candidate("Zz11-Yy22-Xx33-Ww44", "OldRid0098", submitted_days=90)
+        self.candidate(
+            "Zz11-Yy22-Xx33-Ww44", "OldRid0098", submitted_days=90,
+            source_client_code=client.code,
+        )
         attempt = create_attempt(survey, self.user, "8.8.8.8")
         answers = {
             str(age.pk): {"values": ["23"], "upstream_values": ["23"]},

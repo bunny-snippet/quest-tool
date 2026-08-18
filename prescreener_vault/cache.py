@@ -129,6 +129,7 @@ def cached_profile(uid: str) -> dict | None:
             .values(
                 "uid",
                 "rid",
+                "source_client_code",
                 "country_code",
                 "language_code",
                 "respondent_age",
@@ -138,6 +139,7 @@ def cached_profile(uid: str) -> dict | None:
                 "respondent_postal_code",
                 "profile_dimensions",
                 "usage_count",
+                "last_reused_at",
                 "submitted_at",
             )
             .first()
