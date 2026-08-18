@@ -157,6 +157,26 @@ class CintOpportunitiesWebhookTests(TestCase):
         )
         self.assertEqual(CintWebhookDelivery.objects.get().status, "processed")
 
+    def test_webhook_gender_precodes_render_as_labels(self):
+        response = self.signed_post(self.opportunity(
+            survey_qualifications=[
+                {"question_id": 43, "logical_operator": "OR", "precodes": ["1", "2"]}
+            ],
+        ))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        question = Survey.objects.get(
+            integration=self.integration,
+            source_key="82199770",
+        ).targeting_questions.get(question_id=43)
+        self.assertEqual(question.key, "GENDER")
+        self.assertEqual(question.text, "What is your gender?")
+        self.assertEqual(question.question_type, "Single")
+        self.assertEqual(question.options, [
+            {"OptionId": "1", "OptionText": "Male"},
+            {"OptionId": "2", "OptionText": "Female"},
+        ])
+
     def test_same_signed_delivery_is_idempotent(self):
         payload = self.opportunity()
         timestamp = int(time.time())

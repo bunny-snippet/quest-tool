@@ -289,6 +289,21 @@ def _integer(value, default=0):
         return default
 
 
+CINT_STANDARD_QUESTION_FALLBACKS = {
+    # Cint's standard qualification IDs are stable across markets. Feed
+    # Opportunities intentionally carries only Question IDs and precodes, so
+    # use the documented gender labels until the richer Question Library
+    # response hydrates the survey.
+    43: {
+        "key": "GENDER",
+        "text": "What is your gender?",
+        "question_type": "Single",
+        "category": "Demographic",
+        "options": {"1": "Male", "2": "Female"},
+    },
+}
+
+
 def _targeting_rows(survey, payload):
     merged = {}
     for qualification in payload.get("survey_qualifications") or []:
@@ -308,14 +323,19 @@ def _targeting_rows(survey, payload):
     rows = []
     for question_id, qualification in merged.items():
         precodes = qualification["precodes"]
+        fallback = CINT_STANDARD_QUESTION_FALLBACKS.get(question_id, {})
+        option_labels = fallback.get("options", {})
         rows.append(TargetingQuestion(
             survey=survey,
             question_id=question_id,
-            key=f"CINT_Q_{question_id}",
-            text=f"Cint qualification {question_id}",
-            question_type="Qualification",
-            category="Cint qualification",
-            options=[{"OptionId": value, "OptionText": value} for value in precodes],
+            key=fallback.get("key", f"CINT_Q_{question_id}"),
+            text=fallback.get("text", f"Cint qualification {question_id}"),
+            question_type=fallback.get("question_type", "Qualification"),
+            category=fallback.get("category", "Cint qualification"),
+            options=[
+                {"OptionId": value, "OptionText": option_labels.get(value, value)}
+                for value in precodes
+            ],
             raw_data={
                 "provider": "cint",
                 "source": "opportunities_webhook",
