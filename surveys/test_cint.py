@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient, APIRequestFactory
 
@@ -21,7 +21,7 @@ from .provider_services import sync_cint_redirect_contracts, sync_client_integra
 from .providers import ProviderError
 from .providers.cint import CintProvider
 from .serializers import SurveyListSerializer, SurveyQuotaSerializer, TargetingQuestionSerializer
-from .views import _prescreener_questions
+from .views import _collect_prescreener_answers, _prescreener_questions
 
 
 class FakeResponse:
@@ -91,6 +91,35 @@ class CintProviderTests(TestCase):
             sync_interval_seconds=60,
             detail_refresh_batch=1,
         )
+
+    def test_zero_targeting_survey_collects_platform_age_and_gender(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="zero-targeting",
+            country="United States",
+            country_code="US",
+            language="English",
+            language_code="ENG",
+            entry_link="https://samplicio.us/s/default.aspx?SID=zero-targeting",
+        )
+
+        prepared = _prescreener_questions(survey)
+        self.assertEqual(
+            [item["model"].pk for item in prepared],
+            ["platform_profile_age", "platform_profile_gender"],
+        )
+        request = RequestFactory().post("/survey/start", {
+            "question_platform_profile_age": "27",
+            "question_platform_profile_gender": "male",
+        })
+        answers, errors = _collect_prescreener_answers(request, survey)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(answers["platform_profile_age"]["values"], ["27"])
+        self.assertEqual(answers["platform_profile_age"]["upstream_values"], [])
+        self.assertEqual(answers["platform_profile_gender"]["values"], ["male"])
+        self.assertEqual(answers["platform_profile_gender"]["upstream_values"], [])
 
     @override_settings(
         PUBLIC_APP_BASE_URL="https://old-callback.example",

@@ -124,8 +124,12 @@ def _question_snapshots(attempt, answers):
         labels = [option_map.get(value, value) for value in values]
         question_key = str(payload.get("question_key") or (question.key if question else ""))
         question_text = str(payload.get("question_text") or (question.text if question else ""))
-        question_type = str(question.question_type if question else "")
-        question_category = str(question.category if question else "")
+        question_type = str(
+            payload.get("question_type") or (question.question_type if question else "")
+        )
+        question_category = str(
+            payload.get("question_category") or (question.category if question else "")
+        )
         canonical = _canonical_attribute(question_key, question_text, question_category)
         reusable_values = labels or values or upstream_values
         normalized_values = [_normalize_profile_value(canonical, value) for value in reusable_values]

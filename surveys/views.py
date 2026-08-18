@@ -12,6 +12,7 @@ import logging
 import re
 from datetime import date, timedelta
 from decimal import Decimal
+from types import SimpleNamespace
 from urllib.parse import quote, urlencode
 
 from django.conf import settings
@@ -810,6 +811,39 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
         if survey.integration_id else "innovatemr"
     )
     question_rows = list(survey.targeting_questions.all())
+    if provider_code == "cint" and not question_rows:
+        # Some open Cint opportunities genuinely have no qualifications. We
+        # still need a minimal reusable profile, so collect age and gender as
+        # platform-only answers. Empty question IDs/upstream values guarantee
+        # these controls are never appended to the signed Cint entry URL.
+        question_rows = [
+            SimpleNamespace(
+                pk="platform_profile_age",
+                question_id="",
+                key="AGE",
+                text="What is your age?",
+                question_type="Numeric",
+                category="Required profile",
+                options=[],
+                raw_data={
+                    "platform_only": True,
+                    "targeting_age_ranges": [{"min": 13, "max": 120}],
+                },
+            ),
+            SimpleNamespace(
+                pk="platform_profile_gender",
+                question_id="",
+                key="GENDER",
+                text="What is your gender?",
+                question_type="Single Punch",
+                category="Required profile",
+                options=[
+                    {"OptionId": "male", "OptionText": "Male"},
+                    {"OptionId": "female", "OptionText": "Female"},
+                ],
+                raw_data={"platform_only": True},
+            ),
+        ]
     profile_aliases = {}
     aliased_question_ids = set()
     if provider_code == "rfg":
@@ -1092,12 +1126,19 @@ def _collect_prescreener_answers(request, survey):
                 )
                 continue
 
+        platform_only = bool((question.raw_data or {}).get("platform_only"))
+        if platform_only:
+            upstream_values = []
+
         answers[str(question.pk)] = {
             "question_id": question.question_id,
             "question_key": question.key,
             "question_text": prepared["display_text"],
+            "question_type": question.question_type,
+            "question_category": question.category,
             "values": values,
             "upstream_values": upstream_values,
+            "platform_only": platform_only,
         }
         for alias in prepared.get("aliases", []):
             alias_upstream_values = _rfg_alias_upstream_values(
