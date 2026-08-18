@@ -23,13 +23,13 @@ from .project_cache import invalidate_project_cache
 # Accept the spellings present in the supplied PHP subscription and the
 # underscore/legacy spellings used by current Cint API examples.
 LOCALE_RULES = {
-    "eng_ca": {"country": "Canada", "country_code": "CA", "language": "English", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
-    "eng_in": {"country": "India", "country_code": "IN", "language": "English", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
-    "eng_us": {"country": "United States", "country_code": "US", "language": "English", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
-    "eng_gb": {"country": "United Kingdom", "country_code": "GB", "language": "English", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("2")},
-    "fra_fr": {"country": "France", "country_code": "FR", "language": "French", "language_code": "FRA", "minimum": Decimal("1"), "maximum": Decimal("4")},
-    "fre_fr": {"country": "France", "country_code": "FR", "language": "French", "language_code": "FRE", "minimum": Decimal("1"), "maximum": Decimal("4")},
-    "hin_in": {"country": "India", "country_code": "IN", "language": "Hindi", "language_code": "HIN", "minimum": Decimal("1"), "maximum": Decimal("4")},
+    "eng_ca": {"country_language_id": 6, "country": "Canada", "country_code": "CA", "language": "English", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
+    "eng_in": {"country_language_id": 7, "country": "India", "country_code": "IN", "language": "English", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
+    "eng_gb": {"country_language_id": 8, "country": "United Kingdom", "country_code": "GB", "language": "English", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("2")},
+    "eng_us": {"country_language_id": 9, "country": "United States", "country_code": "US", "language": "English", "language_code": "ENG", "minimum": Decimal("1"), "maximum": Decimal("4")},
+    "fra_fr": {"country_language_id": 10, "country": "France", "country_code": "FR", "language": "French", "language_code": "FRE", "minimum": Decimal("1"), "maximum": Decimal("4")},
+    "fre_fr": {"country_language_id": 10, "country": "France", "country_code": "FR", "language": "French", "language_code": "FRE", "minimum": Decimal("1"), "maximum": Decimal("4")},
+    "hin_in": {"country_language_id": 76, "country": "India", "country_code": "IN", "language": "Hindi", "language_code": "HIN", "minimum": Decimal("1"), "maximum": Decimal("4")},
 }
 
 LOCAL_STATE_KEYS = (
@@ -290,16 +290,28 @@ def _integer(value, default=0):
 
 
 CINT_STANDARD_QUESTION_FALLBACKS = {
-    # Cint's standard qualification IDs are stable across markets. Feed
-    # Opportunities intentionally carries only Question IDs and precodes, so
-    # use the documented gender labels until the richer Question Library
-    # response hydrates the survey.
+    # Feed Opportunities intentionally carries only Question IDs and precodes.
+    # These three standard profile IDs are documented across the configured
+    # Cint markets, so keep their controls readable while the localized
+    # Question Library response is being hydrated.
+    42: {
+        "key": "AGE",
+        "text": "What is your age?",
+        "question_type": "Numeric - Open-end",
+        "category": "Demographic",
+    },
     43: {
         "key": "GENDER",
-        "text": "What is your gender?",
-        "question_type": "Single",
+        "text": "Are you...?",
+        "question_type": "Single Punch",
         "category": "Demographic",
         "options": {"1": "Male", "2": "Female"},
+    },
+    45: {
+        "key": "ZIP",
+        "text": "What is your ZIP/postal code?",
+        "question_type": "Numeric - Open-end",
+        "category": "Demographic",
     },
 }
 
@@ -411,8 +423,13 @@ def upsert_opportunity(integration, payload, seen_at):
     remaining = max(0, _integer(payload.get("total_remaining"), 0))
     raw_data = {
         **payload,
+        # The webhook locale string and the REST Question Library use two
+        # representations of the same market. Persist both so the first Eye or
+        # prescreener request can hydrate exact country-language labels.
+        "CountryLanguageID": locale_rule["country_language_id"],
         "_cint_inventory_source": "opportunities_webhook",
         "_cint_locale": locale,
+        "_cint_country_language_request_id": locale_rule["country_language_id"],
         "_cint_webhook_received_at": seen_at.isoformat(),
     }
     entry_link = test_entry_link = ""
@@ -452,6 +469,18 @@ def upsert_opportunity(integration, payload, seen_at):
         "raw_data": raw_data,
     }
     with transaction.atomic():
+        previous_qualifications = (
+            (existing.raw_data or {}).get("survey_qualifications")
+            if existing is not None else None
+        )
+        targeting_changed = (
+            existing is None
+            or previous_qualifications != payload.get("survey_qualifications")
+            or not existing.targeting_questions.exists()
+        )
+        previous_targeting_synced_at = (
+            existing.targeting_synced_at if existing is not None else None
+        )
         if existing is None:
             survey = Survey.objects.create(**values)
             action = "created"
@@ -462,13 +491,22 @@ def upsert_opportunity(integration, payload, seen_at):
                 setattr(survey, key, value)
             survey.save()
             action = "updated" if changed else "skipped"
-        survey.targeting_questions.all().delete()
+        # Do not replace already-hydrated Question Library labels on every
+        # five-second webhook delivery. Replace them only when the actual
+        # qualification contract changes; the null sync timestamp then causes
+        # an immediate official REST hydration on the first consumer request.
+        if targeting_changed:
+            survey.targeting_questions.all().delete()
+            TargetingQuestion.objects.bulk_create(_targeting_rows(survey, payload))
         survey.quotas.all().delete()
-        TargetingQuestion.objects.bulk_create(_targeting_rows(survey, payload))
         SurveyQuota.objects.bulk_create(_quota_rows(survey, payload))
-        survey.targeting_synced_at = seen_at
+        survey.targeting_synced_at = (
+            None if targeting_changed else previous_targeting_synced_at
+        )
         survey.quota_synced_at = seen_at
-        survey.detail_synced_at = seen_at
+        survey.detail_synced_at = (
+            None if targeting_changed else survey.detail_synced_at
+        )
         survey.save(update_fields=[
             "targeting_synced_at", "quota_synced_at", "detail_synced_at", "updated_at"
         ])

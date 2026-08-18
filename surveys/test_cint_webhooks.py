@@ -155,7 +155,35 @@ class CintOpportunitiesWebhookTests(TestCase):
             survey.raw_data["_cint_inventory_source"],
             "opportunities_webhook",
         )
+        self.assertEqual(survey.raw_data["CountryLanguageID"], 9)
+        self.assertEqual(survey.raw_data["_cint_country_language_request_id"], 9)
+        self.assertIsNone(survey.targeting_synced_at)
+        self.assertIsNone(survey.detail_synced_at)
         self.assertEqual(CintWebhookDelivery.objects.get().status, "processed")
+
+    def test_standard_profile_questions_have_readable_webhook_fallbacks(self):
+        response = self.signed_post(self.opportunity(
+            survey_qualifications=[
+                {"question_id": 42, "logical_operator": "OR", "precodes": ["18", "19"]},
+                {"question_id": 43, "logical_operator": "OR", "precodes": ["1", "2"]},
+                {"question_id": 45, "logical_operator": "OR", "precodes": ["02108", "10001"]},
+            ],
+        ))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        questions = {
+            question.question_id: question
+            for question in Survey.objects.get(
+                integration=self.integration,
+                source_key="82199770",
+            ).targeting_questions.all()
+        }
+        self.assertEqual((questions[42].key, questions[42].text), ("AGE", "What is your age?"))
+        self.assertEqual((questions[45].key, questions[45].text), ("ZIP", "What is your ZIP/postal code?"))
+        self.assertEqual(
+            [option["OptionText"] for option in questions[43].options],
+            ["Male", "Female"],
+        )
 
     def test_webhook_gender_precodes_render_as_labels(self):
         response = self.signed_post(self.opportunity(
@@ -170,12 +198,34 @@ class CintOpportunitiesWebhookTests(TestCase):
             source_key="82199770",
         ).targeting_questions.get(question_id=43)
         self.assertEqual(question.key, "GENDER")
-        self.assertEqual(question.text, "What is your gender?")
-        self.assertEqual(question.question_type, "Single")
+        self.assertEqual(question.text, "Are you...?")
+        self.assertEqual(question.question_type, "Single Punch")
         self.assertEqual(question.options, [
             {"OptionId": "1", "OptionText": "Male"},
             {"OptionId": "2", "OptionText": "Female"},
         ])
+
+    def test_unchanged_webhook_does_not_replace_hydrated_question_labels(self):
+        self.signed_post(self.opportunity())
+        survey = Survey.objects.get(integration=self.integration, source_key="82199770")
+        question = survey.targeting_questions.get(question_id=43)
+        question.text = "Hydrated localized question"
+        question.raw_data = {**question.raw_data, "source": "question_library"}
+        question.save(update_fields=["text", "raw_data", "updated_at"])
+        survey.targeting_synced_at = survey.last_seen_at
+        survey.detail_synced_at = survey.last_seen_at
+        survey.save(update_fields=["targeting_synced_at", "detail_synced_at", "updated_at"])
+
+        response = self.signed_post(self.opportunity(
+            message_reason="updated",
+            total_remaining=35,
+        ))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        survey.refresh_from_db()
+        question.refresh_from_db()
+        self.assertEqual(question.text, "Hydrated localized question")
+        self.assertIsNotNone(survey.targeting_synced_at)
 
     def test_same_signed_delivery_is_idempotent(self):
         payload = self.opportunity()

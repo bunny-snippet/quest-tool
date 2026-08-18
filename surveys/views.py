@@ -845,6 +845,11 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             normalized_key == "AGE"
             or ("your age" in normalized_text and not is_dob_question)
         )
+        is_postal_question = (
+            normalized_key in {"ZIP", "ZIP_CODE", "POSTAL_CODE"}
+            or "zip code" in normalized_text
+            or "postal code" in normalized_text
+        )
         options = []
         age_ranges = []
         allowed_values = _qualifying_option_values(question)
@@ -932,6 +937,10 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
         elif is_age_question:
             input_kind = "number"
             display_text = "What is your age?"
+        elif is_postal_question:
+            # Postal codes are identifiers, not numbers: leading zeroes and
+            # country-specific letters must survive exactly as entered.
+            input_kind = "text"
         elif "date" in lowered_type:
             input_kind = "date_mask"
         elif "multi" in lowered_type:
@@ -983,6 +992,7 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             "type_label": (
                 "Date of birth" if is_dob_question
                 else "Age" if is_age_question
+                else "Postal code" if is_postal_question
                 else "Date" if input_kind == "date_mask"
                 else (question.question_type or "Question")
             ),
@@ -990,9 +1000,19 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             "current_value": current_value,
             "min_value": min_value,
             "max_value": max_value,
-            "input_label": "Age" if is_age_question else "Your answer",
-            "placeholder": "Enter your age" if is_age_question else "Enter a number",
+            "input_label": (
+                "Age" if is_age_question
+                else "ZIP / postal code" if is_postal_question
+                else "Your answer"
+            ),
+            "placeholder": (
+                "Enter your age" if is_age_question
+                else "Enter your ZIP / postal code" if is_postal_question
+                else "Enter a number"
+            ),
             "is_dob_question": is_dob_question,
+            "is_postal_question": is_postal_question,
+            "allowed_values": sorted(allowed_values or []),
             "qualifying_options_only": bool(
                 qualifying_options_only and allowed_values
             ),
@@ -1001,6 +1021,8 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                 if (is_age_question or is_dob_question) and age_range_labels
                 else "Only answers accepted by this survey are shown."
                 if provider_code == "rfg" and qualifying_options_only and allowed_values
+                else "Enter a ZIP/postal code accepted by this survey."
+                if is_postal_question and qualifying_options_only and allowed_values
                 else qualifying_answer_note
                 if qualifying_options_only and allowed_values else ""
             ),
@@ -1061,6 +1083,13 @@ def _collect_prescreener_answers(request, survey):
                 and option.get("OptionId") is not None
             ]
             upstream_values = matched or [str(numeric_value)]
+        elif prepared.get("is_postal_question") and prepared.get("allowed_values"):
+            accepted = {str(value).casefold() for value in prepared["allowed_values"]}
+            if values[0].casefold() not in accepted:
+                errors.append(
+                    f"Enter a ZIP/postal code accepted by this survey for: {prepared['display_text']}"
+                )
+                continue
 
         answers[str(question.pk)] = {
             "question_id": question.question_id,
@@ -2021,7 +2050,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         try:
             self._refresh_if_stale(survey, "quotas")
         except (InnovateMRAPIError, ProviderError) as exc:
-            if survey.quota_synced_at is None:
+            if survey.quota_synced_at is None and not survey.quotas.exists():
                 raise UpstreamUnavailable(str(exc)) from exc
         return Response(SurveyQuotaSerializer(survey.quotas.all(), many=True).data)
 
@@ -2037,7 +2066,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         try:
             self._refresh_if_stale(survey, "targeting")
         except (InnovateMRAPIError, ProviderError) as exc:
-            if survey.targeting_synced_at is None:
+            if survey.targeting_synced_at is None and not survey.targeting_questions.exists():
                 raise UpstreamUnavailable(str(exc)) from exc
         return Response(TargetingQuestionSerializer(survey.targeting_questions.all(), many=True).data)
 

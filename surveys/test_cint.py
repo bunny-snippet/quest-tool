@@ -5,6 +5,7 @@ from decimal import Decimal
 from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
+from django.core.cache import cache
 from django.test import TestCase, override_settings
 from django.utils import timezone
 from rest_framework.test import APIClient, APIRequestFactory
@@ -76,6 +77,7 @@ class CintProviderTests(TestCase):
     databases = {"default", DATABASE_ALIAS}
 
     def setUp(self):
+        cache.clear()
         self.client_record = Client.objects.create(
             code="cint", name="Cint Exchange", provider_code="cint"
         )
@@ -102,6 +104,26 @@ class CintProviderTests(TestCase):
             provider._redirect_payload()["SuccessLink"],
             "https://api.exchange-ip.com/survey?status=1&rid=[%MID%]",
         )
+
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_country_question_library_is_cached_across_provider_instances(self):
+        first_session = RecordingSession({
+            "ApiResult": 0,
+            "Questions": [{
+                "QuestionID": 43,
+                "Name": "GENDER",
+                "QuestionText": "Are you...?",
+                "QuestionType": "Single Punch",
+            }],
+        })
+        first = CintProvider(self.integration, session=first_session)._question_library(9)
+        second_session = RecordingSession()
+        second = CintProvider(self.integration, session=second_session)._question_library(9)
+
+        self.assertEqual(first[43]["Name"], "GENDER")
+        self.assertEqual(second, first)
+        self.assertEqual(len(first_session.calls), 1)
+        self.assertEqual(second_session.calls, [])
 
     @patch("surveys.providers.cint.time.sleep")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
@@ -762,12 +784,32 @@ class CintProviderTests(TestCase):
             ],
             raw_data={"provider": "cint", "targeting_choices": ["1"]},
         )
+        TargetingQuestion.objects.create(
+            survey=survey,
+            question_id=45,
+            key="ZIP",
+            text="What is your ZIP/postal code?",
+            question_type="Numeric - Open-end",
+            category="Cint qualification",
+            options=[
+                {"OptionId": "02108", "OptionText": "02108"},
+                {"OptionId": "10001", "OptionText": "10001"},
+            ],
+            raw_data={"provider": "cint", "targeting_choices": ["02108"]},
+        )
 
-        age, gender = _prescreener_questions(survey)
+        age, gender, postal = _prescreener_questions(survey)
         self.assertEqual((age["min_value"], age["max_value"]), (18, 20))
         self.assertEqual(age["targeting_note"], "Qualifying age: 18\u201320")
         self.assertEqual(gender["targeting_note"], "Qualifying answer: Male")
         self.assertEqual(gender["options"], [{"value": "1", "label": "Male", "selected": False}])
+        self.assertEqual(postal["input_kind"], "text")
+        self.assertEqual(postal["type_label"], "Postal code")
+        self.assertEqual(postal["placeholder"], "Enter your ZIP / postal code")
+        self.assertEqual(
+            postal["targeting_note"],
+            "Enter a ZIP/postal code accepted by this survey.",
+        )
 
     @patch.dict(
         "os.environ",
