@@ -1,14 +1,19 @@
 """Contract tests for signed Cint Feed Opportunities ingestion."""
 
 import base64
+from datetime import timedelta
+from io import StringIO
 import json
 import time
+from unittest.mock import patch
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from django.conf import settings
+from django.core.management import call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from vendors.models import Client, ClientIntegration
 
@@ -161,7 +166,27 @@ class CintOpportunitiesWebhookTests(TestCase):
         self.assertEqual(survey.raw_data["_cint_country_language_request_id"], 9)
         self.assertIsNone(survey.targeting_synced_at)
         self.assertIsNone(survey.detail_synced_at)
-        self.assertEqual(CintWebhookDelivery.objects.get().status, "processed")
+        delivery = CintWebhookDelivery.objects.get()
+        self.assertEqual(delivery.status, "processed")
+        self.assertEqual(delivery.payload, [])
+
+    @override_settings(CINT_OPPORTUNITIES_RETAIN_PROCESSED_PAYLOADS=True)
+    def test_processed_payload_can_be_retained_explicitly(self):
+        response = self.signed_post(self.opportunity())
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertIsInstance(CintWebhookDelivery.objects.get().payload, dict)
+
+    @override_settings(CINT_OPPORTUNITIES_QUEUE_REDIRECTS=True)
+    @patch("surveys.tasks.sync_cint_redirects_task.delay", side_effect=ConnectionError("broker down"))
+    def test_redirect_queue_failure_does_not_rollback_processed_inventory(self, _delay):
+        response = self.signed_post(self.opportunity())
+
+        self.assertEqual(response.status_code, 200, response.content)
+        delivery = CintWebhookDelivery.objects.get()
+        self.assertEqual(delivery.status, CintWebhookDelivery.Status.PROCESSED)
+        self.assertEqual(delivery.payload, [])
+        self.assertTrue(Survey.objects.filter(integration=self.integration).exists())
 
     def test_standard_profile_questions_have_readable_webhook_fallbacks(self):
         response = self.signed_post(self.opportunity(
@@ -241,6 +266,49 @@ class CintOpportunitiesWebhookTests(TestCase):
         self.assertEqual(second.json()["status"], "duplicate")
         self.assertEqual(Survey.objects.filter(integration=self.integration).count(), 1)
         self.assertEqual(CintWebhookDelivery.objects.count(), 1)
+
+    def test_same_content_in_a_new_delivery_skips_relation_rebuild(self):
+        first = self.signed_post(self.opportunity(), timestamp=int(time.time()) - 1)
+        second = self.signed_post(self.opportunity(), timestamp=int(time.time()))
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(second.json()["skipped"], 1)
+        survey = Survey.objects.get(integration=self.integration)
+        self.assertEqual(survey.targeting_questions.count(), 1)
+        self.assertEqual(survey.quotas.count(), 1)
+        self.assertEqual(
+            list(CintWebhookDelivery.objects.values_list("payload", flat=True)),
+            [[], []],
+        )
+
+    def test_compaction_command_is_dry_run_then_bounded_apply(self):
+        self.signed_post(self.opportunity())
+        delivery = CintWebhookDelivery.objects.get()
+        delivery.payload = self.opportunity()
+        delivery.processed_at = timezone.now() - timedelta(days=2)
+        delivery.save(update_fields=["payload", "processed_at"])
+
+        output = StringIO()
+        call_command(
+            "compact_cint_webhook_payloads",
+            older_than_hours=24,
+            stdout=output,
+        )
+        delivery.refresh_from_db()
+        self.assertNotEqual(delivery.payload, [])
+        self.assertIn("Dry run only", output.getvalue())
+
+        call_command(
+            "compact_cint_webhook_payloads",
+            apply=True,
+            older_than_hours=24,
+            batch_size=1,
+            pause_ms=0,
+            stdout=StringIO(),
+        )
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.payload, [])
 
     def test_update_replaces_metrics_and_deactivated_message_closes_survey(self):
         self.signed_post(self.opportunity())

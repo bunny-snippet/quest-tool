@@ -118,6 +118,12 @@ class ProjectCacheTests(TestCase):
         self.assertEqual([row[0] for row in refreshed["countries"]], ["CA", "US"])
         self.assertEqual(str(refreshed["cpi_max"]), "4")
 
+    def test_high_frequency_invalidations_are_throttled(self):
+        self.assertTrue(invalidate_project_cache(throttle_seconds=30))
+        version = caches["projects"].get("projects:version")
+        self.assertFalse(invalidate_project_cache(throttle_seconds=30))
+        self.assertEqual(caches["projects"].get("projects:version"), version)
+
     def test_count_cache_does_not_cache_project_rows(self):
         request = Request(APIRequestFactory().get("/api/v1/surveys/?country=US"))
         request.user = self.user

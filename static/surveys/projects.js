@@ -20,6 +20,7 @@
     detailErrors: { targeting: null, quotas: null },
     timer: null,
     controller: null,
+    loading: false,
   };
 
   const els = {
@@ -280,19 +281,28 @@
   }
 
   async function loadSurveys({ silent = false } = {}) {
+    // Never stack background refreshes when the database/API is already busy.
+    // Interactive filter changes still cancel stale work immediately.
+    if (silent && state.loading) return;
     state.controller?.abort();
-    state.controller = new AbortController();
+    const controller = new AbortController();
+    state.controller = controller;
+    state.loading = true;
     if (!silent) {
       els.rows.innerHTML = `<tr><td colspan="${visibleColumnCount}"><div class="table-loader"><i></i><span>Fetching survey inventory…</span></div></td></tr>`;
       els.cards.innerHTML = '<div class="mobile-loading">Fetching surveys…</div>';
     }
     try {
-      const response = await fetch(`/api/v1/surveys/?${queryString()}`, { signal: state.controller.signal });
+      const response = await fetch(`/api/v1/surveys/?${queryString()}`, { signal: controller.signal });
       if (!response.ok) throw new Error(`Request failed (${response.status})`);
       const data = await response.json();
       state.results = data.results || [];
       state.pages = Math.max(1, Math.ceil(data.count / state.pageSize));
-      if (state.page > state.pages) { state.page = state.pages; return loadSurveys({ silent }); }
+      if (state.page > state.pages) {
+        state.page = state.pages;
+        state.loading = false;
+        return loadSurveys({ silent });
+      }
       render(data.count);
     } catch (error) {
       if (error.name === 'AbortError') return;
@@ -300,6 +310,8 @@
       els.rows.innerHTML = `<tr><td colspan="${visibleColumnCount}"><div class="error-state"><strong>Could not load surveys</strong><span>${escapeHtml(error.message)}</span><button id="retryLoad">Try again</button></div></td></tr>`;
       els.cards.innerHTML = '';
       $('retryLoad')?.addEventListener('click', loadSurveys);
+    } finally {
+      if (state.controller === controller) state.loading = false;
     }
   }
 
@@ -519,7 +531,7 @@
   loadSurveys();
   window.setInterval(() => {
     if (!document.hidden) loadSurveys({ silent: true });
-  }, 30000);
+  }, 60000);
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) loadSurveys({ silent: true });
   });

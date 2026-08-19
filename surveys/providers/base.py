@@ -13,6 +13,10 @@ ENV_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 class ProviderError(RuntimeError):
     """Safe upstream/provider error suitable for operational audit logs."""
 
+    def __init__(self, message: str, *, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
+
 
 class ProviderConfigurationError(ProviderError):
     """Raised when an integration references missing or invalid environment configuration."""

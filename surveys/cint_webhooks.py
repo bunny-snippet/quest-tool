@@ -3,6 +3,7 @@
 import base64
 import hashlib
 import json
+import logging
 import time
 from decimal import Decimal, InvalidOperation
 
@@ -11,6 +12,7 @@ from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from django.conf import settings
 from django.db import transaction
+from django.db.models import Exists, OuterRef
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
@@ -18,6 +20,9 @@ from vendors.models import ClientIntegration
 
 from .models import CintWebhookDelivery, Survey, SurveyQuota, TargetingQuestion
 from .project_cache import invalidate_project_cache
+
+
+logger = logging.getLogger(__name__)
 
 
 # Accept the spellings present in the supplied PHP subscription and the
@@ -44,6 +49,33 @@ LOCAL_STATE_KEYS = (
 
 class CintWebhookError(Exception):
     """A callback cannot be authenticated or safely normalized."""
+
+
+_EXISTING_NOT_LOADED = object()
+
+
+def opportunity_content_fingerprint(payload):
+    """Hash provider-owned fields while ignoring the delivery reason label."""
+
+    content = {
+        key: value
+        for key, value in payload.items()
+        if key != "message_reason"
+    }
+    encoded = json.dumps(
+        content,
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    ).encode("utf-8")
+    return hashlib.sha256(encoded).hexdigest()
+
+
+def _related_row_exists(instance, annotation, manager):
+    value = getattr(instance, annotation, None)
+    if value is not None:
+        return bool(value)
+    return manager.exists()
 
 
 def normalize_locale(value):
@@ -386,16 +418,23 @@ def _quota_rows(survey, payload):
     return rows
 
 
-def upsert_opportunity(integration, payload, seen_at):
+def upsert_opportunity(
+    integration,
+    payload,
+    seen_at,
+    *,
+    existing=_EXISTING_NOT_LOADED,
+):
     """Apply one new/update/reactivate/deactivate message idempotently."""
 
     source_key = str(payload.get("survey_id") or "").strip()
     if not source_key.isdigit():
         raise CintWebhookError("Cint opportunity is missing a numeric survey_id.")
-    existing = Survey.objects.filter(
-        integration=integration,
-        source_key=source_key,
-    ).first()
+    if existing is _EXISTING_NOT_LOADED:
+        existing = Survey.objects.filter(
+            integration=integration,
+            source_key=source_key,
+        ).first()
     if existing:
         previous_received_at = parse_datetime(str(
             (existing.raw_data or {}).get("_cint_webhook_received_at") or ""
@@ -424,6 +463,7 @@ def upsert_opportunity(integration, payload, seen_at):
     rpi = decimal_value(payload.get("revenue_per_interview"))
     completes = max(0, _integer(payload.get("overall_completes"), 0))
     remaining = max(0, _integer(payload.get("total_remaining"), 0))
+    content_fingerprint = opportunity_content_fingerprint(payload)
     raw_data = {
         **payload,
         # The webhook locale string and the REST Question Library use two
@@ -434,6 +474,7 @@ def upsert_opportunity(integration, payload, seen_at):
         "_cint_locale": locale,
         "_cint_country_language_request_id": locale_rule["country_language_id"],
         "_cint_webhook_received_at": seen_at.isoformat(),
+        "_cint_webhook_content_sha256": content_fingerprint,
     }
     entry_link = test_entry_link = ""
     if existing:
@@ -442,6 +483,47 @@ def upsert_opportunity(integration, payload, seen_at):
                 raw_data[key] = existing.raw_data[key]
         entry_link = existing.entry_link
         test_entry_link = existing.test_entry_link
+        has_targeting = _related_row_exists(
+            existing,
+            "_has_targeting",
+            existing.targeting_questions,
+        )
+        has_quotas = _related_row_exists(
+            existing,
+            "_has_quotas",
+            existing.quotas,
+        )
+        same_content = (
+            str((existing.raw_data or {}).get("_cint_webhook_content_sha256") or "")
+            == content_fingerprint
+        )
+        relations_complete = (
+            (not payload.get("survey_qualifications") or has_targeting)
+            and (not payload.get("survey_quotas") or has_quotas)
+        )
+        # A fresh provider event releases a previous terminal redirect 404.
+        # Let that event flow through the normal update path so redirects are
+        # queued once more; identical healthy events need only one lightweight
+        # timestamp/raw-data update and never rebuild targeting or quotas.
+        redirect_terminal = bool(
+            (existing.raw_data or {}).get("_cint_redirect_terminal")
+        )
+        if (
+            same_content
+            and relations_complete
+            and existing.status == Survey.Status.LIVE
+            and not redirect_terminal
+        ):
+            Survey.objects.filter(pk=existing.pk).update(
+                last_seen_at=seen_at,
+                source_modified_at=seen_at,
+                raw_data=raw_data,
+                updated_at=seen_at,
+            )
+            existing.last_seen_at = seen_at
+            existing.source_modified_at = seen_at
+            existing.raw_data = raw_data
+            return "skipped", existing
     values = {
         "client": integration.client,
         "integration": integration,
@@ -484,24 +566,53 @@ def upsert_opportunity(integration, payload, seen_at):
             (existing.raw_data or {}).get("survey_qualifications")
             if existing is not None else None
         )
+        has_targeting = (
+            _related_row_exists(existing, "_has_targeting", existing.targeting_questions)
+            if existing is not None
+            else False
+        )
+        has_quotas = (
+            _related_row_exists(existing, "_has_quotas", existing.quotas)
+            if existing is not None
+            else False
+        )
         targeting_changed = (
             existing is None
             or previous_qualifications != payload.get("survey_qualifications")
-            or not existing.targeting_questions.exists()
+            or (bool(payload.get("survey_qualifications")) and not has_targeting)
+        )
+        quota_changed = (
+            existing is None
+            or (
+                (existing.raw_data or {}).get("survey_quotas")
+                != payload.get("survey_quotas")
+            )
+            or (bool(payload.get("survey_quotas")) and not has_quotas)
         )
         previous_targeting_synced_at = (
             existing.targeting_synced_at if existing is not None else None
         )
+        previous_detail_synced_at = (
+            existing.detail_synced_at if existing is not None else None
+        )
+        values.update({
+            "targeting_synced_at": (
+                None if targeting_changed else previous_targeting_synced_at
+            ),
+            "quota_synced_at": seen_at,
+            "detail_synced_at": (
+                None if targeting_changed else previous_detail_synced_at
+            ),
+        })
         if existing is None:
             survey = Survey.objects.create(**values)
             action = "created"
         else:
             survey = existing
-            changed = any(getattr(survey, key) != value for key, value in values.items())
             for key, value in values.items():
                 setattr(survey, key, value)
             survey.save()
-            action = "updated" if changed else "skipped"
+            action = "updated"
         # Do not replace already-hydrated Question Library labels on every
         # five-second webhook delivery. Replace them only when the actual
         # qualification contract changes; the null sync timestamp then causes
@@ -509,18 +620,11 @@ def upsert_opportunity(integration, payload, seen_at):
         if targeting_changed:
             survey.targeting_questions.all().delete()
             TargetingQuestion.objects.bulk_create(_targeting_rows(survey, payload))
-        survey.quotas.all().delete()
-        SurveyQuota.objects.bulk_create(_quota_rows(survey, payload))
-        survey.targeting_synced_at = (
-            None if targeting_changed else previous_targeting_synced_at
-        )
-        survey.quota_synced_at = seen_at
-        survey.detail_synced_at = (
-            None if targeting_changed else survey.detail_synced_at
-        )
-        survey.save(update_fields=[
-            "targeting_synced_at", "quota_synced_at", "detail_synced_at", "updated_at"
-        ])
+        if quota_changed:
+            survey.quotas.all().delete()
+            SurveyQuota.objects.bulk_create(_quota_rows(survey, payload))
+        survey._has_targeting = bool(payload.get("survey_qualifications"))
+        survey._has_quotas = bool(payload.get("survey_quotas"))
     return action, survey
 
 
@@ -540,10 +644,38 @@ def process_delivery(delivery_id):
     errors = []
     # Delivery receipt time, not worker start time, establishes update order.
     seen_at = delivery.received_at
-    for payload in extract_opportunities(delivery.payload):
+    payloads = extract_opportunities(delivery.payload)
+    source_keys = {
+        str(payload.get("survey_id") or "").strip()
+        for payload in payloads
+        if str(payload.get("survey_id") or "").strip().isdigit()
+    }
+    existing_surveys = {
+        survey.source_key: survey
+        for survey in Survey.objects.filter(
+            integration=delivery.integration,
+            source_key__in=source_keys,
+        ).annotate(
+            _has_targeting=Exists(
+                TargetingQuestion.objects.filter(survey_id=OuterRef("pk"))
+            ),
+            _has_quotas=Exists(
+                SurveyQuota.objects.filter(survey_id=OuterRef("pk"))
+            ),
+        )
+    }
+    for payload in payloads:
         try:
-            action, _survey = upsert_opportunity(delivery.integration, payload, seen_at)
+            source_key = str(payload.get("survey_id") or "").strip()
+            action, survey = upsert_opportunity(
+                delivery.integration,
+                payload,
+                seen_at,
+                existing=existing_surveys.get(source_key),
+            )
             counters[action] += 1
+            if survey is not None:
+                existing_surveys[source_key] = survey
         except Exception as exc:  # preserve the rest of a Cint batch
             counters["errors"] += 1
             errors.append(f"{payload.get('survey_id', 'unknown')}: {exc}")
@@ -559,15 +691,44 @@ def process_delivery(delivery_id):
         else CintWebhookDelivery.Status.PROCESSED
     )
     delivery.processed_at = timezone.now()
-    delivery.save(update_fields=[
+    update_fields = [
         "created_count", "updated_count", "closed_count", "skipped_count",
         "error_count", "error", "status", "processed_at",
-    ])
-    invalidate_project_cache()
+    ]
+    if (
+        delivery.status == CintWebhookDelivery.Status.PROCESSED
+        and not getattr(
+            settings,
+            "CINT_OPPORTUNITIES_RETAIN_PROCESSED_PAYLOADS",
+            False,
+        )
+    ):
+        delivery.payload = []
+        update_fields.append("payload")
+    delivery.save(update_fields=update_fields)
+    if counters["created"] or counters["updated"] or counters["closed"]:
+        invalidate_project_cache(
+            throttle_seconds=getattr(
+                settings,
+                "CINT_PROJECT_CACHE_INVALIDATION_SECONDS",
+                30,
+            )
+        )
     if getattr(settings, "CINT_OPPORTUNITIES_QUEUE_REDIRECTS", False) and (
         counters["created"] or counters["updated"]
     ):
         from .tasks import sync_cint_redirects_task
 
-        sync_cint_redirects_task.delay(delivery.integration_id, batch_size=10)
+        try:
+            sync_cint_redirects_task.delay(delivery.integration_id, batch_size=10)
+        except Exception:
+            # Inventory ingestion is already durable. A transient broker issue
+            # must not turn the delivery into FAILED after its replay payload
+            # has been compacted; the periodic integration task can enqueue
+            # a subsequent delivery or the maintenance command can enqueue
+            # pending redirects again.
+            logger.exception(
+                "Could not queue Cint redirect synchronization integration=%s",
+                delivery.integration_id,
+            )
     return delivery

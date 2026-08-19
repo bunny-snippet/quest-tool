@@ -13,6 +13,7 @@ from .providers import ProviderError, get_provider
 
 
 logger = logging.getLogger(__name__)
+INVENTORY_WRITE_BATCH_SIZE = 250
 
 
 def _preserve_provider_local_state(integration, survey, normalized):
@@ -135,56 +136,71 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
         run.unique_surveys = len(normalized_rows)
         run.detail_failures += len(getattr(provider, "inventory_failures", []))
 
-        with transaction.atomic():
-            for source_key, normalized in normalized_rows.items():
-                survey = Survey.objects.filter(integration=integration, source_key=source_key).first()
-                _preserve_provider_local_state(integration, survey, normalized)
-                values = {
-                    **normalized.values,
-                    "client": integration.client,
-                    "integration": integration,
-                    "source_key": source_key,
-                    "source_id": normalized.numeric_source_id,
-                }
-                if survey is None:
-                    survey = Survey.objects.create(**values)
-                    run.created += 1
-                    touched.append(survey)
-                elif _survey_changed(survey, normalized):
-                    source_changed = (
-                        survey.source_modified_at != normalized.modified_at
-                        or survey.raw_data != normalized.raw_data
+        normalized_items = list(normalized_rows.items())
+        for offset in range(0, len(normalized_items), INVENTORY_WRITE_BATCH_SIZE):
+            batch = normalized_items[offset:offset + INVENTORY_WRITE_BATCH_SIZE]
+            unchanged_surveys = []
+            # Short transactions prevent a 3k+ survey inventory response from
+            # holding row locks for the entire provider sync.
+            with transaction.atomic():
+                for source_key, normalized in batch:
+                    # ``existing_surveys`` was loaded in one query above. Do not
+                    # repeat one SELECT per survey inside the write loop.
+                    survey = existing_surveys.get(source_key)
+                    _preserve_provider_local_state(integration, survey, normalized)
+                    values = {
+                        **normalized.values,
+                        "client": integration.client,
+                        "integration": integration,
+                        "source_key": source_key,
+                        "source_id": normalized.numeric_source_id,
+                    }
+                    if survey is None:
+                        survey = Survey.objects.create(**values)
+                        existing_surveys[source_key] = survey
+                        run.created += 1
+                        touched.append(survey)
+                    elif _survey_changed(survey, normalized):
+                        source_changed = (
+                            survey.source_modified_at != normalized.modified_at
+                            or survey.raw_data != normalized.raw_data
+                        )
+                        for field, value in values.items():
+                            setattr(survey, field, value)
+                        if source_changed:
+                            survey.detail_synced_at = None
+                        survey.save()
+                        run.updated += 1
+                        touched.append(survey)
+                    else:
+                        survey.last_seen_at = now
+                        survey.updated_at = now
+                        unchanged_surveys.append(survey)
+                        run.unchanged += 1
+                if unchanged_surveys:
+                    Survey.objects.bulk_update(
+                        unchanged_surveys,
+                        ["last_seen_at", "updated_at"],
+                        batch_size=INVENTORY_WRITE_BATCH_SIZE,
                     )
-                    for field, value in values.items():
-                        setattr(survey, field, value)
-                    if source_changed:
-                        survey.detail_synced_at = None
-                    survey.save()
-                    run.updated += 1
-                    touched.append(survey)
-                else:
-                    survey.last_seen_at = now
-                    survey.integration = integration
-                    survey.save(update_fields=["last_seen_at", "integration", "updated_at"])
-                    run.unchanged += 1
 
-            if provider.close_missing_inventory_items:
-                run.closed = Survey.objects.filter(
-                    integration=integration,
-                    status=Survey.Status.LIVE,
-                ).exclude(source_key__in=normalized_rows).update(
-                    status=Survey.Status.CLOSED,
-                    updated_at=now,
-                )
-            else:
-                # Cint open opportunities disappear after link creation. Only
-                # rows explicitly rejected by the current CPI/locale policy are
-                # closed here; allocated rows absent from the feed stay live.
-                run.closed = Survey.objects.filter(
-                    integration=integration,
-                    status=Survey.Status.LIVE,
-                    source_key__in=getattr(provider, "rejected_source_keys", set()),
-                ).update(status=Survey.Status.CLOSED, updated_at=now)
+        if provider.close_missing_inventory_items:
+            run.closed = Survey.objects.filter(
+                integration=integration,
+                status=Survey.Status.LIVE,
+            ).exclude(source_key__in=normalized_rows).update(
+                status=Survey.Status.CLOSED,
+                updated_at=now,
+            )
+        else:
+            # Cint open opportunities disappear after link creation. Only
+            # rows explicitly rejected by the current CPI/locale policy are
+            # closed here; allocated rows absent from the feed stay live.
+            run.closed = Survey.objects.filter(
+                integration=integration,
+                status=Survey.Status.LIVE,
+                source_key__in=getattr(provider, "rejected_source_keys", set()),
+            ).update(status=Survey.Status.CLOSED, updated_at=now)
 
         if refresh_details:
             detail_batch = int((integration.config or {}).get("detail_refresh_batch", integration.detail_refresh_batch))
@@ -277,7 +293,13 @@ def sync_cint_redirect_contracts(
         raise ProviderError("This Cint integration is inactive.")
     provider = get_provider(integration)
     fingerprint = provider.redirect_contract_fingerprint()
-    base = Survey.objects.filter(integration=integration)
+    # Closed/deactivated opportunities cannot accept respondents and Cint may
+    # return 404 when their supplier links are no longer available. Keeping
+    # them in the backfill queue caused a permanent upstream retry storm.
+    base = Survey.objects.filter(
+        integration=integration,
+        status=Survey.Status.LIVE,
+    )
     if force:
         # A local fingerprint proves what this application previously sent, not
         # what is currently stored upstream. Force mode deliberately ignores it
@@ -290,6 +312,9 @@ def sync_cint_redirect_contracts(
             | Q(raw_data___cint_redirect_verified_at__isnull=True)
             | ~Q(raw_data___cint_redirect_contract=fingerprint)
             | ~Q(raw_data___cint_redirect_supplier_code=provider.supplier_code)
+        ).filter(
+            Q(raw_data___cint_redirect_terminal__isnull=True)
+            | Q(raw_data___cint_redirect_terminal=False)
         )
     cursor = max(0, int(after_id or 0))
     pending = pending_query.filter(pk__gt=cursor).order_by("pk")
@@ -303,6 +328,19 @@ def sync_cint_redirect_contracts(
         except Exception as exc:
             failures += 1
             errors.append({"survey": survey.source_key, "error": str(exc)[:500]})
+            raw_data = dict(survey.raw_data or {})
+            raw_data["_cint_redirect_last_error"] = str(exc)[:500]
+            raw_data["_cint_redirect_last_failed_at"] = timezone.now().isoformat()
+            if getattr(exc, "status_code", None) == 404 or "(HTTP 404)" in str(exc):
+                # A fresh Cint webhook replaces provider raw data and clears
+                # this marker, allowing exactly one new retry if the survey is
+                # reactivated or becomes linkable later.
+                raw_data["_cint_redirect_terminal"] = True
+                raw_data["_cint_redirect_terminal_at"] = timezone.now().isoformat()
+            Survey.objects.filter(pk=survey.pk).update(
+                raw_data=raw_data,
+                updated_at=timezone.now(),
+            )
             logger.exception(
                 "Cint redirect update failed integration=%s survey=%s",
                 integration.pk,

@@ -78,6 +78,31 @@ def safe_cache_set(
         return False
 
 
+def safe_cache_add(
+    key: str,
+    value: Any,
+    *,
+    timeout: int,
+    alias: str = "default",
+) -> bool | None:
+    """Atomically add a short-lived coordination key.
+
+    ``False`` means another process already owns the key. ``None`` means the
+    cache is unavailable, allowing callers to fail open instead of making a
+    non-authoritative Redis dependency block inventory updates.
+    """
+
+    try:
+        return bool(_cache(alias).add(key, value, timeout=max(1, int(timeout))))
+    except Exception:
+        logger.warning(
+            "Cache add failed for key namespace=%s",
+            key.split(":", 1)[0],
+            exc_info=True,
+        )
+        return None
+
+
 def safe_cache_delete(key: str, *, alias: str = "default") -> bool:
     try:
         return bool(_cache(alias).delete(key))

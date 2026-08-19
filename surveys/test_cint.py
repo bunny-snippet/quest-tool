@@ -591,6 +591,55 @@ class CintProviderTests(TestCase):
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_redirect_batch_never_processes_closed_surveys(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+        live = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199770",
+        )
+        Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199771",
+            status=Survey.Status.CLOSED,
+        )
+
+        with patch.object(provider, "update_supplier_link_redirects") as update:
+            with patch("surveys.provider_services.get_provider", return_value=provider):
+                result = sync_cint_redirect_contracts(self.integration, batch_size=25)
+
+        self.assertEqual(result["processed"], 1)
+        update.assert_called_once_with(live)
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_redirect_404_is_terminal_until_a_fresh_webhook_update(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199770",
+        )
+        failure = ProviderError("Cint Exchange request failed (HTTP 404).", status_code=404)
+
+        with patch.object(
+            provider,
+            "update_supplier_link_redirects",
+            side_effect=failure,
+        ) as update:
+            with patch("surveys.provider_services.get_provider", return_value=provider):
+                first = sync_cint_redirect_contracts(self.integration, batch_size=25)
+                second = sync_cint_redirect_contracts(self.integration, batch_size=25)
+
+        self.assertEqual(first["failures"], 1)
+        self.assertEqual(second["processed"], 0)
+        self.assertEqual(update.call_count, 1)
+        survey.refresh_from_db()
+        self.assertTrue(survey.raw_data["_cint_redirect_terminal"])
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
     def test_force_redirect_batch_reasserts_even_verified_local_contracts(self):
         provider = CintProvider(self.integration, session=RecordingSession())
         fingerprint = provider.redirect_contract_fingerprint()

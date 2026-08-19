@@ -53,6 +53,8 @@ DJANGO_DATA_UPLOAD_MAX_MEMORY_SIZE=10551296
 CINT_OPPORTUNITIES_MAX_SURVEY_COUNT=1000
 CINT_OPPORTUNITIES_PROCESS_SYNCHRONOUS=false
 CINT_OPPORTUNITIES_QUEUE_REDIRECTS=true
+CINT_OPPORTUNITIES_RETAIN_PROCESSED_PAYLOADS=false
+CINT_PROJECT_CACHE_INVALIDATION_SECONDS=30
 ```
 
 `CINT_OPPORTUNITIES_LOCAL_TEST_TOKEN` enables unsigned requests only when
@@ -92,6 +94,35 @@ from loopback. Production callbacks must always contain a valid
   retried delivery cannot overwrite a newer inventory snapshot.
 - Production asynchronous processing queues supplier-link redirect provisioning
   for newly received inventory.
+- Successfully processed delivery bodies are compacted to `[]` by default.
+  Event keys, SHA-256 hashes, signatures, counters and timestamps remain for
+  audit and deduplication. Partial/failed bodies remain available for replay.
+- Redirect provisioning considers live inventory only. A Cint HTTP 404 is
+  marked terminal until a fresh webhook event for that survey arrives, which
+  prevents closed/stale survey codes from creating a permanent retry loop.
+- Project filter/count cache invalidation is shared and throttled for the
+  five-second feed; inventory remains authoritative in MySQL.
+
+## Historical payload compaction
+
+Preview retained processed payloads older than 24 hours:
+
+```bash
+.venv/bin/python manage.py compact_cint_webhook_payloads \
+  --older-than-hours 24
+```
+
+Compact them in deliberately small MySQL batches:
+
+```bash
+.venv/bin/python manage.py compact_cint_webhook_payloads \
+  --older-than-hours 24 --batch-size 5 --pause-ms 250 --apply
+```
+
+The command does not delete delivery audit rows. Reclaiming physical InnoDB
+table space requires a later DBA-controlled table rebuild/`OPTIMIZE TABLE`
+during a maintenance window; do not combine that lock-heavy operation with the
+live compaction run.
 
 ## Universal respondent result
 

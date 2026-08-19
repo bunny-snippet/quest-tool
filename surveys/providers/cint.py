@@ -133,7 +133,10 @@ class CintProvider(SurveyProvider):
         except requests.RequestException as exc:
             status = getattr(getattr(exc, "response", None), "status_code", None)
             suffix = f" (HTTP {status})" if status else ""
-            raise ProviderError(f"Cint Exchange request failed{suffix}.") from exc
+            raise ProviderError(
+                f"Cint Exchange request failed{suffix}.",
+                status_code=status,
+            ) from exc
         except ValueError as exc:
             raise ProviderError("Cint Exchange returned invalid JSON.") from exc
         if not isinstance(data, dict):
@@ -1028,6 +1031,13 @@ class CintProvider(SurveyProvider):
         self._assert_redirect_contract(link)
 
         raw_data = dict(survey.raw_data or {})
+        for key in (
+            "_cint_redirect_last_error",
+            "_cint_redirect_last_failed_at",
+            "_cint_redirect_terminal",
+            "_cint_redirect_terminal_at",
+        ):
+            raw_data.pop(key, None)
         raw_data["_cint_redirect_contract"] = self.redirect_contract_fingerprint()
         raw_data["_cint_redirect_synced_at"] = timezone.now().isoformat()
         raw_data["_cint_redirect_supplier_code"] = self.supplier_code
