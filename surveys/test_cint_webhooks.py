@@ -10,7 +10,7 @@ from unittest.mock import patch
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import ec
 from django.conf import settings
-from django.core.management import call_command
+from django.core.management import CommandError, call_command
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -168,10 +168,10 @@ class CintOpportunitiesWebhookTests(TestCase):
         self.assertIsNone(survey.detail_synced_at)
         delivery = CintWebhookDelivery.objects.get()
         self.assertEqual(delivery.status, "processed")
-        self.assertEqual(delivery.payload, [])
+        self.assertIsInstance(delivery.payload, dict)
 
-    @override_settings(CINT_OPPORTUNITIES_RETAIN_PROCESSED_PAYLOADS=True)
-    def test_processed_payload_can_be_retained_explicitly(self):
+    @override_settings(CINT_OPPORTUNITIES_RETAIN_PROCESSED_PAYLOADS=False)
+    def test_processed_payload_is_retained_even_if_legacy_setting_is_false(self):
         response = self.signed_post(self.opportunity())
 
         self.assertEqual(response.status_code, 200, response.content)
@@ -185,7 +185,7 @@ class CintOpportunitiesWebhookTests(TestCase):
         self.assertEqual(response.status_code, 200, response.content)
         delivery = CintWebhookDelivery.objects.get()
         self.assertEqual(delivery.status, CintWebhookDelivery.Status.PROCESSED)
-        self.assertEqual(delivery.payload, [])
+        self.assertIsInstance(delivery.payload, dict)
         self.assertTrue(Survey.objects.filter(integration=self.integration).exists())
 
     def test_standard_profile_questions_have_readable_webhook_fallbacks(self):
@@ -278,11 +278,16 @@ class CintOpportunitiesWebhookTests(TestCase):
         self.assertEqual(survey.targeting_questions.count(), 1)
         self.assertEqual(survey.quotas.count(), 1)
         self.assertEqual(
-            list(CintWebhookDelivery.objects.values_list("payload", flat=True)),
-            [[], []],
+            sum(
+                isinstance(payload, dict)
+                for payload in CintWebhookDelivery.objects.values_list(
+                    "payload", flat=True
+                )
+            ),
+            2,
         )
 
-    def test_compaction_command_is_dry_run_then_bounded_apply(self):
+    def test_compaction_command_is_read_only_and_apply_is_disabled(self):
         self.signed_post(self.opportunity())
         delivery = CintWebhookDelivery.objects.get()
         delivery.payload = self.opportunity()
@@ -297,18 +302,19 @@ class CintOpportunitiesWebhookTests(TestCase):
         )
         delivery.refresh_from_db()
         self.assertNotEqual(delivery.payload, [])
-        self.assertIn("Dry run only", output.getvalue())
+        self.assertIn("remains unchanged", output.getvalue())
 
-        call_command(
-            "compact_cint_webhook_payloads",
-            apply=True,
-            older_than_hours=24,
-            batch_size=1,
-            pause_ms=0,
-            stdout=StringIO(),
-        )
+        with self.assertRaisesMessage(CommandError, "No rows were modified"):
+            call_command(
+                "compact_cint_webhook_payloads",
+                apply=True,
+                older_than_hours=24,
+                batch_size=1,
+                pause_ms=0,
+                stdout=StringIO(),
+            )
         delivery.refresh_from_db()
-        self.assertEqual(delivery.payload, [])
+        self.assertNotEqual(delivery.payload, [])
 
     def test_update_replaces_metrics_and_deactivated_message_closes_survey(self):
         self.signed_post(self.opportunity())

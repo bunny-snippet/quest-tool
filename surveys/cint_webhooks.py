@@ -695,16 +695,6 @@ def process_delivery(delivery_id):
         "created_count", "updated_count", "closed_count", "skipped_count",
         "error_count", "error", "status", "processed_at",
     ]
-    if (
-        delivery.status == CintWebhookDelivery.Status.PROCESSED
-        and not getattr(
-            settings,
-            "CINT_OPPORTUNITIES_RETAIN_PROCESSED_PAYLOADS",
-            False,
-        )
-    ):
-        delivery.payload = []
-        update_fields.append("payload")
     delivery.save(update_fields=update_fields)
     if counters["created"] or counters["updated"] or counters["closed"]:
         invalidate_project_cache(
