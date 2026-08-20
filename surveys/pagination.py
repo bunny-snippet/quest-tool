@@ -21,7 +21,11 @@ class SurveyPagination(PageNumberPagination):
             return None
 
         paginator = self.django_paginator_class(queryset, page_size)
-        if getattr(view, "project_count_cache_enabled", False):
+        if getattr(view, "report_cached_count", None) is not None:
+            # Report aggregates already counted the exact filtered rows. Reuse
+            # that authoritative value instead of issuing a duplicate COUNT.
+            paginator.__dict__["count"] = int(view.report_cached_count)
+        elif getattr(view, "project_count_cache_enabled", False):
             # Django's count is a cached_property. Seeding only this value saves
             # an expensive COUNT query without caching any user-specific row,
             # CPI, permission decision, or respondent start link.

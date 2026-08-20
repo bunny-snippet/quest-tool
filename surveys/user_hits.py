@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import datetime, time, timedelta, timezone as datetime_timezone
 
 from django.contrib.auth import get_user_model
+from django.db.models import Count, Q
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_time
 
@@ -209,50 +211,92 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
     if lower and upper and lower > upper:
         raise ValueError("from date/time cannot be after to date/time.")
 
-    attempts = SurveyAttempt.objects.filter(platform_user_id__in=visible_ids).only(
-        "id", "platform_user_id", "status", "status_source", "entry_device", "initiated_at"
-    )
+    search = params.get("search", "").strip()
+    if search:
+        needle = search.casefold()
+        visible_ids = {
+            user_id for user_id in visible_ids
+            if any(
+                needle in str(metadata.get(user_id, {}).get(field, "")).casefold()
+                for field in (
+                    "user_name", "username", "user_email", "branch", "sub_branch", "shift"
+                )
+            )
+        }
+
+    attempts = SurveyAttempt.objects.filter(platform_user_id__in=visible_ids)
     if lower:
         attempts = attempts.filter(initiated_at__gte=lower)
     if upper:
         attempts = attempts.filter(initiated_at__lte=upper)
 
-    search = params.get("search", "").strip()
+    # Group inside MySQL instead of transferring and looping over every hit in
+    # Python.  A fixed IST offset avoids MySQL timezone-table dependencies.
+    ist_timezone = datetime_timezone(timedelta(hours=5, minutes=30))
+    completed = Q(status=SurveyAttempt.Status.COMPLETED)
+    tablet = Q(entry_device__icontains="tablet") | Q(entry_device__iexact="tab") | Q(entry_device__iexact="t")
+    mobile = ~tablet & (
+        Q(entry_device__icontains="mobile")
+        | Q(entry_device__icontains="phone")
+        | Q(entry_device__iexact="m")
+    )
+    desktop = ~tablet & ~mobile & (
+        Q(entry_device__icontains="desktop")
+        | Q(entry_device__icontains="laptop")
+        | Q(entry_device__iexact="d")
+    )
+    grouped = attempts.annotate(
+        local_date=TruncDate("initiated_at", tzinfo=ist_timezone)
+    ).values("platform_user_id", "local_date").annotate(
+        hits_total=Count("id"),
+        hits_desktop=Count("id", filter=desktop),
+        hits_mobile=Count("id", filter=mobile),
+        hits_tablet=Count("id", filter=tablet),
+        completes_total=Count("id", filter=completed),
+        completes_desktop=Count("id", filter=completed & desktop),
+        completes_mobile=Count("id", filter=completed & mobile),
+        completes_tablet=Count("id", filter=completed & tablet),
+        survey_terminations=Count(
+            "id",
+            filter=Q(status=SurveyAttempt.Status.TERMINATED) & ~Q(status_source="local_prescreener"),
+        ),
+    )
 
-    grouped: dict[tuple[int, object], dict] = {}
-    for attempt in attempts.iterator(chunk_size=2000):
-        user_meta = metadata.get(attempt.platform_user_id)
-        if not user_meta:
+    rows = []
+    for aggregate in grouped.iterator(chunk_size=2000):
+        user_meta = metadata.get(aggregate["platform_user_id"])
+        local_date = aggregate["local_date"]
+        if not user_meta or not local_date:
             continue
-        local_date = timezone.localtime(attempt.initiated_at, current_timezone).date()
-        key = (attempt.platform_user_id, local_date)
-        row = grouped.setdefault(key, {
+        hits_classified = (
+            aggregate["hits_desktop"] + aggregate["hits_mobile"] + aggregate["hits_tablet"]
+        )
+        completes_classified = (
+            aggregate["completes_desktop"]
+            + aggregate["completes_mobile"]
+            + aggregate["completes_tablet"]
+        )
+        rows.append({
             **{field: user_meta[field] for field in (
                 "user_id", "user_name", "username", "user_email", "branch", "sub_branch", "shift"
             )},
             "date": local_date.isoformat(),
-            "hits": {"total": 0, **_empty_counts()},
-            "completes": {"total": 0, **_empty_counts()},
-            "_survey_terminations": 0,
+            "hits": {
+                "total": aggregate["hits_total"],
+                "desktop": aggregate["hits_desktop"],
+                "mobile": aggregate["hits_mobile"],
+                "tablet": aggregate["hits_tablet"],
+                "unclassified": max(0, aggregate["hits_total"] - hits_classified),
+            },
+            "completes": {
+                "total": aggregate["completes_total"],
+                "desktop": aggregate["completes_desktop"],
+                "mobile": aggregate["completes_mobile"],
+                "tablet": aggregate["completes_tablet"],
+                "unclassified": max(0, aggregate["completes_total"] - completes_classified),
+            },
+            "_survey_terminations": aggregate["survey_terminations"],
         })
-        device = _device_key(attempt.entry_device)
-        row["hits"]["total"] += 1
-        row["hits"][device] += 1
-        if attempt.status == SurveyAttempt.Status.COMPLETED:
-            row["completes"]["total"] += 1
-            row["completes"][device] += 1
-        elif attempt.status == SurveyAttempt.Status.TERMINATED and attempt.status_source != "local_prescreener":
-            row["_survey_terminations"] += 1
-
-    rows = list(grouped.values())
-    if search:
-        needle = search.casefold()
-        rows = [
-            row for row in rows
-            if any(needle in str(row[field]).casefold() for field in (
-                "user_name", "username", "user_email", "branch", "sub_branch", "shift"
-            ))
-        ]
     rows.sort(key=lambda row: (row["user_name"].casefold(), row["user_id"]))
     rows.sort(key=lambda row: row["date"], reverse=True)
 

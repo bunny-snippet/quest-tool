@@ -489,7 +489,15 @@ class SurveyAttempt(models.Model):
 
     class Meta:
         ordering = ["-initiated_at"]
-        indexes = [models.Index(fields=["survey", "user_id", "-initiated_at"])]
+        indexes = [
+            models.Index(fields=["survey", "user_id", "-initiated_at"]),
+            models.Index(fields=["-initiated_at"], name="attempt_init_idx"),
+            models.Index(fields=["status", "-initiated_at"], name="attempt_status_init_idx"),
+            models.Index(fields=["platform_user", "-initiated_at"], name="attempt_user_init_idx"),
+            models.Index(fields=["platform_user", "status", "-initiated_at"], name="attempt_user_status_idx"),
+            models.Index(fields=["survey", "status"], name="attempt_survey_status_idx"),
+            models.Index(fields=["status", "-callback_at"], name="attempt_status_cb_idx"),
+        ]
 
     def __str__(self):
         return f"{self.rid} · {self.pid} · {self.survey.source_id} · {self.user_id}"

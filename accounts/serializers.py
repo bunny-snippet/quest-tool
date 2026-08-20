@@ -37,7 +37,11 @@ class RoleSerializer(serializers.ModelSerializer):
         read_only_fields = ["is_system", "created_at", "updated_at"]
 
     def get_effective_permission_codes(self, obj) -> list[str]:
-        return list(obj.function_assignments.filter(allowed=True, function__is_active=True).values_list("function__code", flat=True))
+        return [
+            assignment.function.code
+            for assignment in obj.function_assignments.all()
+            if assignment.allowed and assignment.function.is_active
+        ]
 
     def validate_permission_codes(self, codes):
         codes = list(dict.fromkeys(codes))
@@ -143,10 +147,18 @@ class UserAccessSerializer(serializers.ModelSerializer):
         }
 
     def get_allowed_overrides(self, obj) -> list[str]:
-        return list(obj.function_overrides.filter(effect=UserFunctionOverride.Effect.ALLOW).values_list("function__code", flat=True))
+        return [
+            override.function.code
+            for override in obj.function_overrides.all()
+            if override.effect == UserFunctionOverride.Effect.ALLOW and override.function.is_active
+        ]
 
     def get_denied_overrides(self, obj) -> list[str]:
-        return list(obj.function_overrides.filter(effect=UserFunctionOverride.Effect.DENY).values_list("function__code", flat=True))
+        return [
+            override.function.code
+            for override in obj.function_overrides.all()
+            if override.effect == UserFunctionOverride.Effect.DENY and override.function.is_active
+        ]
 
     def get_effective_permissions(self, obj) -> list[str]:
         return sorted(effective_permission_codes(obj))

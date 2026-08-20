@@ -17,6 +17,7 @@ from surveys.project_cache import (
     project_filter_metadata,
     project_filtered_count,
 )
+from surveys.report_cache import cached_report_payload
 
 
 @override_settings(CACHE_DEFAULT_TTL_SECONDS=100, CACHE_TTL_JITTER_SECONDS=20)
@@ -174,3 +175,52 @@ class ProjectCacheTests(TestCase):
         self.assertTrue(Survey.objects.filter(pk=second.pk).exists())
         invalidate_project_cache()
         self.assertEqual(project_filtered_count(request, queryset), 2)
+
+
+@override_settings(
+    REPORT_CACHE_RESULT_TTL_SECONDS=30,
+    REPORT_CACHE_TTL_JITTER_SECONDS=0,
+)
+class ReportCacheTests(TestCase):
+    def setUp(self):
+        caches["reports"].clear()
+        self.user = get_user_model().objects.create_superuser(
+            username="report-cache-owner",
+            password="test-password",
+        )
+        self.factory = APIRequestFactory()
+
+    def request(self, query):
+        request = Request(self.factory.get(f"/api/v1/attempts/?{query}"))
+        request.user = self.user
+        return request
+
+    def test_page_navigation_reuses_permission_scoped_aggregate(self):
+        calls = []
+
+        def load():
+            calls.append(True)
+            return {"total": 42}
+
+        first = cached_report_payload(
+            "test-summary", self.request("country=US&page=1"), load
+        )
+        second = cached_report_payload(
+            "test-summary", self.request("country=US&page=8"), load
+        )
+
+        self.assertEqual(first, {"total": 42})
+        self.assertEqual(second, first)
+        self.assertEqual(len(calls), 1)
+
+    def test_filter_values_get_independent_cache_entries(self):
+        calls = []
+
+        def load():
+            calls.append(True)
+            return len(calls)
+
+        us = cached_report_payload("test-summary", self.request("country=US"), load)
+        ca = cached_report_payload("test-summary", self.request("country=CA"), load)
+
+        self.assertEqual((us, ca), (1, 2))

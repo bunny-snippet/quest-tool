@@ -81,7 +81,10 @@ def access_control_page(request):
         "employee_profile__role", "employee_profile__created_by",
         "employee_profile__organization_unit__workspace_owner",
         "employee_profile__organization_unit__parent__parent",
-    ).prefetch_related("function_overrides__function")
+    ).prefetch_related(
+        "function_overrides__function",
+        "employee_profile__role__function_assignments__function",
+    )
     organization_units = OrganizationUnit.objects.filter(
         workspace_owner_id__in=organization_workspace_owner_ids(request.user),
         is_active=True,
@@ -277,7 +280,10 @@ class UserAccessViewSet(viewsets.ModelViewSet):
             "employee_profile__role", "employee_profile__created_by",
             "employee_profile__organization_unit__workspace_owner",
             "employee_profile__organization_unit__parent__parent",
-        ).prefetch_related("function_overrides__function")
+        ).prefetch_related(
+            "function_overrides__function",
+            "employee_profile__role__function_assignments__function",
+        )
         if self.request.user.is_superuser:
             return queryset
         return queryset.filter(id__in=manageable_user_ids(self.request.user), is_superuser=False)

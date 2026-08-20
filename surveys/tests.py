@@ -11,6 +11,7 @@ from xml.etree import ElementTree
 
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
+from django.core.cache import caches
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -1642,6 +1643,7 @@ class StudiesTrackingTests(TestCase):
 
 class TerminationReasonPageTests(TestCase):
     def setUp(self):
+        caches["reports"].clear()
         self.owner = get_user_model().objects.create_superuser(
             username="reason-owner", email="reason-owner@example.test", password="test-password"
         )
@@ -1918,6 +1920,7 @@ class TerminationReasonPageTests(TestCase):
 
 class UserHitsTests(TestCase):
     def setUp(self):
+        caches["reports"].clear()
         self.owner = get_user_model().objects.create_superuser(
             username="hits-owner", email="hits-owner@example.test", password="test-password"
         )
@@ -2053,6 +2056,7 @@ class UserHitsTests(TestCase):
 
 class DashboardAnalyticsTests(TestCase):
     def setUp(self):
+        caches["reports"].clear()
         self.owner = get_user_model().objects.create_superuser(
             username="dashboard-owner", email="dashboard-owner@example.test", password="test-password"
         )

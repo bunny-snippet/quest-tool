@@ -92,6 +92,12 @@ from .serializers import (
 )
 from .pagination import SurveyPagination
 from .project_cache import project_filter_metadata
+from .report_cache import (
+    cached_report_payload,
+    cached_user_metadata,
+    term_filter_metadata,
+    traffic_filter_metadata,
+)
 from prescreener_vault.services import (
     PrescreenerVaultError,
     answers_with_entry_postal_code,
@@ -314,9 +320,10 @@ def _permitted_columns(codes, permissions):
 
 
 def _enforce_query_permissions(request, permission_parameters):
+    codes = effective_permission_codes(request.user)
     for code, parameters in permission_parameters.items():
         if any(request.query_params.get(parameter) not in {None, ""} for parameter in parameters):
-            if not has_function_access(request.user, code):
+            if not request.user.is_superuser and code not in codes:
                 raise PermissionDenied(f"Your account cannot use the {code} filter.")
 
 
@@ -384,35 +391,20 @@ def projects_page(request):
 def studies_page(request):
     codes = effective_permission_codes(request.user)
     user_ids = activity_visible_user_ids(request.user)
-    hierarchy_options = user_hit_filter_options(request.user)
     visible_attempts = SurveyAttempt.objects.all()
     if not request.user.is_superuser:
         visible_attempts = visible_attempts.filter(platform_user_id__in=user_ids)
     visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
-    countries = list(
-        visible_surveys.exclude(country_code="")
-        .values("country_code", "country")
-        .distinct().order_by("country_code")
-    )
-    study_clients = list(
-        visible_attempts.filter(survey__client__isnull=False)
-        .values("survey__client_id", "survey__client__name")
-        .distinct().order_by("survey__client__name")
-    )
-    study_buyers = list(
-        visible_attempts.exclude(survey__buyer_id="")
-        .values("survey__buyer_id", "survey__client_id")
-        .distinct().order_by("survey__buyer_id")
-    )
+    metadata = traffic_filter_metadata(request.user, visible_attempts, visible_surveys)
     return render(request, "surveys/studies.html", {
         "active_page": "studies",
-        "tracked_users": hierarchy_options["users"],
-        "study_branches": hierarchy_options["branches"],
-        "study_sub_branches": hierarchy_options["sub_branches"],
-        "study_shifts": hierarchy_options["shifts"],
-        "study_countries": countries,
-        "study_clients": study_clients,
-        "study_buyers": study_buyers,
+        "tracked_users": metadata["users"],
+        "study_branches": metadata["branches"],
+        "study_sub_branches": metadata["sub_branches"],
+        "study_shifts": metadata["shifts"],
+        "study_countries": metadata["countries"],
+        "study_clients": metadata["clients"],
+        "study_buyers": metadata["buyers"],
         "attempt_statuses": [
             ("initiated,redirected", "Initiated"),
             (SurveyAttempt.Status.COMPLETED, "Completed"),
@@ -434,6 +426,11 @@ def studies_page(request):
 @function_permission_required("user_hits.view")
 def user_hits_page(request):
     codes = effective_permission_codes(request.user)
+    filter_options = cached_user_metadata(
+        "user-hit-filters",
+        request.user,
+        lambda: user_hit_filter_options(request.user),
+    )
     return render(request, "surveys/user_hits.html", {
         "active_page": "user-hits",
         "hit_filters": _component_access(codes, USER_HIT_FILTER_PERMISSIONS),
@@ -442,7 +439,7 @@ def user_hits_page(request):
         "hit_cards": _permitted_columns(codes, USER_HIT_CARD_PERMISSIONS),
         "can_change_hit_page_size": "user_hits.control.page_size" in codes,
         "can_paginate_hits": "user_hits.control.pagination" in codes,
-        **user_hit_filter_options(request.user),
+        **filter_options,
     })
 
 
@@ -478,7 +475,11 @@ def prescreener_data_page(request):
                 base.prefetch_related("question_answers"), selected
             )
             summary = vault_filtered_summary(selected)
-            page_obj = Paginator(queryset.order_by("-submitted_at"), 20).get_page(request.GET.get("page", 1))
+            paginator = Paginator(queryset.order_by("-submitted_at"), 20)
+            # The cached summary already contains the exact filtered total, so
+            # avoid a second COUNT against the isolated vault database.
+            paginator.__dict__["count"] = int(summary["total"])
+            page_obj = paginator.get_page(request.GET.get("page", 1))
         except (DatabaseError, PrescreenerVaultError) as exc:
             logger.exception("Unable to read the pre-screener vault")
             vault_error = f"Vault data is temporarily unavailable: {exc}"
@@ -744,17 +745,22 @@ def termination_reasons_page(request):
         raise PermissionDenied("Your account cannot open outcome details.")
 
     base_queryset = _term_report_base_queryset()
-    filter_options = _term_report_options(base_queryset, request.user)
+    filter_options = term_filter_metadata(request.user, base_queryset)
 
-    summary = queryset.aggregate(
-        total=Count("id"),
-        terminated=Count("id", filter=Q(status=SurveyAttempt.Status.TERMINATED)),
-        quota=Count("id", filter=Q(status=SurveyAttempt.Status.OVER_QUOTA)),
-        quality=Count("id", filter=Q(status=SurveyAttempt.Status.QUALITY_TERMINATED)),
+    summary = cached_report_payload(
+        "term-summary",
+        request,
+        lambda: queryset.aggregate(
+            total=Count("id"),
+            terminated=Count("id", filter=Q(status=SurveyAttempt.Status.TERMINATED)),
+            quota=Count("id", filter=Q(status=SurveyAttempt.Status.OVER_QUOTA)),
+            quality=Count("id", filter=Q(status=SurveyAttempt.Status.QUALITY_TERMINATED)),
+        ),
+        neutral_parameters=("page", "detail", "rid", "format", "ordering"),
     )
-    page_obj = Paginator(queryset.order_by("-callback_at", "-initiated_at"), 20).get_page(
-        request.GET.get("page", 1)
-    )
+    paginator = Paginator(queryset.order_by("-callback_at", "-initiated_at"), 20)
+    paginator.__dict__["count"] = int(summary["total"])
+    page_obj = paginator.get_page(request.GET.get("page", 1))
     for row in page_obj.object_list:
         row.reason_outcome = provider_outcome(row)
         row.reason_status_label = UNSUCCESSFUL_STATUS_LABELS.get(row.status, row.get_status_display())
@@ -2446,7 +2452,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             effective_permission_codes(self.request.user), STUDY_CARD_PERMISSIONS
         )
         visible = lambda card, value: value if card_access[card] else None
-        return {
+        response_summary = {
             "total": visible("total", summary["total"]),
             "initiated": visible("initiated", summary["initiated"]),
             "completed": visible("completed", completed),
@@ -2471,18 +2477,26 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
                 "unclassified": max(0, completed - classified),
             },
         }
+        return response_summary, int(summary["total"])
 
     @extend_schema(tags=["Survey attempts"], summary="List visible survey attempts with filter-aware totals", responses={200: SurveyAttemptListResponseSerializer})
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
-        summary = self._filtered_summary(queryset)
+        summary, total_count = cached_report_payload(
+            "traffic-summary",
+            request,
+            lambda: self._filtered_summary(queryset),
+        )
+        # SurveyPagination seeds Django's cached count from this value, so the
+        # aggregate's COUNT is not immediately repeated by the paginator.
+        self.report_cached_count = total_count
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
             response = self.get_paginated_response(serializer.data)
             response.data["summary"] = summary
             return response
-        return Response({"count": queryset.count(), "next": None, "previous": None, "results": self.get_serializer(queryset, many=True).data, "summary": summary})
+        return Response({"count": total_count, "next": None, "previous": None, "results": self.get_serializer(queryset, many=True).data, "summary": summary})
 
     def get_required_function_permission(self):
         return "attempts.export" if self.action == "export" else "attempts.view"
@@ -2606,7 +2620,7 @@ class DashboardAPIView(APIView):
             "finance_range", "finance_client"
         )) and DASHBOARD_GRAPH_FILTER_PERMISSIONS["finance"] not in codes:
             raise PermissionDenied("Your account cannot filter the Finance dashboard graph.")
-        try:
+        def load_dashboard():
             range_window = dashboard_range_window(request.query_params.get("range", "24h"))
             traffic_window = dashboard_range_window(
                 request.query_params.get("traffic_range") or range_window["key"]
@@ -2642,22 +2656,26 @@ class DashboardAPIView(APIView):
             queryset = graph_queryset(range_window)
             traffic_queryset = graph_queryset(traffic_window, traffic_client_id)
             finance_queryset = graph_queryset(finance_window, finance_client_id)
+            return build_dashboard_payload(
+                queryset,
+                request.user,
+                _component_access(codes, DASHBOARD_CARD_PERMISSIONS),
+                _component_access(codes, DASHBOARD_CHART_PERMISSIONS),
+                range_window,
+                traffic_queryset=traffic_queryset,
+                traffic_range_window=traffic_window,
+                traffic_client_id=traffic_client_id,
+                finance_queryset=finance_queryset,
+                finance_range_window=finance_window,
+                finance_client_id=finance_client_id,
+                client_options=client_options,
+            )
+
+        try:
+            payload = cached_report_payload("dashboard", request, load_dashboard)
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        return Response(build_dashboard_payload(
-            queryset,
-            request.user,
-            _component_access(codes, DASHBOARD_CARD_PERMISSIONS),
-            _component_access(codes, DASHBOARD_CHART_PERMISSIONS),
-            range_window,
-            traffic_queryset=traffic_queryset,
-            traffic_range_window=traffic_window,
-            traffic_client_id=traffic_client_id,
-            finance_queryset=finance_queryset,
-            finance_range_window=finance_window,
-            finance_client_id=finance_client_id,
-            client_options=client_options,
-        ))
+        return Response(payload)
 
 
 class UserHitsAPIView(APIView):
@@ -2695,24 +2713,33 @@ class UserHitsAPIView(APIView):
             "user_hits.filter.shift": ("shift",),
             "user_hits.filter.date": ("from_date", "from_time", "to_date", "to_time"),
         })
-        try:
+        codes = effective_permission_codes(request.user)
+
+        def load_user_hits():
             rows, summary = aggregate_user_hits(request.user, request.query_params)
+            if USER_HIT_CARD_PERMISSIONS["total_hits"] not in codes:
+                summary["hits"]["total"] = None
+            if USER_HIT_CARD_PERMISSIONS["completes"] not in codes:
+                summary["completes"]["total"] = None
+            if USER_HIT_CARD_PERMISSIONS["conversion"] not in codes:
+                summary["conversion_rate"] = None
+            if USER_HIT_CARD_PERMISSIONS["active_users"] not in codes:
+                summary["active_users"] = None
+            if USER_HIT_CARD_PERMISSIONS["devices"] not in codes:
+                for device in ("desktop", "mobile", "tablet", "unclassified"):
+                    summary["completes"][device] = None
+            if USER_HIT_CARD_PERMISSIONS["ir"] not in codes:
+                summary["incidence_rate"] = None
+            return rows, summary
+
+        try:
+            rows, summary = cached_report_payload(
+                "user-hits",
+                request,
+                load_user_hits,
+            )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
-        codes = effective_permission_codes(request.user)
-        if USER_HIT_CARD_PERMISSIONS["total_hits"] not in codes:
-            summary["hits"]["total"] = None
-        if USER_HIT_CARD_PERMISSIONS["completes"] not in codes:
-            summary["completes"]["total"] = None
-        if USER_HIT_CARD_PERMISSIONS["conversion"] not in codes:
-            summary["conversion_rate"] = None
-        if USER_HIT_CARD_PERMISSIONS["active_users"] not in codes:
-            summary["active_users"] = None
-        if USER_HIT_CARD_PERMISSIONS["devices"] not in codes:
-            for device in ("desktop", "mobile", "tablet", "unclassified"):
-                summary["completes"][device] = None
-        if USER_HIT_CARD_PERMISSIONS["ir"] not in codes:
-            summary["incidence_rate"] = None
         paginator = SurveyPagination()
         page = paginator.paginate_queryset(rows, request, view=self)
         response = paginator.get_paginated_response(page)

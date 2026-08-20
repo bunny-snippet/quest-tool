@@ -480,7 +480,9 @@ class ClientViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     destroy=extend_schema(tags=["Suppliers & allocations"], summary="Deactivate client integration metadata"),
 )
 class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
-    queryset = ClientIntegration.objects.select_related("client", "created_by").exclude(
+    queryset = ClientIntegration.objects.select_related("client", "created_by").annotate(
+        survey_count_value=Count("surveys")
+    ).exclude(
         client__is_active=False, provider_code__in=("biobrain", "voqall")
     )
     serializer_class = ClientIntegrationSerializer

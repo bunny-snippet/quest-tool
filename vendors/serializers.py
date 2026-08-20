@@ -125,7 +125,7 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
     transaction_result_key = serializers.CharField(required=False, allow_blank=True)
     has_credential = serializers.SerializerMethodField()
     masked_credential = serializers.SerializerMethodField()
-    survey_count = serializers.IntegerField(source="surveys.count", read_only=True)
+    survey_count = serializers.SerializerMethodField()
     profile_reuse_status = serializers.SerializerMethodField()
     profile_reuse_available_country_codes = serializers.SerializerMethodField()
     config = serializers.JSONField(
@@ -168,15 +168,33 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
 
     def get_profile_reuse_status(self, obj) -> dict:
         from prescreener_vault.reuse import profile_reuse_month_status
+        from surveys.report_cache import cached_integration_metadata
 
-        return profile_reuse_month_status(obj)
+        return cached_integration_metadata(
+            "profile-reuse-status",
+            obj,
+            lambda: profile_reuse_month_status(obj),
+        )
+
+    def get_survey_count(self, obj) -> int:
+        """Use the list endpoint's single aggregate instead of one COUNT per card."""
+
+        annotated = getattr(obj, "survey_count_value", None)
+        return int(annotated if annotated is not None else obj.surveys.count())
 
     def get_profile_reuse_available_country_codes(self, obj) -> list[str]:
-        return list(
-            obj.surveys.exclude(country_code="")
-            .order_by("country_code")
-            .values_list("country_code", flat=True)
-            .distinct()[:250]
+        from surveys.report_cache import cached_integration_metadata
+
+        return cached_integration_metadata(
+            "country-codes",
+            obj,
+            lambda: list(
+                obj.surveys.exclude(country_code="")
+                .order_by("country_code")
+                .values_list("country_code", flat=True)
+                .distinct()[:250]
+            ),
+            timeout=600,
         )
 
     def validate(self, attrs):

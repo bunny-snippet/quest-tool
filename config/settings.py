@@ -86,6 +86,7 @@ MIDDLEWARE = [
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
     "django.contrib.auth.middleware.AuthenticationMiddleware",
+    "accounts.request_cache.RequestAccessCacheMiddleware",
     "vendors.middleware.VendorPanelAccessMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
@@ -201,6 +202,10 @@ PROJECT_CACHE_DEFAULT_TTL_SECONDS = max(1, int(os.getenv("PROJECT_CACHE_DEFAULT_
 PROJECT_CACHE_TTL_JITTER_SECONDS = max(0, int(os.getenv("PROJECT_CACHE_TTL_JITTER_SECONDS", "60")))
 PROJECT_CACHE_FILTERS_TTL_SECONDS = max(1, int(os.getenv("PROJECT_CACHE_FILTERS_TTL_SECONDS", "600")))
 PROJECT_CACHE_COUNT_TTL_SECONDS = max(1, int(os.getenv("PROJECT_CACHE_COUNT_TTL_SECONDS", "90")))
+REPORT_CACHE_DEFAULT_TTL_SECONDS = max(1, int(os.getenv("REPORT_CACHE_DEFAULT_TTL_SECONDS", "30")))
+REPORT_CACHE_RESULT_TTL_SECONDS = max(1, int(os.getenv("REPORT_CACHE_RESULT_TTL_SECONDS", "15")))
+REPORT_CACHE_METADATA_TTL_SECONDS = max(1, int(os.getenv("REPORT_CACHE_METADATA_TTL_SECONDS", "600")))
+REPORT_CACHE_TTL_JITTER_SECONDS = max(0, int(os.getenv("REPORT_CACHE_TTL_JITTER_SECONDS", "3")))
 if CACHE_ENABLED:
     CACHES = {
         "default": {
@@ -225,6 +230,17 @@ if CACHE_ENABLED:
                 "max_connections": max(1, int(os.getenv("CACHE_MAX_CONNECTIONS", "100"))),
             },
         },
+        "reports": {
+            "BACKEND": "django.core.cache.backends.redis.RedisCache",
+            "LOCATION": os.getenv("REPORTS_REDIS_CACHE_URL", "redis://127.0.0.1:6379/4"),
+            "TIMEOUT": REPORT_CACHE_DEFAULT_TTL_SECONDS,
+            "KEY_PREFIX": f"{CACHE_KEY_PREFIX}-reports",
+            "OPTIONS": {
+                "socket_connect_timeout": float(os.getenv("CACHE_CONNECT_TIMEOUT_SECONDS", "1")),
+                "socket_timeout": float(os.getenv("CACHE_SOCKET_TIMEOUT_SECONDS", "1")),
+                "max_connections": max(1, int(os.getenv("CACHE_MAX_CONNECTIONS", "100"))),
+            },
+        },
     }
 else:
     CACHES = {
@@ -239,6 +255,12 @@ else:
             "LOCATION": f"{CACHE_KEY_PREFIX}-projects-local",
             "TIMEOUT": PROJECT_CACHE_DEFAULT_TTL_SECONDS,
             "OPTIONS": {"MAX_ENTRIES": 5000},
+        },
+        "reports": {
+            "BACKEND": "django.core.cache.backends.locmem.LocMemCache",
+            "LOCATION": f"{CACHE_KEY_PREFIX}-reports-local",
+            "TIMEOUT": REPORT_CACHE_DEFAULT_TTL_SECONDS,
+            "OPTIONS": {"MAX_ENTRIES": 10000},
         },
     }
 

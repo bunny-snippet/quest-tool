@@ -3,6 +3,7 @@
 from django.db.models import Q
 
 from accounts.models import EmployeeProfile
+from accounts.request_cache import request_cached
 
 
 VENDOR_ACCOUNT_TYPES = {
@@ -90,19 +91,22 @@ def organization_workspace_owner_ids(user) -> set[int]:
 
     if not user or not user.is_authenticated:
         return set()
-    if user.is_superuser:
-        internal_vendor_ids = EmployeeProfile.objects.filter(
+    def load():
+        if user.is_superuser:
+            internal_vendor_ids = EmployeeProfile.objects.filter(
+                account_type=EmployeeProfile.AccountType.INTERNAL_VENDOR,
+                user__is_active=True,
+            ).values_list("user_id", flat=True)
+            return frozenset({user.pk, *internal_vendor_ids})
+        vendor_id = vendor_scope_user_id(user)
+        if vendor_id and EmployeeProfile.objects.filter(
+            user_id=vendor_id,
             account_type=EmployeeProfile.AccountType.INTERNAL_VENDOR,
-            user__is_active=True,
-        ).values_list("user_id", flat=True)
-        return {user.pk, *internal_vendor_ids}
-    vendor_id = vendor_scope_user_id(user)
-    if vendor_id and EmployeeProfile.objects.filter(
-        user_id=vendor_id,
-        account_type=EmployeeProfile.AccountType.INTERNAL_VENDOR,
-    ).exists():
-        return {vendor_id}
-    return set()
+        ).exists():
+            return frozenset({vendor_id})
+        return frozenset()
+
+    return set(request_cached(("organization-workspace-owners", user.pk), load))
 
 
 def organization_unit_descendant_ids(unit, include_self=True) -> set[int]:

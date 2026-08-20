@@ -11,7 +11,7 @@ class Command(BaseCommand):
     help = "Verify the configured Django cache with a short-lived write/read/delete probe."
 
     def handle(self, *args, **options):
-        for alias in ("default", "projects"):
+        for alias in ("default", "projects", "reports"):
             key = f"health:management-command:{alias}"
             value = "ok"
             try:
@@ -29,16 +29,14 @@ class Command(BaseCommand):
             location = settings.CACHES[alias].get("LOCATION", "")
             if location.startswith("redis://") and "@" in location:
                 location = "redis://***@" + location.split("@", 1)[1]
-            ttl = (
-                settings.PROJECT_CACHE_DEFAULT_TTL_SECONDS
-                if alias == "projects"
-                else settings.CACHE_DEFAULT_TTL_SECONDS
-            )
-            jitter = (
-                settings.PROJECT_CACHE_TTL_JITTER_SECONDS
-                if alias == "projects"
-                else settings.CACHE_TTL_JITTER_SECONDS
-            )
+            ttl = {
+                "projects": settings.PROJECT_CACHE_DEFAULT_TTL_SECONDS,
+                "reports": settings.REPORT_CACHE_DEFAULT_TTL_SECONDS,
+            }.get(alias, settings.CACHE_DEFAULT_TTL_SECONDS)
+            jitter = {
+                "projects": settings.PROJECT_CACHE_TTL_JITTER_SECONDS,
+                "reports": settings.REPORT_CACHE_TTL_JITTER_SECONDS,
+            }.get(alias, settings.CACHE_TTL_JITTER_SECONDS)
             self.stdout.write(self.style.SUCCESS(
                 f"Cache healthy. alias={alias} backend={backend} "
                 f"location={location or 'in-process'} default_ttl={ttl}s "
