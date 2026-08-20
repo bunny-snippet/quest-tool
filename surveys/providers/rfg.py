@@ -215,6 +215,96 @@ class ResearchForGoodProvider(SurveyProvider):
 
         return self._command({"command": "livealert/datapoint/1", "name": name})
 
+    @staticmethod
+    def _localized_text(values, preferred_locale, fallback=""):
+        """Return the best available RFG translation without exposing raw IDs.
+
+        RFG datapoints are not guaranteed to contain ``en-US``. Country-local
+        projects can expose only a locale such as ``es-CL``. Prefer the
+        integration locale, then English, then any provider-supplied human
+        translation; metadata fields such as ``disposition`` are ignored.
+        """
+
+        if not isinstance(values, dict):
+            return clean_rfg_display_text(fallback)
+        preferred = str(preferred_locale or "").strip()
+        candidates = [preferred, "en-US"]
+        if preferred and "-" in preferred:
+            language = preferred.split("-", 1)[0].lower()
+            candidates.extend(
+                key for key in values
+                if str(key).lower().startswith(f"{language}-")
+            )
+        candidates.extend(
+            key for key in values
+            if key not in candidates and key != "disposition"
+        )
+        for key in candidates:
+            value = values.get(key)
+            if isinstance(value, str) and value.strip():
+                return clean_rfg_display_text(value)
+        return clean_rfg_display_text(fallback)
+
+    @staticmethod
+    def _range_label(value):
+        minimum, maximum = value.get("min"), value.get("max")
+        if minimum is None and maximum is None:
+            return ""
+        if minimum == maximum:
+            return str(minimum)
+        if minimum is None:
+            return f"Up to {maximum}"
+        if maximum is None:
+            return f"{minimum}+"
+        return f"{minimum}–{maximum}"
+
+    def _readable_targeting_details(self, datapoints, metadata_for, locale):
+        """Decode quota targeting, including derived datapoints hidden from UI."""
+
+        details = []
+        for datapoint in datapoints if isinstance(datapoints, list) else []:
+            if not isinstance(datapoint, dict):
+                continue
+            name = str(datapoint.get("name") or datapoint.get("property") or "Targeting")
+            metadata = metadata_for(name)
+            question = metadata.get("question") if isinstance(metadata.get("question"), dict) else {}
+            display_name = self._localized_text(
+                question,
+                locale,
+                metadata.get("name") or name,
+            )
+            answers = metadata.get("answers") if isinstance(metadata.get("answers"), list) else []
+            values = []
+            for value in datapoint.get("values") or []:
+                if not isinstance(value, dict):
+                    label = str(value)
+                else:
+                    label = self._range_label(value)
+                    choice = value.get("choice")
+                    if not label and choice is not None:
+                        try:
+                            answer = answers[int(choice)]
+                        except (IndexError, TypeError, ValueError):
+                            answer = None
+                        label = self._localized_text(answer, locale, f"Choice {choice}")
+                    if not label:
+                        free_value = value.get(
+                            "value",
+                            value.get(
+                                "text",
+                                value.get("freeList", value.get("freelist")),
+                            ),
+                        )
+                        if free_value not in (None, ""):
+                            label = str(free_value)
+                if label and label not in values:
+                    values.append(label)
+            details.append({
+                "name": display_name or clean_rfg_display_text(name),
+                "values": values or ["Provider-defined segment"],
+            })
+        return details
+
     def create_link(self, source_key):
         """Request the RFG respondent entry base link for one survey."""
 
@@ -247,6 +337,15 @@ class ResearchForGoodProvider(SurveyProvider):
 
         targeting = self.targeting(survey.source_key)
         datapoints = targeting.get("datapoints") if isinstance(targeting.get("datapoints"), list) else []
+        locale = str((self.integration.config or {}).get("locale", "en-US"))
+        metadata_cache = {}
+
+        def metadata_for(name):
+            key = str(name or "")
+            if key not in metadata_cache:
+                metadata_cache[key] = self.datapoint(key)
+            return metadata_cache[key]
+
         age_ranges = []
         gender_choices = []
         for target in datapoints:
@@ -276,14 +375,15 @@ class ResearchForGoodProvider(SurveyProvider):
             initial_dimension = self._profile_dimension(target.get("name"))
             if initial_dimension in {"age", "gender", "postal"}:
                 continue
-            metadata = self.datapoint(target["name"])
+            metadata = metadata_for(target["name"])
             question_type = int(metadata.get("type") or 0)
             if question_type in {13, 15, 16, 17, 18}:
                 continue
-            locale = str((self.integration.config or {}).get("locale", "en-US"))
             question_texts = metadata.get("question") if isinstance(metadata.get("question"), dict) else {}
-            localized_question = clean_rfg_display_text(
-                question_texts.get(locale) or question_texts.get("en-US") or target["name"]
+            localized_question = self._localized_text(
+                question_texts,
+                locale,
+                target["name"],
             )
             answers = metadata.get("answers") if isinstance(metadata.get("answers"), list) else []
             allowed = {int(item["choice"]) for item in target.get("values", []) if isinstance(item, dict) and str(item.get("choice", "")).isdigit()}
@@ -314,9 +414,7 @@ class ResearchForGoodProvider(SurveyProvider):
                     continue
                 options.append({
                     "OptionId": index,
-                    "OptionText": clean_rfg_display_text(
-                        answer.get(locale) or answer.get("en-US") or f"Choice {index}"
-                    ),
+                    "OptionText": self._localized_text(answer, locale, f"Choice {index}"),
                     "Disposition": int(answer.get("disposition") or 0),
                 })
             outbound_property = str(metadata.get("property") or target["name"])
@@ -358,6 +456,12 @@ class ResearchForGoodProvider(SurveyProvider):
                 remaining = 0
             limit_type = str(quota.get("quotaLimitBy") or targeting.get("quotaLimitBy") or "completes")
             key = hashlib.sha256(json.dumps(quota, sort_keys=True, default=str).encode()).hexdigest()
+            quota_datapoints = quota.get("datapoints") or []
+            readable_targeting = self._readable_targeting_details(
+                quota_datapoints,
+                metadata_for,
+                locale,
+            )
             quota_rows.append(SurveyQuota(
                 survey=survey,
                 source_key=key,
@@ -367,8 +471,11 @@ class ResearchForGoodProvider(SurveyProvider):
                 completes=completed,
                 remaining=remaining,
                 status=("Throttled" if quota.get("quotaThrottle") == 1 else "Full" if remaining == 0 else "Open"),
-                targeting={"datapoints": quota.get("datapoints") or []},
-                raw_data=quota,
+                targeting={
+                    "datapoints": quota_datapoints,
+                    "targeting_details": readable_targeting,
+                },
+                raw_data={**quota, "targeting_details": readable_targeting},
             ))
         link = survey.entry_link or self.create_link(survey.source_key)
         now = timezone.now()

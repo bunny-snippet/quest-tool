@@ -426,6 +426,76 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual(payload["scope_label"], "Targeted respondent quota")
         self.assertEqual(payload["targeting_details"], [{"name": "Income", "values": ["Target"]}])
 
+    @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
+    def test_cl_targeting_and_hidden_quota_datapoints_use_localized_labels(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG605150-cl-localized",
+            country_code="CL",
+            status=Survey.Status.LIVE,
+        )
+        provider = ResearchForGoodProvider(self.integration)
+        targeting = {
+            "datapoints": [{
+                "name": "RFG2 SEL_CLASS_CL",
+                "values": [{"choice": 1}, {"choice": 2}],
+            }],
+            "quotas": [{
+                "completesLeft": 12,
+                "datapoints": [{
+                    "name": "Region1CL",
+                    "values": [{"choice": 1}, {"choice": 2}],
+                }],
+            }],
+        }
+        metadata = {
+            "RFG2 SEL_CLASS_CL": {
+                "name": "RFG2 SEL_CLASS_CL",
+                "property": "selClassCL",
+                "type": 0,
+                "question": {"es-CL": "¿A qué grupo pertenece?"},
+                "answers": [
+                    None,
+                    {"es-CL": "Grupo principal", "disposition": 0},
+                    {"es-CL": "Grupo secundario", "disposition": 0},
+                ],
+            },
+            "Region1CL": {
+                "name": "Region1CL",
+                "property": "region1CL",
+                "type": 13,
+                "question": {"es-CL": "¿En qué región vive?"},
+                "answers": [
+                    None,
+                    {"es-CL": "Región Metropolitana", "disposition": 0},
+                    {"es-CL": "Valparaíso", "disposition": 0},
+                ],
+            },
+        }
+        with patch.object(provider, "targeting", return_value=targeting), patch.object(
+            provider,
+            "datapoint",
+            side_effect=lambda name: metadata[name],
+        ), patch.object(
+            provider,
+            "create_link",
+            return_value="https://survey.saysoforgood.com/live/example",
+        ):
+            provider.refresh_details(survey)
+
+        question = survey.targeting_questions.get(key="selClassCL")
+        self.assertEqual(question.text, "¿A qué grupo pertenece?")
+        self.assertEqual(
+            [option["OptionText"] for option in question.options],
+            ["Grupo principal", "Grupo secundario"],
+        )
+        quota_payload = SurveyQuotaSerializer(survey.quotas.get()).data
+        self.assertEqual(quota_payload["targeting_details"], [{
+            "name": "¿En qué región vive?",
+            "values": ["Región Metropolitana", "Valparaíso"],
+        }])
+
     def test_legacy_rfg_markers_are_cleaned_in_detail_api_output(self):
         survey = Survey.objects.create(
             client=self.client_record,
