@@ -64,6 +64,7 @@ from .dashboard import (
 )
 from .excel import ExcelSheet, build_excel_response
 from .integrations import InnovateMRAPIError, InnovateMRClient
+from .identifiers import is_valid_platform_pid
 from .models import CanonicalQuestion, ProviderQuestionMapping, Survey, SurveyAttempt, SyncRun
 from .outcomes import provider_outcome
 from .report_pricing import (
@@ -1520,7 +1521,7 @@ def survey_start(request):
             or len(internal_code) != 14
             or (
                 has_pid_parameter
-                and (not platform_pid.isalnum() or not 6 <= len(platform_pid) <= 9)
+                and not is_valid_platform_pid(platform_pid)
             )
         ):
             return _invalid_survey_link(request)

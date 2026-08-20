@@ -47,7 +47,9 @@
   }
   function generatePlatformPid() {
     const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    const length = 6 + Math.floor(Math.random() * 4);
+    // Keep new PIDs 3-4 characters longer than the old nine-character maximum
+    // and structurally distinct from the ten-character RID.
+    const length = 12 + Math.floor(Math.random() * 2);
     const randomValues = new Uint32Array(length);
     let candidate = '';
     do {

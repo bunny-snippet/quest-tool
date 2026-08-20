@@ -9,7 +9,7 @@ from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 from django.conf import settings
 from django.db import IntegrityError, transaction
 
-from .identifiers import generate_platform_pid
+from .identifiers import generate_platform_pid, is_valid_platform_pid
 from .models import Survey, SurveyAttempt
 
 
@@ -206,9 +206,7 @@ def create_attempt(
 
     client_data = client_data or {}
     requested_pid = str(pid or "").strip()
-    if requested_pid and (
-        not requested_pid.isalnum() or not 6 <= len(requested_pid) <= 9
-    ):
+    if requested_pid and not is_valid_platform_pid(requested_pid):
         raise ValueError("Invalid platform PID.")
     for attempt_number in range(10):
         try:

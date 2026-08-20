@@ -7,7 +7,7 @@ from django.core.validators import MinValueValidator
 from django.db import models, transaction
 from django.utils import timezone
 
-from .identifiers import generate_platform_pid
+from .identifiers import PLATFORM_PID_MAX_LENGTH, generate_platform_pid
 
 
 class LocalIdSequence(models.Model):
@@ -387,13 +387,14 @@ class SurveyAttempt(models.Model):
 
     rid = models.CharField(max_length=10, unique=True, db_index=True)
     pid = models.CharField(
-        max_length=9,
+        max_length=PLATFORM_PID_MAX_LENGTH,
         unique=True,
         db_index=True,
         editable=False,
         default=generate_platform_pid,
         help_text=(
-            "Platform tracking ID. Generated as 6-9 mixed alphanumeric characters; "
+            "Platform tracking ID. Newly generated as 12-13 mixed alphanumeric "
+            "characters; legacy 6-9 character values remain valid; "
             "kept separate from the provider-specific PID parameter."
         ),
     )

@@ -19,6 +19,7 @@ from accounts.models import AccessFunction, EmployeeProfile, Role, UserFunctionO
 from vendors.models import Client, ClientIntegration, OrganizationUnit
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
+from .identifiers import generate_platform_pid, is_valid_platform_pid
 from .models import Survey, SurveyAttempt, SurveyQuota, SyncLease, SyncRun, TargetingQuestion
 from .services import (
     merge_inventory,
@@ -714,6 +715,18 @@ class SurveyFlowTests(TestCase):
         self.assertNotEqual(attempt.pid, attempt.rid)
         self.assertNotEqual(attempt.pid, attempt.prescreener_uid)
         self.assertNotEqual(attempt.rid, attempt.prescreener_uid)
+
+    def test_new_platform_pid_is_twelve_or_thirteen_mixed_characters(self):
+        generated = [generate_platform_pid() for _ in range(50)]
+
+        self.assertTrue(all(len(pid) in {12, 13} for pid in generated))
+        self.assertTrue(all(pid.isalnum() for pid in generated))
+        self.assertTrue(all(any(char.isupper() for char in pid) for pid in generated))
+        self.assertTrue(all(any(char.islower() for char in pid) for pid in generated))
+        self.assertTrue(all(any(char.isdigit() for char in pid) for pid in generated))
+        self.assertTrue(all(is_valid_platform_pid(pid) for pid in generated))
+        self.assertTrue(is_valid_platform_pid("A1bcD2eF3"))
+        self.assertFalse(is_valid_platform_pid("Aa1Bb2Cc3D"))
 
     def test_invalid_platform_pid_never_creates_an_attempt(self):
         response = self.client.get(reverse("survey-start"), {
