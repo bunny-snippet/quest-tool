@@ -4,7 +4,13 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.utils import timezone
 
-from surveys.models import ProfileReuseEvent, Survey, SurveyAttempt, TargetingQuestion
+from surveys.models import (
+    ProfileReuseEvent,
+    ProfileReuseState,
+    Survey,
+    SurveyAttempt,
+    TargetingQuestion,
+)
 from surveys.serializers import SurveyAttemptSerializer
 from surveys.survey_flow import create_attempt
 from vendors.models import Client, ClientIntegration
@@ -71,7 +77,8 @@ class ReusableProfileQueueTests(TestCase):
 
     def candidate(
         self, uid, rid, *, submitted_days=90, usage_count=1,
-        source_client_code=None, last_reused_days=None,
+        source_client_code=None, last_reused_days=None, profile_dimensions=None,
+        postal_code="",
     ):
         return PrescreenerSubmission.objects.using(DATABASE_ALIAS).create(
             uid=uid,
@@ -84,6 +91,8 @@ class ReusableProfileQueueTests(TestCase):
             respondent_age=23,
             respondent_age_group="18-24",
             respondent_gender="male",
+            respondent_postal_code=postal_code,
+            profile_dimensions=profile_dimensions or {},
             usage_count=usage_count,
             last_reused_at=(
                 timezone.now() - timedelta(days=last_reused_days)
@@ -91,6 +100,43 @@ class ReusableProfileQueueTests(TestCase):
             ),
             submitted_at=timezone.now() - timedelta(days=submitted_days),
         )
+
+    def another_survey(self, source_id):
+        survey = Survey.objects.create(
+            integration=self.integration,
+            source_id=source_id,
+            name=f"Reuse survey {source_id}",
+            status=Survey.Status.LIVE,
+            company_name="Reuse client",
+            country="United States",
+            country_code="US",
+            language="English",
+            language_code="EN",
+            entry_link="https://provider.example/start",
+        )
+        age = TargetingQuestion.objects.create(
+            survey=survey, question_id=1, key="AGE", text="What is your age?",
+            question_type="Numeric", category="Demographic",
+        )
+        gender = TargetingQuestion.objects.create(
+            survey=survey, question_id=2, key="GENDER", text="What is your gender?",
+            question_type="Single Punch", category="Demographic",
+            options=[{"OptionId": 1, "OptionText": "Male"}],
+        )
+        answers = {
+            str(age.pk): {"values": ["23"], "upstream_values": ["23"]},
+            str(gender.pk): {"values": ["1"], "upstream_values": ["1"]},
+        }
+        return survey, answers
+
+    def expire_minimum_gap(self, candidate):
+        old = timezone.now() - timedelta(minutes=2)
+        PrescreenerSubmission.objects.using(DATABASE_ALIAS).filter(pk=candidate.pk).update(
+            last_reused_at=old
+        )
+        ProfileReuseState.objects.filter(
+            integration=self.integration, reused_uid=candidate.uid
+        ).update(last_reused_at=old)
 
     def test_monthly_target_is_split_between_first_and_returning_pools(self):
         fresh = self.candidate("Aa11-Bb22-Cc33-Dd44", "OldRid0001", submitted_days=100)
@@ -259,3 +305,105 @@ class ReusableProfileQueueTests(TestCase):
         self.assertEqual(status["baseline_attempts"], 1)
         self.assertEqual(status["target_reuses"], 1)
         self.assertEqual(status["used_reuses"], 1)
+
+    def test_uid_is_permanently_blocked_from_the_same_project(self):
+        self.integration.profile_reuse_first_delay_minutes = 1
+        self.integration.profile_reuse_min_interval_minutes = 1
+        self.integration.profile_reuse_max_uses_per_window = 10
+        self.integration.save(update_fields=[
+            "profile_reuse_first_delay_minutes", "profile_reuse_min_interval_minutes",
+            "profile_reuse_max_uses_per_window",
+        ])
+        candidate = self.candidate("Sa11-Me22-Pr33-Oj44", "OldRid1001")
+        first = create_attempt(self.survey, self.user, "8.8.8.8")
+        self.assertIsNotNone(maybe_assign_reusable_profile(first, self.answers()))
+        self.expire_minimum_gap(candidate)
+
+        duplicate_project = create_attempt(self.survey, self.user, "8.8.8.8")
+        self.assertIsNone(maybe_assign_reusable_profile(duplicate_project, self.answers()))
+        candidate.refresh_from_db(using=DATABASE_ALIAS)
+        self.assertEqual(candidate.usage_count, 2)
+
+    def test_original_registration_project_is_also_permanently_blocked(self):
+        self.integration.profile_reuse_first_delay_minutes = 1
+        self.integration.profile_reuse_min_interval_minutes = 1
+        self.integration.save(update_fields=[
+            "profile_reuse_first_delay_minutes", "profile_reuse_min_interval_minutes",
+        ])
+        candidate = self.candidate("Or11-Ig22-In33-Al44", "OldRid1005")
+        original = create_attempt(self.survey, self.user, "8.8.8.8")
+        SurveyAttempt.objects.filter(pk=original.pk).update(
+            prescreener_uid=candidate.uid,
+            provider_profile_uid=candidate.uid,
+        )
+
+        same_project = create_attempt(self.survey, self.user, "8.8.8.8")
+        self.assertIsNone(maybe_assign_reusable_profile(same_project, self.answers()))
+        candidate.refresh_from_db(using=DATABASE_ALIAS)
+        self.assertEqual(candidate.usage_count, 1)
+
+    def test_uid_can_reuse_on_different_projects_after_configured_gap(self):
+        self.integration.profile_reuse_first_delay_minutes = 1
+        self.integration.profile_reuse_min_interval_minutes = 1
+        self.integration.profile_reuse_max_uses_per_window = 5
+        self.integration.save(update_fields=[
+            "profile_reuse_first_delay_minutes", "profile_reuse_min_interval_minutes",
+            "profile_reuse_max_uses_per_window",
+        ])
+        candidate = self.candidate("Di11-Ff22-Pr33-Oj44", "OldRid1002")
+        first = create_attempt(self.survey, self.user, "8.8.8.8")
+        self.assertIsNotNone(maybe_assign_reusable_profile(first, self.answers()))
+        self.expire_minimum_gap(candidate)
+        second_survey, second_answers = self.another_survey(99103)
+
+        second = create_attempt(second_survey, self.user, "8.8.8.8")
+        event = maybe_assign_reusable_profile(second, second_answers)
+        self.assertEqual(event.reused_uid, candidate.uid)
+        self.assertNotEqual(first.rid, second.rid)
+
+    def test_rolling_window_limit_is_enforced_across_different_projects(self):
+        self.integration.profile_reuse_first_delay_minutes = 1
+        self.integration.profile_reuse_min_interval_minutes = 1
+        self.integration.profile_reuse_max_uses_per_window = 2
+        self.integration.profile_reuse_window_minutes = 1440
+        self.integration.save(update_fields=[
+            "profile_reuse_first_delay_minutes", "profile_reuse_min_interval_minutes",
+            "profile_reuse_max_uses_per_window", "profile_reuse_window_minutes",
+        ])
+        candidate = self.candidate("Wi11-Nd22-Ow33-Li44", "OldRid1003")
+        first = create_attempt(self.survey, self.user, "8.8.8.8")
+        self.assertIsNotNone(maybe_assign_reusable_profile(first, self.answers()))
+        self.expire_minimum_gap(candidate)
+        second_survey, second_answers = self.another_survey(99104)
+        second = create_attempt(second_survey, self.user, "8.8.8.8")
+        self.assertIsNotNone(maybe_assign_reusable_profile(second, second_answers))
+        self.expire_minimum_gap(candidate)
+        third_survey, third_answers = self.another_survey(99105)
+        third = create_attempt(third_survey, self.user, "8.8.8.8")
+
+        self.assertIsNone(maybe_assign_reusable_profile(third, third_answers))
+        self.assertEqual(ProfileReuseEvent.objects.filter(reused_uid=candidate.uid).count(), 2)
+
+    def test_every_mapped_requirement_must_match_or_fresh_uid_is_kept(self):
+        self.integration.profile_reuse_first_delay_minutes = 1
+        self.integration.save(update_fields=["profile_reuse_first_delay_minutes"])
+        postal = TargetingQuestion.objects.create(
+            survey=self.survey, question_id=3, key="ZIP", text="What is your postal code?",
+            question_type="Text", category="Demographic",
+            raw_data={"canonical_key": "postal-code"},
+        )
+        candidate = self.candidate(
+            "Ma11-Tc22-Ha33-Ll44", "OldRid1004", postal_code="3000"
+        )
+        answers = self.answers()
+        answers[str(postal.pk)] = {"values": ["9000"], "upstream_values": ["9000"]}
+        attempt = create_attempt(self.survey, self.user, "8.8.8.8")
+
+        self.assertIsNone(maybe_assign_reusable_profile(attempt, answers))
+        attempt.refresh_from_db()
+        self.assertEqual(attempt.provider_profile_uid, "")
+        PrescreenerSubmission.objects.using(DATABASE_ALIAS).filter(pk=candidate.pk).update(
+            respondent_postal_code="9000"
+        )
+        event = maybe_assign_reusable_profile(attempt, answers)
+        self.assertEqual(event.reused_uid, candidate.uid)
