@@ -164,6 +164,8 @@ STUDY_COLUMN_PERMISSIONS = {
     "status": "studies.column.status", "start": "studies.column.start", "end": "studies.column.end",
 }
 
+STUDY_CLIENT_NAME_PERMISSION = "studies.column.client_name"
+
 STUDY_FILTER_PERMISSIONS = {
     "search": "studies.filter.search", "branch": "studies.filter.branch",
     "sub_branch": "studies.filter.sub_branch", "shift": "studies.filter.shift", "user": "studies.filter.user",
@@ -421,6 +423,7 @@ def studies_page(request):
         "study_filters": _component_access(codes, STUDY_FILTER_PERMISSIONS),
         "study_columns": _permitted_columns(codes, STUDY_COLUMN_PERMISSIONS),
         "study_column_count": max(1, len(_permitted_columns(codes, STUDY_COLUMN_PERMISSIONS))),
+        "can_view_study_client_name": STUDY_CLIENT_NAME_PERMISSION in codes,
         "study_cards": _permitted_columns(codes, STUDY_CARD_PERMISSIONS),
         "can_export": "attempts.export" in codes,
         "can_change_study_page_size": "studies.control.page_size" in codes,
@@ -2804,11 +2807,17 @@ def _attempt_excel_rows(queryset, requesting_user=None):
     """
 
     commercial_admin = can_view_report_commercials(requesting_user)
+    can_view_client_name = has_function_access(
+        requesting_user, STUDY_CLIENT_NAME_PERMISSION
+    )
     permitted = set(_permitted_columns(
         effective_permission_codes(requesting_user), STUDY_COLUMN_PERMISSIONS
     ))
     specs = {
-        "project_id": (["Project id", "Client name"], [19, 21]),
+        "project_id": (
+            ["Project id"] + (["Client name"] if can_view_client_name else []),
+            [19] + ([21] if can_view_client_name else []),
+        ),
         "survey_id": (["Cleint survey id"], [18]),
         "pid": (["PID"], [12]),
         "respondent_id": (["RID"], [14]),
@@ -2844,7 +2853,10 @@ def _attempt_excel_rows(queryset, requesting_user=None):
                 else attempt.get_status_display()
             )
             values_by_column = {
-                "project_id": [survey.local_id, client.name if client else survey.company_name],
+                "project_id": (
+                    [survey.local_id]
+                    + ([client.name if client else survey.company_name] if can_view_client_name else [])
+                ),
                 "survey_id": [survey.source_identifier],
                 "pid": [attempt.pid],
                 "respondent_id": [attempt.rid],

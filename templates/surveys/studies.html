@@ -4,6 +4,7 @@
 {% block header_title %}Traffic Reports{% endblock %}
 {% block content %}
 {{ study_columns|json_script:"studyColumnAccess" }}
+{{ can_view_study_client_name|json_script:"studyClientNameAccess" }}
 <section class="page-intro studies-intro">
   <div>
     <p class="eyebrow">Respondent tracking</p>

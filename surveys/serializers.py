@@ -625,6 +625,18 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
             "is_verified", "created_at", "updated_at",
         ]
 
+    def to_representation(self, instance):
+        """Apply the same component permissions used by Traffic Reports UI/export."""
+
+        data = super().to_representation(instance)
+        request = self.context.get("request")
+        if request and not has_function_access(
+            request.user, "studies.column.client_name"
+        ):
+            data["client_name"] = ""
+            data["company_name"] = ""
+        return data
+
     def get_user_name(self, obj) -> str:
         if not obj.platform_user:
             return "Deleted user"

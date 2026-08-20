@@ -78,6 +78,7 @@ FUNCTION_CATALOG = (
     ("studies.control.page_size", "Change rows per page", "Traffic Reports - Page controls", "Change the number of traffic report rows displayed per page.", TRACKING_ROLES),
     ("studies.control.pagination", "Use pagination", "Traffic Reports - Page controls", "Move between pages of respondent rows.", TRACKING_ROLES),
     ("studies.column.project_id", "Show Project ID column", "Traffic Reports - Table columns", "Display the internal project identifier.", TRACKING_ROLES),
+    ("studies.column.client_name", "Show Client name in Traffic Reports", "Traffic Reports - Table columns", "Display the client name below Project ID in desktop rows, mobile cards, the Traffic Reports API and Excel export.", TRACKING_ROLES),
     ("studies.column.survey_id", "Show Survey ID column", "Traffic Reports - Table columns", "Display the upstream survey identifier.", TRACKING_ROLES),
     ("studies.column.country", "Show Country column", "Traffic Reports - Table columns", "Display the survey country captured through the related project.", TRACKING_ROLES),
     ("studies.column.cpi", "Show snapshot CPI column", "Traffic Reports - Table columns", "Display the CPI frozen when the respondent hit the survey.", TRACKING_ROLES),

@@ -1247,6 +1247,11 @@ class StudiesTrackingTests(TestCase):
         )
         UserFunctionOverride.objects.create(
             user=self.kanik,
+            function=AccessFunction.objects.get(code="attempts.view"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        UserFunctionOverride.objects.create(
+            user=self.kanik,
             function=AccessFunction.objects.get(code="studies.column.ip"),
             effect=UserFunctionOverride.Effect.DENY,
         )
@@ -1255,6 +1260,11 @@ class StudiesTrackingTests(TestCase):
             function=AccessFunction.objects.get(code="studies.column.respondent_id"),
             effect=UserFunctionOverride.Effect.ALLOW,
         )
+        UserFunctionOverride.objects.create(
+            user=self.kanik,
+            function=AccessFunction.objects.get(code="studies.column.client_name"),
+            effect=UserFunctionOverride.Effect.DENY,
+        )
         scoped_api = APIClient()
         scoped_api.force_authenticate(self.kanik)
 
@@ -1262,7 +1272,20 @@ class StudiesTrackingTests(TestCase):
 
         self.assertNotIn("Entry IP", rows[0])
         self.assertNotIn("Exit IP", rows[0])
+        self.assertNotIn("Client name", rows[0])
         self.assertIn("RID", rows[0])
+
+        attempt_list = scoped_api.get(reverse("survey-attempt-list"))
+        self.assertEqual(attempt_list.status_code, 200)
+        self.assertTrue(attempt_list.data["results"])
+        for attempt in attempt_list.data["results"]:
+            self.assertEqual(attempt["client_name"], "")
+            self.assertEqual(attempt["company_name"], "")
+
+        self.client.force_login(self.kanik)
+        page = self.client.get(reverse("traffic-reports"))
+        self.assertEqual(page.status_code, 200)
+        self.assertFalse(page.context["can_view_study_client_name"])
 
     def test_traffic_export_separates_admin_commercials_from_team_lead_cpi(self):
         role = Role.objects.get(slug="team-lead")
