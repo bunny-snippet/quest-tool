@@ -13,27 +13,39 @@ from config.cache_utils import (
 
 
 CACHE_ALIAS = "projects"
-_VERSION_KEY = "projects:version"
+_FILTER_VERSION_KEY = "projects:filters-version"
+_COUNT_VERSION_KEY = "projects:count-version"
 _INVALIDATION_THROTTLE_KEY = "projects:invalidate-throttle"
 
 
-def _version() -> int:
-    return int(safe_cache_get(_VERSION_KEY, 1, alias=CACHE_ALIAS) or 1)
+def _version(key: str) -> int:
+    return int(safe_cache_get(key, 1, alias=CACHE_ALIAS) or 1)
 
 
-def invalidate_project_cache(*, throttle_seconds: int = 0) -> bool:
+def invalidate_project_cache(
+    *,
+    throttle_seconds: int = 0,
+    filters: bool = True,
+    counts: bool = True,
+) -> bool:
     """Invalidate metadata/counts without scanning or flushing Redis DB 3.
 
     High-frequency feeds can request a small throttle window. The first
     process increments the shared version while later callbacks in that window
     reuse it, preventing every five-second Cint delivery from invalidating all
-    user-scoped project metadata. Cache outages fail open and still invalidate.
+    user-scoped project metadata. Filter metadata and filtered counts use
+    independent versions so a busy inventory feed can keep pagination totals
+    fresh without forcing expensive filter-option rebuilds at the same rate.
+    Cache outages fail open and still invalidate.
     """
 
+    if not filters and not counts:
+        return False
     throttle_seconds = max(0, int(throttle_seconds or 0))
     if throttle_seconds:
+        throttle_scope = f"{int(filters)}:{int(counts)}"
         acquired = safe_cache_add(
-            _INVALIDATION_THROTTLE_KEY,
+            f"{_INVALIDATION_THROTTLE_KEY}:{throttle_scope}",
             1,
             timeout=throttle_seconds,
             alias=CACHE_ALIAS,
@@ -41,7 +53,10 @@ def invalidate_project_cache(*, throttle_seconds: int = 0) -> bool:
         if acquired is False:
             return False
 
-    safe_cache_increment(_VERSION_KEY, alias=CACHE_ALIAS)
+    if filters:
+        safe_cache_increment(_FILTER_VERSION_KEY, alias=CACHE_ALIAS)
+    if counts:
+        safe_cache_increment(_COUNT_VERSION_KEY, alias=CACHE_ALIAS)
     return True
 
 
@@ -54,7 +69,7 @@ def project_filter_metadata(
     cpi_field: str = "cpi",
 ) -> dict:
     key = stable_cache_key(
-        f"projects:v{_version()}:filters",
+        f"projects:v{_version(_FILTER_VERSION_KEY)}:filters",
         {
             "user_id": user_id,
             "client_scoped": client_scoped,
@@ -126,7 +141,7 @@ def project_filter_metadata(
 def project_filtered_count(request, queryset) -> int:
     count_neutral_parameters = {"page", "page_size", "ordering", "format"}
     key = stable_cache_key(
-        f"projects:v{_version()}:count",
+        f"projects:v{_version(_COUNT_VERSION_KEY)}:count",
         {
             "user_id": request.user.pk,
             "query": sorted(

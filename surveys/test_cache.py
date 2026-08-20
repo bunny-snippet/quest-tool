@@ -120,9 +120,43 @@ class ProjectCacheTests(TestCase):
 
     def test_high_frequency_invalidations_are_throttled(self):
         self.assertTrue(invalidate_project_cache(throttle_seconds=30))
-        version = caches["projects"].get("projects:version")
+        filter_version = caches["projects"].get("projects:filters-version")
+        count_version = caches["projects"].get("projects:count-version")
         self.assertFalse(invalidate_project_cache(throttle_seconds=30))
-        self.assertEqual(caches["projects"].get("projects:version"), version)
+        self.assertEqual(
+            caches["projects"].get("projects:filters-version"), filter_version
+        )
+        self.assertEqual(
+            caches["projects"].get("projects:count-version"), count_version
+        )
+
+    def test_filter_and_count_versions_can_be_invalidated_independently(self):
+        first_filters = project_filter_metadata(
+            Survey.objects.all(),
+            user_id=self.user.pk,
+            client_scoped=False,
+            include_cpi=True,
+        )
+        request = Request(APIRequestFactory().get("/api/v1/surveys/"))
+        request.user = self.user
+        self.assertEqual(project_filtered_count(request, Survey.objects.all()), 1)
+
+        Survey.objects.create(
+            source_id=104,
+            company_name="RFG",
+            country="India",
+            country_code="IN",
+        )
+        invalidate_project_cache(filters=False, counts=True)
+
+        cached_filters = project_filter_metadata(
+            Survey.objects.all(),
+            user_id=self.user.pk,
+            client_scoped=False,
+            include_cpi=True,
+        )
+        self.assertEqual(cached_filters, first_filters)
+        self.assertEqual(project_filtered_count(request, Survey.objects.all()), 2)
 
     def test_count_cache_does_not_cache_project_rows(self):
         request = Request(APIRequestFactory().get("/api/v1/surveys/?country=US"))

@@ -696,13 +696,28 @@ def process_delivery(delivery_id):
         "error_count", "error", "status", "processed_at",
     ]
     delivery.save(update_fields=update_fields)
-    if counters["created"] or counters["updated"] or counters["closed"]:
+    # Row data is never cached, so feed updates remain immediately visible.
+    # Keep pagination counts relatively fresh when membership changes, while
+    # rebuilding expensive country/client/buyer/CPI filter metadata less often.
+    if counters["created"] or counters["closed"]:
         invalidate_project_cache(
             throttle_seconds=getattr(
                 settings,
                 "CINT_PROJECT_CACHE_INVALIDATION_SECONDS",
                 30,
-            )
+            ),
+            filters=False,
+            counts=True,
+        )
+    if counters["created"] or counters["updated"] or counters["closed"]:
+        invalidate_project_cache(
+            throttle_seconds=getattr(
+                settings,
+                "CINT_PROJECT_FILTER_CACHE_INVALIDATION_SECONDS",
+                300,
+            ),
+            filters=True,
+            counts=False,
         )
     if getattr(settings, "CINT_OPPORTUNITIES_QUEUE_REDIRECTS", False) and (
         counters["created"] or counters["updated"]
