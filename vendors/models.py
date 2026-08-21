@@ -24,6 +24,14 @@ def default_profile_reuse_genders():
     return ["male", "female"]
 
 
+class SecurityPolicyMode(models.TextChoices):
+    """Tri-state override used by inherited respondent-security policies."""
+
+    INHERIT = "inherit", "Inherit"
+    ENABLED = "enabled", "Require Verisoul"
+    DISABLED = "disabled", "Bypass Verisoul"
+
+
 class Client(models.Model):
     """A survey buyer/source account controlled by the platform owner."""
 
@@ -36,6 +44,11 @@ class Client(models.Model):
         help_text="Current survey company label used while legacy inventory is mapped to this client.",
     )
     is_active = models.BooleanField(default=True, db_index=True)
+    verisoul_enabled = models.BooleanField(
+        default=False,
+        db_index=True,
+        help_text="Require a Verisoul risk decision before this client's prescreener is displayed.",
+    )
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
         null=True,
@@ -361,6 +374,12 @@ class OrganizationClientAccess(models.Model):
         default=True,
         help_text="When enabled, a child rule keeps the closest parent rule's CPI range.",
     )
+    verisoul_mode = models.CharField(
+        max_length=12,
+        choices=SecurityPolicyMode.choices,
+        default=SecurityPolicyMode.INHERIT,
+        help_text="Inherit the closest parent/client setting, require Verisoul, or explicitly bypass it.",
+    )
     is_active = models.BooleanField(default=True, db_index=True)
     created_by = models.ForeignKey(
         settings.AUTH_USER_MODEL,
@@ -605,6 +624,12 @@ class VendorClientAllocation(models.Model):
         validators=[MinValueValidator(Decimal("0.00"))],
         help_text="Optional source-CPI ceiling for this supplier/client grant.",
     )
+    verisoul_mode = models.CharField(
+        max_length=12,
+        choices=SecurityPolicyMode.choices,
+        default=SecurityPolicyMode.INHERIT,
+        help_text="Inherit the client setting, require Verisoul, or explicitly bypass it for this supplier.",
+    )
     starts_at = models.DateTimeField(null=True, blank=True)
     ends_at = models.DateTimeField(null=True, blank=True)
     is_active = models.BooleanField(default=True, db_index=True)
@@ -647,6 +672,14 @@ class VendorClientAllocation(models.Model):
             return self.cpi_cut_override_percent
         commercial = getattr(self.vendor, "vendor_commercial_profile", None)
         return commercial.default_cpi_cut_percent if commercial else Decimal("0.00")
+
+    @property
+    def effective_verisoul_enabled(self):
+        if self.verisoul_mode == SecurityPolicyMode.ENABLED:
+            return True
+        if self.verisoul_mode == SecurityPolicyMode.DISABLED:
+            return False
+        return bool(self.client.verisoul_enabled)
 
     def clean(self):
         super().clean()
@@ -804,3 +837,42 @@ class AllocationReservation(models.Model):
 
     def __str__(self):
         return f"{self.attempt.rid} · {self.status}"
+
+
+class VerisoulAssessment(models.Model):
+    """One idempotent Verisoul decision and its limited audit snapshot per journey."""
+
+    class Status(models.TextChoices):
+        PENDING = "pending", "Pending"
+        PASSED = "passed", "Passed"
+        FAILED = "failed", "Failed"
+        ERROR = "error", "Error"
+
+    attempt = models.OneToOneField(
+        "surveys.SurveyAttempt",
+        on_delete=models.PROTECT,
+        related_name="verisoul_assessment",
+    )
+    client = models.ForeignKey(Client, on_delete=models.PROTECT, related_name="verisoul_assessments")
+    policy_scope = models.CharField(max_length=24, default="client")
+    policy_scope_id = models.PositiveBigIntegerField(null=True, blank=True)
+    session_id = models.CharField(max_length=160, blank=True, db_index=True)
+    request_id = models.CharField(max_length=160, blank=True, db_index=True)
+    project_id = models.CharField(max_length=160, blank=True)
+    decision = models.CharField(max_length=40, blank=True, db_index=True)
+    account_score = models.DecimalField(max_digits=8, decimal_places=6, null=True, blank=True)
+    status = models.CharField(max_length=12, choices=Status.choices, default=Status.PENDING, db_index=True)
+    reason = models.CharField(max_length=240, blank=True)
+    response_data = models.JSONField(default=dict, blank=True)
+    assessed_at = models.DateTimeField(null=True, blank=True, db_index=True)
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["-created_at"]
+        indexes = [
+            models.Index(fields=["client", "status", "-created_at"], name="verisoul_client_status_idx"),
+        ]
+
+    def __str__(self):
+        return f"{self.attempt.rid} · {self.status} · {self.decision or 'pending'}"

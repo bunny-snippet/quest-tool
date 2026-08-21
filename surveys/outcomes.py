@@ -55,6 +55,13 @@ def provider_outcome(attempt):
         )
     else:
         data = {}
+    verisoul = data.get("verisoul") if isinstance(data.get("verisoul"), dict) else None
+    if verisoul:
+        return {
+            "status": _text(verisoul.get("status") or "Security terminated"),
+            "reason": _text(verisoul.get("reason")),
+            "category": "Verisoul security",
+        }
     integration = attempt.survey.integration if attempt.survey.integration_id else None
     provider_code = (integration.provider_code if integration else "innovatemr").lower()
     if provider_code == "rfg":
@@ -80,7 +87,7 @@ def provider_outcome(attempt):
     }
     candidates = [data]
     candidates.extend(
-        value for key in ("transaction", "outcome", "result", "local_country_guard")
+        value for key in ("transaction", "outcome", "result", "local_country_guard", "verisoul")
         if isinstance((value := data.get(key)), dict)
     )
 

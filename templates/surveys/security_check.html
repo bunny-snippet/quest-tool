@@ -1,0 +1,68 @@
+{% extends 'surveys/flow_base.html' %}
+
+{% block title %}Security check{% endblock %}
+{% block body_class %}security-check-body{% endblock %}
+
+{% block extra_head %}
+  <script async src="{{ verisoul_sdk_url }}" verisoul-project-id="{{ verisoul_project_id }}"></script>
+{% endblock %}
+
+{% block content %}
+<main class="security-check-page">
+  <section class="security-check-card" aria-live="polite">
+    <div class="security-orbit" aria-hidden="true"><span></span><i>✓</i></div>
+    <p class="security-eyebrow">SECURE ENTRY</p>
+    <h1>Checking your browser</h1>
+    <p id="security-message">This quick security check protects the survey and usually takes only a few seconds.</p>
+    <div class="security-progress"><span></span></div>
+    <small>RID {{ attempt.rid }}</small>
+  </section>
+  <form hidden>{% csrf_token %}</form>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const endpoint = "{{ security_check_url|escapejs }}";
+  const rid = "{{ attempt.rid|escapejs }}";
+  const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
+  const message = document.getElementById('security-message');
+
+  const postDecision = async (sessionId) => {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf},
+      body: JSON.stringify({rid, session_id: sessionId || ''}),
+    });
+    const payload = await response.json().catch(() => ({}));
+    if (payload.status === 'pending') {
+      await new Promise(resolve => setTimeout(resolve, 700));
+      return postDecision(sessionId);
+    }
+    if (payload.redirect) window.location.replace(payload.redirect);
+    else throw new Error(payload.detail || 'Security verification failed.');
+  };
+
+  const waitForSdk = async () => {
+    for (let i = 0; i < 80; i += 1) {
+      if (window.Verisoul && typeof window.Verisoul.session === 'function') return;
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    throw new Error('Security service did not load.');
+  };
+
+  (async () => {
+    try {
+      await waitForSdk();
+      const session = await window.Verisoul.session();
+      await postDecision(session && session.session_id);
+    } catch (error) {
+      message.textContent = 'We could not verify this browser. Recording the secure outcome…';
+      try { await postDecision(''); } catch (_) { message.textContent = 'Security verification could not be completed.'; }
+    }
+  })();
+})();
+</script>
+{% endblock %}

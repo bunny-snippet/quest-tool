@@ -561,7 +561,7 @@ class ClientSerializer(serializers.ModelSerializer):
     class Meta:
         model = Client
         fields = [
-            "id", "code", "name", "provider_code", "company_name_match", "is_active",
+            "id", "code", "name", "provider_code", "company_name_match", "is_active", "verisoul_enabled",
             "created_by", "created_at", "updated_at", "integrations",
         ]
         read_only_fields = ["created_at", "updated_at"]
@@ -661,7 +661,7 @@ class OrganizationClientAccessSerializer(serializers.ModelSerializer):
         fields = [
             "id", "organization_unit", "workspace_owner", "workspace_owner_name", "unit_name", "unit_type",
             "unit_path", "client", "client_name", "min_cpi", "max_cpi", "inherit_cpi_range",
-            "is_active", "created_by",
+            "verisoul_mode", "is_active", "created_by",
             "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]
@@ -687,6 +687,9 @@ class OrganizationClientAccessSerializer(serializers.ModelSerializer):
             max_cpi=attrs.get("max_cpi", getattr(self.instance, "max_cpi", None)),
             inherit_cpi_range=attrs.get(
                 "inherit_cpi_range", getattr(self.instance, "inherit_cpi_range", True)
+            ),
+            verisoul_mode=attrs.get(
+                "verisoul_mode", getattr(self.instance, "verisoul_mode", "inherit")
             ),
             is_active=attrs.get("is_active", getattr(self.instance, "is_active", True)),
         )
@@ -857,6 +860,7 @@ class VendorClientAllocationSerializer(serializers.ModelSerializer):
     client_name = serializers.CharField(source="client.name", read_only=True)
     account_type = serializers.CharField(source="vendor.employee_profile.account_type", read_only=True)
     effective_cpi_cut_percent = serializers.DecimalField(max_digits=5, decimal_places=2, read_only=True)
+    effective_verisoul_enabled = serializers.BooleanField(read_only=True)
     created_by = serializers.CharField(source="created_by.username", read_only=True, allow_null=True)
     api_key_scopes = serializers.SerializerMethodField()
 
@@ -865,7 +869,7 @@ class VendorClientAllocationSerializer(serializers.ModelSerializer):
         fields = [
             "id", "vendor", "vendor_name", "account_type", "client", "client_name", "cpi_cut_override_percent",
             "effective_cpi_cut_percent", "min_cpi", "max_cpi", "api_key_scopes", "starts_at", "ends_at",
-            "is_active", "created_by",
+            "verisoul_mode", "effective_verisoul_enabled", "is_active", "created_by",
             "created_at", "updated_at",
         ]
         read_only_fields = ["created_at", "updated_at"]

@@ -21,6 +21,7 @@ from .views import (
     termination_reasons_export,
     user_hits_page,
     survey_start,
+    survey_security_check,
     RFGCallbackAPIView,
     rfg_result,
     survey_status,
@@ -38,6 +39,7 @@ router.register("survey-attempts", SurveyAttemptViewSet, basename="survey-attemp
 urlpatterns = [
     path("api/cint/webhook/surveys", cint_opportunities_webhook, name="cint-opportunities-webhook"),
     path("survey/start", survey_start, name="survey-start"),
+    path("survey/security-check", survey_security_check, name="survey-security-check"),
     path("survey/rfg/callback", RFGCallbackAPIView.as_view(), name="rfg-callback"),
     path("survey/rfg/result", rfg_result, name="rfg-result"),
     path("survey", survey_status, name="survey-status"),

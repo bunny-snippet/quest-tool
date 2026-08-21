@@ -102,6 +102,7 @@
         <label><span>CPI cut override (%)</span><input name="client_cpi_cut" type="number" min="0" max="100" step="0.01" placeholder="Use supplier default"></label>
         <label><span>Minimum source CPI ($)</span><input name="client_min_cpi" type="number" min="0" step="0.01" placeholder="No minimum"></label>
         <label><span>Maximum source CPI ($)</span><input name="client_max_cpi" type="number" min="0" step="0.01" placeholder="No maximum"></label>
+        <label class="wide"><span>Verisoul security</span><select name="client_verisoul_mode"><option value="inherit">Inherit client setting</option><option value="enabled">Require Verisoul</option><option value="disabled">Bypass Verisoul</option></select><small>Use an explicit override only when this supplier must differ from the client default.</small></label>
         <label><span>Starts at</span><input name="client_starts_at" type="datetime-local"></label>
         <label><span>Ends at</span><input name="client_ends_at" type="datetime-local"></label>
         <p class="vendor-form-note wide">Each selected client exposes all eligible projects automatically. Use Project access to exclude or restore individual projects.</p>
@@ -154,4 +155,4 @@
   </form>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'vendors/management.js' %}?v=12" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'vendors/management.js' %}?v=13" defer></script>{% endblock %}

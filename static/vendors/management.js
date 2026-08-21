@@ -443,6 +443,7 @@
       field('client_cpi_cut').value = record.cpi_cut_override_percent ?? '';
       field('client_min_cpi').value = record.min_cpi ?? '';
       field('client_max_cpi').value = record.max_cpi ?? '';
+      field('client_verisoul_mode').value = record.verisoul_mode || 'inherit';
       field('client_starts_at').value = toInputDateTime(record.starts_at);
       field('client_ends_at').value = toInputDateTime(record.ends_at);
       field('is_active').checked = record.is_active;
@@ -639,6 +640,7 @@
         cpi_cut_override_percent: field('client_cpi_cut').disabled ? null : nullableNumber(field('client_cpi_cut').value),
         min_cpi: nullableNumber(field('client_min_cpi').value),
         max_cpi: nullableNumber(field('client_max_cpi').value),
+        verisoul_mode: field('client_verisoul_mode').value,
         starts_at: toApiDateTime(field('client_starts_at').value), ends_at: toApiDateTime(field('client_ends_at').value),
         is_active: field('is_active').checked,
       };

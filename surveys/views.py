@@ -21,7 +21,7 @@ from django.core import signing
 from django.db import DatabaseError, transaction
 from django.db.models import Count, IntegerField, Max, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
-from django.http import HttpResponse, HttpResponseRedirect, StreamingHttpResponse
+from django.http import HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
 from django.core.paginator import Paginator
 from django.shortcuts import render
 from django.urls import reverse
@@ -56,8 +56,14 @@ from vendors.services import (
 )
 from vendors.access import is_external_vendor_scope, vendor_scope_user_id
 from vendors.credentials import decrypt_secret
-from vendors.models import VendorAPIKey
+from vendors.models import VerisoulAssessment, VendorAPIKey
 from vendors.security import decode_delivery_token, sign_supplier_callback
+from vendors.verisoul import (
+    VerisoulError,
+    authenticate_verisoul_session,
+    effective_verisoul_policy,
+    verisoul_sdk_url,
+)
 
 from .filters import SurveyAttemptFilter, SurveyFilter
 from .dashboard import (
@@ -1475,6 +1481,141 @@ def _finish_wrong_target_country_attempt(attempt, request, location):
     return locked
 
 
+def _finish_verisoul_attempt(attempt, request, *, reason, decision="", score=None, request_id=""):
+    """Fail closed as S4 when Verisoul does not approve the browser session."""
+
+    now = timezone.now()
+    with transaction.atomic():
+        locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
+        if locked.status != SurveyAttempt.Status.INITIATED:
+            return locked
+        client_data = get_request_client_data(request)
+        locked.submitted_at = now
+        locked.callback_at = now
+        locked.last_callback_at = now
+        locked.callback_ip = get_request_ip(request) or locked.initiation_ip
+        locked.exit_user_agent = client_data.get("user_agent", "")
+        locked.exit_browser = client_data.get("browser", "")
+        locked.exit_device = client_data.get("device", "")
+        locked.exit_os = client_data.get("os", "")
+        locked.exit_client_data = client_data
+        locked.status = SurveyAttempt.Status.QUALITY_TERMINATED
+        locked.status_source = "verisoul_security"
+        locked.loi_seconds = locked.calculate_loi_seconds(now)
+        locked.upstream_transaction_data = {
+            **(locked.upstream_transaction_data or {}),
+            "verisoul": {
+                "status": "Security terminated",
+                "reason": str(reason or "Verisoul verification was not approved.")[:240],
+                "decision": str(decision or "")[:40],
+                "account_score": str(score) if score is not None else "",
+                "request_id": str(request_id or "")[:160],
+            },
+        }
+        locked.save(update_fields=[
+            "submitted_at", "callback_at", "last_callback_at", "callback_ip",
+            "exit_user_agent", "exit_browser", "exit_device", "exit_os", "exit_client_data",
+            "status", "status_source", "loi_seconds", "upstream_transaction_data", "updated_at",
+        ])
+        finalize_attempt_capacity(locked)
+    return locked
+
+
+def _verisoul_status_url(attempt):
+    return f"{reverse('survey-status')}?{urlencode({'status': '4', 'rid': attempt.rid})}"
+
+
+@require_http_methods(["POST"])
+def survey_security_check(request):
+    """Authenticate a Verisoul browser session server-side and return only a route decision."""
+
+    try:
+        payload = json.loads(request.body or b"{}")
+    except (TypeError, ValueError):
+        return JsonResponse({"detail": "Invalid request."}, status=400)
+    rid = str(payload.get("rid") or "").strip()
+    session_id = str(payload.get("session_id") or "").strip()
+    if len(rid) != 10 or not rid.isalnum():
+        return JsonResponse({"detail": "Invalid attempt."}, status=400)
+    attempt = SurveyAttempt.objects.select_related(
+        "survey", "survey__client", "survey__integration", "client", "client_allocation",
+        "platform_user", "platform_user__employee_profile",
+    ).filter(rid=rid).first()
+    if attempt is None or attempt.status != SurveyAttempt.Status.INITIATED:
+        return JsonResponse({"detail": "Invalid or finished attempt."}, status=404)
+    policy = effective_verisoul_policy(attempt)
+    if not policy.enabled:
+        return JsonResponse({"status": "passed", "redirect": f"{reverse('survey-start')}?rid={quote(rid)}"})
+
+    if not session_id:
+        assessment, _ = VerisoulAssessment.objects.get_or_create(
+            attempt=attempt,
+            defaults={"client_id": policy.client_id, "policy_scope": policy.scope, "policy_scope_id": policy.scope_id},
+        )
+        reason = "The browser security session could not be collected."
+        assessment.status = VerisoulAssessment.Status.ERROR
+        assessment.reason = reason
+        assessment.assessed_at = timezone.now()
+        assessment.save(update_fields=["status", "reason", "assessed_at", "updated_at"])
+        _finish_verisoul_attempt(attempt, request, reason=reason)
+        return JsonResponse({"status": "blocked", "redirect": _verisoul_status_url(attempt)})
+
+    now = timezone.now()
+    with transaction.atomic():
+        assessment, created = VerisoulAssessment.objects.select_for_update().get_or_create(
+            attempt=attempt,
+            defaults={
+                "client_id": policy.client_id,
+                "policy_scope": policy.scope,
+                "policy_scope_id": policy.scope_id,
+                "session_id": session_id,
+            },
+        )
+        if assessment.status == VerisoulAssessment.Status.PASSED:
+            return JsonResponse({"status": "passed", "redirect": f"{reverse('survey-start')}?rid={quote(rid)}"})
+        if assessment.status in {VerisoulAssessment.Status.FAILED, VerisoulAssessment.Status.ERROR}:
+            return JsonResponse({"status": "blocked", "redirect": _verisoul_status_url(attempt)})
+        pending_ttl = timedelta(seconds=max(5, int(settings.VERISOUL_PENDING_TTL_SECONDS)))
+        if not created and assessment.session_id and assessment.updated_at >= now - pending_ttl:
+            return JsonResponse({"status": "pending"}, status=202)
+        assessment.session_id = session_id
+        assessment.policy_scope = policy.scope
+        assessment.policy_scope_id = policy.scope_id
+        assessment.save(update_fields=["session_id", "policy_scope", "policy_scope_id", "updated_at"])
+    try:
+        result = authenticate_verisoul_session(session_id=session_id, attempt=attempt)
+    except VerisoulError as exc:
+        reason = str(exc)
+        assessment.status = VerisoulAssessment.Status.ERROR
+        assessment.reason = reason
+        assessment.assessed_at = timezone.now()
+        assessment.save(update_fields=["status", "reason", "assessed_at", "updated_at"])
+        _finish_verisoul_attempt(attempt, request, reason=reason)
+        return JsonResponse({"status": "blocked", "redirect": _verisoul_status_url(attempt)})
+
+    assessment.request_id = result.request_id
+    assessment.project_id = result.project_id
+    assessment.decision = result.decision
+    assessment.account_score = result.account_score
+    assessment.reason = result.reason
+    assessment.response_data = result.response_data
+    assessment.assessed_at = timezone.now()
+    assessment.status = (
+        VerisoulAssessment.Status.PASSED if result.passed else VerisoulAssessment.Status.FAILED
+    )
+    assessment.save(update_fields=[
+        "request_id", "project_id", "decision", "account_score", "reason", "response_data",
+        "assessed_at", "status", "updated_at",
+    ])
+    if result.passed:
+        return JsonResponse({"status": "passed", "redirect": f"{reverse('survey-start')}?rid={quote(rid)}"})
+    _finish_verisoul_attempt(
+        attempt, request, reason=result.reason, decision=result.decision,
+        score=result.account_score, request_id=result.request_id,
+    )
+    return JsonResponse({"status": "blocked", "redirect": _verisoul_status_url(attempt)})
+
+
 def _mark_attempt_redirected(attempt, answers, outbound_url):
     """Atomically claim one initiated attempt for its provider redirect.
 
@@ -1716,7 +1857,8 @@ def survey_start(request):
     if len(rid) != 10 or not rid.isalnum():
         return _invalid_survey_link(request)
     attempt = SurveyAttempt.objects.select_related(
-        "survey", "survey__integration", "platform_user"
+        "survey", "survey__client", "survey__integration", "platform_user",
+        "platform_user__employee_profile", "client", "client_allocation",
     ).filter(rid=rid).first()
     if attempt is None or attempt.platform_user is None or not attempt.platform_user.is_active:
         return _invalid_survey_link(request, status_code=404)
@@ -1744,6 +1886,23 @@ def survey_start(request):
         return HttpResponseRedirect(
             f"{reverse('survey-status')}?{urlencode({'status': '4', 'rid': attempt.rid})}"
         )
+
+    verisoul_policy = effective_verisoul_policy(attempt)
+    if verisoul_policy.enabled and attempt.status == SurveyAttempt.Status.INITIATED:
+        assessment = VerisoulAssessment.objects.filter(attempt=attempt).first()
+        if assessment and assessment.status in {
+            VerisoulAssessment.Status.FAILED, VerisoulAssessment.Status.ERROR,
+        }:
+            return HttpResponseRedirect(_verisoul_status_url(attempt))
+        if not assessment or assessment.status != VerisoulAssessment.Status.PASSED:
+            if request.method == "POST":
+                return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(attempt.rid)}")
+            return render(request, "surveys/security_check.html", {
+                "attempt": attempt,
+                "verisoul_project_id": settings.VERISOUL_PROJECT_ID,
+                "verisoul_sdk_url": verisoul_sdk_url(),
+                "security_check_url": reverse("survey-security-check"),
+            })
 
     if request.method == "POST":
         # A browser retry after a successful submission must not call the

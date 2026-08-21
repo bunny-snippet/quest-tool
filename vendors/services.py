@@ -29,6 +29,7 @@ from .models import (
     AllocationReservation,
     OrganizationClientAccess,
     OrganizationUnit,
+    SecurityPolicyMode,
     VendorClientAllocation,
     VendorAPIKey,
     VendorSurveyAllocation,
@@ -60,6 +61,8 @@ class OrganizationClientPolicy:
     min_cpi: Decimal | None
     max_cpi: Decimal | None
     source_unit_id: int
+    verisoul_enabled: bool
+    verisoul_source_unit_id: int | None
 
 
 def _cpi_in_range(value, minimum, maximum) -> bool:
@@ -220,6 +223,8 @@ def organization_client_policies_for_user(user) -> dict[int, OrganizationClientP
         "min_cpi",
         "max_cpi",
         "inherit_cpi_range",
+        "verisoul_mode",
+        "client__verisoul_enabled",
     )
     rules_by_unit = {}
     for rule in rules:
@@ -229,12 +234,27 @@ def organization_client_policies_for_user(user) -> dict[int, OrganizationClientP
         for rule in rules_by_unit.get(unit_id, []):
             parent_policy = policies.get(rule["client_id"])
             inherit_cpi_range = bool(rule["inherit_cpi_range"] and parent_policy is not None)
+            verisoul_mode = rule["verisoul_mode"]
+            if verisoul_mode == SecurityPolicyMode.ENABLED:
+                verisoul_enabled = True
+                verisoul_source_unit_id = unit_id
+            elif verisoul_mode == SecurityPolicyMode.DISABLED:
+                verisoul_enabled = False
+                verisoul_source_unit_id = unit_id
+            elif parent_policy is not None:
+                verisoul_enabled = parent_policy.verisoul_enabled
+                verisoul_source_unit_id = parent_policy.verisoul_source_unit_id
+            else:
+                verisoul_enabled = bool(rule["client__verisoul_enabled"])
+                verisoul_source_unit_id = None
             policies[rule["client_id"]] = OrganizationClientPolicy(
                 client_id=rule["client_id"],
                 is_active=rule["is_active"],
                 min_cpi=parent_policy.min_cpi if inherit_cpi_range else rule["min_cpi"],
                 max_cpi=parent_policy.max_cpi if inherit_cpi_range else rule["max_cpi"],
                 source_unit_id=unit_id,
+                verisoul_enabled=verisoul_enabled,
+                verisoul_source_unit_id=verisoul_source_unit_id,
             )
     user._organization_client_policies_cache = policies
     return policies
@@ -282,6 +302,8 @@ def scope_surveys_for_user(queryset, user):
             min_cpi=row.min_cpi,
             max_cpi=row.max_cpi,
             source_unit_id=0,
+            verisoul_enabled=row.effective_verisoul_enabled,
+            verisoul_source_unit_id=None,
         )
         for row in client_allocations
     ]
