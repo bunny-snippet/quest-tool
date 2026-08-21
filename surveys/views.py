@@ -136,6 +136,7 @@ from .services import reconcile_attempt_status, replace_survey_quotas, replace_s
 from .survey_flow import (
     attach_global_entry_ip_claim,
     backfill_attempt_entry_audit,
+    build_biobrain_outbound_url,
     build_outbound_url,
     claim_global_entry_ip,
     create_attempt,
@@ -1111,6 +1112,11 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                 else set(allowed_values).intersection(alias_allowed)
             )
         for option in question.options:
+            # Legacy BioBrain rows stored bare OptionIds. Treat them as safe
+            # fallback choices until the localized qualification refresh below
+            # replaces them with `{OptionId, OptionText}` objects.
+            if not isinstance(option, dict):
+                option = {"OptionId": option, "OptionText": str(option)}
             option_id = option.get("OptionId")
             if option.get("ageStart") is not None:
                 label = f"{option.get('ageStart')}–{option.get('ageEnd')}"
@@ -1814,6 +1820,13 @@ def survey_start(request):
             stale = stale or not survey.entry_link or not survey.targeting_questions.filter(
                 raw_data__adapter_version__in=[2, 3]
             ).exists()
+        if provider_code == "biobrain":
+            stale = stale or any(
+                not question.text
+                or str(question.text).startswith("Qualification ")
+                or any(not isinstance(option, dict) for option in (question.options or []))
+                for question in survey.targeting_questions.all()
+            )
         targeting_warning = ""
         if stale:
             try:
@@ -1965,7 +1978,7 @@ def survey_start(request):
             try:
                 if (
                     attempt.survey.integration_id
-                    and attempt.survey.integration.provider_code == "rfg"
+                    and attempt.survey.integration.provider_code in {"rfg", "biobrain"}
                 ):
                     ensure_attempt_prescreener_uid(attempt)
                 provider = (
@@ -2017,11 +2030,24 @@ def survey_start(request):
                     # URL construction may use the vault DB. Keep it outside a
                     # main-DB row lock, then claim the redirect with one short,
                     # conditional UPDATE to avoid MySQL 1205/1213 failures.
-                    outbound_url = (
-                        provider.build_outbound_url(attempt.survey, attempt, answers)
-                        if provider
-                        else build_outbound_url(attempt.survey.entry_link, attempt.rid, answers)
-                    )
+                    if provider:
+                        outbound_url = provider.build_outbound_url(
+                            attempt.survey, attempt, answers
+                        )
+                    elif (
+                        attempt.survey.integration_id
+                        and attempt.survey.integration.provider_code == "biobrain"
+                    ):
+                        outbound_url = build_biobrain_outbound_url(
+                            attempt.survey.entry_link,
+                            attempt.rid,
+                            attempt.provider_profile_uid or attempt.prescreener_uid,
+                            answers,
+                        )
+                    else:
+                        outbound_url = build_outbound_url(
+                            attempt.survey.entry_link, attempt.rid, answers
+                        )
                     if not _mark_attempt_redirected(attempt, answers, outbound_url):
                         return HttpResponseRedirect(
                             f"{reverse('survey-start')}?rid={quote(attempt.rid)}"
@@ -2604,6 +2630,19 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
             and synced_at < timezone.now() - timedelta(seconds=60)
         ):
             stale = True
+        if survey.integration_id and survey.integration.provider_code == "biobrain":
+            if detail_type == "targeting":
+                stale = stale or any(
+                    not question.text
+                    or str(question.text).startswith("Qualification ")
+                    or any(not isinstance(option, dict) for option in (question.options or []))
+                    for question in survey.targeting_questions.all()
+                )
+            else:
+                stale = stale or any(
+                    not isinstance((quota.raw_data or {}).get("targeting_details"), list)
+                    for quota in survey.quotas.all()
+                )
         if stale:
             if survey.integration_id and has_provider(survey.integration.provider_code):
                 get_provider(survey.integration).refresh_details(survey)
