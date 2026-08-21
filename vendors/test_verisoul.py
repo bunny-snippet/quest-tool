@@ -8,7 +8,12 @@ from django.urls import reverse
 from surveys.models import Survey, SurveyAttempt
 
 from .models import Client, SecurityPolicyMode, VendorClientAllocation
-from .verisoul import VerisoulError, authenticate_verisoul_session, effective_verisoul_policy
+from .verisoul import (
+    VerisoulError,
+    authenticate_verisoul_session,
+    effective_verisoul_policy,
+    verisoul_group_identifier,
+)
 
 
 @override_settings(
@@ -58,6 +63,20 @@ class VerisoulPolicyTests(TestCase):
         self.assertTrue(result.passed)
         self.assertEqual(post.call_args.kwargs["headers"]["x-api-key"], "private-test-key")
         self.assertNotIn("private-test-key", str(post.call_args.kwargs["json"]))
+        self.assertEqual(
+            post.call_args.kwargs["json"]["account"]["group"],
+            f"survey_{self.survey.local_id}",
+        )
+        self.assertNotIn("metadata", post.call_args.kwargs["json"]["account"])
+
+    def test_group_identifier_is_stable_per_survey(self):
+        other_attempt = SurveyAttempt(
+            rid="Zy98Xw76Vu", survey=self.survey, platform_user=self.user,
+        )
+        self.assertEqual(
+            verisoul_group_identifier(self.attempt),
+            verisoul_group_identifier(other_attempt),
+        )
 
     @patch("vendors.verisoul.requests.post")
     def test_threshold_boundary_fails_closed(self, post):

@@ -137,6 +137,15 @@ def _safe_error_detail(response) -> str:
     return " ".join(detail.split())[:180]
 
 
+def verisoul_group_identifier(attempt) -> str:
+    """Keep multi-account detection isolated to one survey project."""
+
+    survey = attempt.survey
+    identifier = str(survey.local_id or survey.source_identifier or survey.pk).strip()
+    safe_identifier = "".join(character for character in identifier if character.isalnum() or character in {"-", "_"})
+    return f"survey_{safe_identifier or survey.pk}"[:120]
+
+
 def authenticate_verisoul_session(*, session_id: str, attempt) -> VerisoulDecision:
     """Authenticate one browser session without exposing the API key to the browser."""
 
@@ -147,13 +156,7 @@ def authenticate_verisoul_session(*, session_id: str, attempt) -> VerisoulDecisi
 
     account = {
         "id": str(attempt.pid or attempt.rid),
-        "metadata": {
-            "source": "survey_entry",
-            "rid": attempt.rid,
-            "project_id": attempt.survey.local_id,
-            "provider_survey_id": str(attempt.survey.source_identifier),
-            "client_id": attempt.survey.client_id,
-        },
+        "group": verisoul_group_identifier(attempt),
     }
 
     try:
