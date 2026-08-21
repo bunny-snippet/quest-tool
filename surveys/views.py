@@ -1824,6 +1824,7 @@ def survey_start(request):
             stale = stale or any(
                 not question.text
                 or str(question.text).startswith("Qualification ")
+                or bool(re.fullmatch(r"Q\d+", str(question.key or ""), re.IGNORECASE))
                 or any(not isinstance(option, dict) for option in (question.options or []))
                 for question in survey.targeting_questions.all()
             )
@@ -2635,6 +2636,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
                 stale = stale or any(
                     not question.text
                     or str(question.text).startswith("Qualification ")
+                    or bool(re.fullmatch(r"Q\d+", str(question.key or ""), re.IGNORECASE))
                     or any(not isinstance(option, dict) for option in (question.options or []))
                     for question in survey.targeting_questions.all()
                 )

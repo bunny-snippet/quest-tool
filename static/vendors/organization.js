@@ -84,6 +84,7 @@
     const node = $('#organizationClientRows'); if (!node) return;
     const ownerNames = new Map(state.options.owners.map((owner) => [Number(owner.id), owner.name]));
     const unitsById = new Map(state.units.map((unit) => [Number(unit.id), unit]));
+    const clientsById = new Map(state.clients.map((client) => [Number(client.id), client]));
     const explicitByUnit = new Map();
     state.access.forEach((row) => {
       const unitId = Number(row.organization_unit);
@@ -103,7 +104,19 @@
           row.max_cpi = parentPolicy.row.max_cpi;
           cpiSourceUnit = parentPolicy.cpiSourceUnit || parentPolicy.sourceUnit;
         }
-        inherited.set(Number(row.client), { row, sourceUnit: unit, cpiSourceUnit });
+        const verisoulMode = row.verisoul_mode || 'inherit';
+        let verisoulEnabled = Boolean(clientsById.get(Number(row.client))?.verisoul_enabled);
+        let verisoulSourceUnit = null;
+        if (verisoulMode === 'enabled' || verisoulMode === 'disabled') {
+          verisoulEnabled = verisoulMode === 'enabled';
+          verisoulSourceUnit = unit;
+        } else if (parentPolicy) {
+          verisoulEnabled = parentPolicy.verisoulEnabled;
+          verisoulSourceUnit = parentPolicy.verisoulSourceUnit;
+        }
+        inherited.set(Number(row.client), {
+          row, sourceUnit: unit, cpiSourceUnit, verisoulEnabled, verisoulSourceUnit,
+        });
       });
       effectiveCache.set(Number(unit.id), inherited);
       return inherited;
@@ -113,7 +126,7 @@
       const directIds = new Set((explicitByUnit.get(Number(unit.id)) || []).map((row) => Number(row.client)));
       const rows = [...effectivePolicies(unit).values()].sort((a, b) => a.row.client_name.localeCompare(b.row.client_name));
       if (!rows.length) return '<div class="access-empty">No client inherited or assigned.</div>';
-      return rows.map(({ row, sourceUnit, cpiSourceUnit }) => {
+      return rows.map(({ row, sourceUnit, cpiSourceUnit, verisoulEnabled, verisoulSourceUnit }) => {
         const direct = directIds.has(Number(row.client));
         const inheritedCpi = direct && row.inherit_cpi_range && cpiSourceUnit && Number(cpiSourceUnit.id) !== Number(unit.id);
         const source = direct
@@ -122,7 +135,11 @@
         const editButton = direct
           ? actionButton('client-access', row.id, canManageUnitClients)
           : (canManageUnitClients ? `<button class="unit-action" type="button" data-override-client-access="${unit.id}:${row.client}" data-min-cpi="${escapeHtml(row.min_cpi ?? '')}" data-max-cpi="${escapeHtml(row.max_cpi ?? '')}" data-inherit-cpi="true" data-policy-active="${row.is_active ? 'true' : 'false'}">Override</button>` : '');
-        return `<div class="access-policy ${row.is_active ? '' : 'blocked'}"><div>${accessColumns.has('client') ? `<strong>${escapeHtml(row.client_name)}</strong>` : ''}${accessColumns.has('unit') ? `<small>${escapeHtml(source)}</small>` : ''}</div>${accessColumns.has('cpi') ? `<span class="access-range">${escapeHtml(range(row))}<small>Source CPI</small></span>` : ''}${accessColumns.has('status') ? stateBadge(row.is_active) : ''}${accessColumns.has('actions') ? `<div class="unit-actions">${editButton}${direct && canRemoveUnitClients ? `<button class="unit-action danger" type="button" data-remove-client-access="${row.id}">Remove</button>` : ''}</div>` : ''}</div>`;
+        const verisoulSource = verisoulSourceUnit
+          ? `${Number(verisoulSourceUnit.id) === Number(unit.id) ? 'Override at' : 'Inherited from'} ${verisoulSourceUnit.name}`
+          : 'Client master setting';
+        const security = `<span class="access-security ${verisoulEnabled ? 'on' : 'off'}"><b>Verisoul ${verisoulEnabled ? 'ON' : 'OFF'}</b><small>${escapeHtml(verisoulSource)}</small></span>`;
+        return `<div class="access-policy ${row.is_active ? '' : 'blocked'}"><div>${accessColumns.has('client') ? `<strong>${escapeHtml(row.client_name)}</strong>` : ''}${accessColumns.has('unit') ? `<small>${escapeHtml(source)}</small>` : ''}</div>${accessColumns.has('cpi') ? `<span class="access-range">${escapeHtml(range(row))}<small>Source CPI</small></span>` : ''}${accessColumns.has('status') ? security : ''}${accessColumns.has('status') ? stateBadge(row.is_active) : ''}${accessColumns.has('actions') ? `<div class="unit-actions">${editButton}${direct && canRemoveUnitClients ? `<button class="unit-action danger" type="button" data-remove-client-access="${row.id}">Remove</button>` : ''}</div>` : ''}</div>`;
       }).join('');
     }
     const grouped = new Map();
@@ -143,7 +160,8 @@
         const connectionStatus = item.last_test_status || item.last_sync_status || 'draft';
         return `<a class="integration-chip ${escapeHtml(connectionStatus)}" href="/client-integrations/?client=${client.id}"><span>${escapeHtml(item.name)}</span><small>${escapeHtml(providerName(item.provider_code))} · ${escapeHtml(connectionStatus)}</small></a>`;
       }).join('') : '';
-      return `<article class="client-card"><header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.code)} · ${escapeHtml(providerName(client.provider_code))}</p></div>${stateBadge(client.is_active)}</header>${canViewIntegrations ? `<div class="client-integrations">${integrations || '<small>No integration configured.</small>'}</div>` : ''}<footer><small>${escapeHtml(client.company_name_match || 'No company match')}</small><div class="client-card-actions">${canManageIntegrations ? `<a class="unit-action" href="/client-integrations/?client=${client.id}">Manage integrations</a>` : ''}${actionButton('client', client.id, canManageClients)}</div></footer></article>`;
+      const security = `<span class="client-security-master ${client.verisoul_enabled ? 'on' : 'off'}">Verisoul ${client.verisoul_enabled ? 'ON' : 'OFF'}<small>Master default</small></span>`;
+      return `<article class="client-card"><header><div><h3>${escapeHtml(client.name)}</h3><p>${escapeHtml(client.code)} · ${escapeHtml(providerName(client.provider_code))}</p></div>${stateBadge(client.is_active)}</header>${security}${canViewIntegrations ? `<div class="client-integrations">${integrations || '<small>No integration configured.</small>'}</div>` : ''}<footer><small>${escapeHtml(client.company_name_match || 'No company match')}</small><div class="client-card-actions">${canManageIntegrations ? `<a class="unit-action" href="/client-integrations/?client=${client.id}">Manage integrations</a>` : ''}${actionButton('client', client.id, canManageClients)}</div></footer></article>`;
     }).join('') || '<div class="organization-empty">No clients yet.</div>';
   }
 

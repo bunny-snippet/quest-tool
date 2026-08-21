@@ -95,11 +95,11 @@
       <label><span>Client code</span><input name="code" maxlength="80" required pattern="[a-z0-9-]+"></label>
       <label><span>Provider code</span><input name="provider_code" maxlength="80" value="innovatemr" required></label>
       <label><span>Survey company match</span><input name="company_name_match" maxlength="160" placeholder="Upstream company label"></label>
-    </div><label class="organization-toggle"><input name="verisoul_enabled" type="checkbox"><span>Require Verisoul before prescreener</span><small>All assigned organization units and external suppliers inherit this unless explicitly overridden.</small></label><label class="organization-toggle"><input name="is_active" type="checkbox" checked><span>Active client</span><small>Inactive clients are hidden from every project workspace.</small></label><div class="organization-error" data-client-error hidden></div></div>
+    </div><label class="organization-toggle"><input name="verisoul_enabled" type="checkbox"><span>Verisoul master default</span><small>ON enables this client everywhere it is assigned; OFF disables every inherited location. An explicit Branch/Sub-branch/Shift or supplier override can still differ.</small></label><label class="organization-toggle"><input name="is_active" type="checkbox" checked><span>Active client</span><small>Inactive clients are hidden from every project workspace.</small></label><div class="organization-error" data-client-error hidden></div></div>
     <footer><button class="organization-secondary" type="button" data-close-organization-modal>Cancel</button><button class="primary-button" type="submit"><span data-client-submit>Create client</span></button></footer>
   </form>
 </section>{% endif %}
 
 <div class="organization-toast" data-organization-toast aria-live="polite"></div>
 {% endblock %}
-{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=12" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'vendors/organization.js' %}?v=13" defer></script>{% endblock %}

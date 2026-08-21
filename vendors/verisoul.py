@@ -83,11 +83,17 @@ def effective_verisoul_policy(attempt) -> EffectiveVerisoulPolicy:
     if platform_user is not None:
         policies = organization_client_policies_for_user(platform_user)
         organization_policy = policies.get(client.pk) if policies is not None else None
-        if organization_policy is not None:
+        # An inherited organization policy with no explicit source merely
+        # mirrors the client default. Do not let that cached mirror overwrite
+        # the current client master value (or an explicit supplier override).
+        # Only a real Branch/Sub-branch/Shift ENABLED/DISABLED rule wins here.
+        if (
+            organization_policy is not None
+            and organization_policy.verisoul_source_unit_id is not None
+        ):
             enabled = organization_policy.verisoul_enabled
-            if organization_policy.verisoul_source_unit_id is not None:
-                scope = "organization"
-                scope_id = organization_policy.verisoul_source_unit_id
+            scope = "organization"
+            scope_id = organization_policy.verisoul_source_unit_id
 
     return EffectiveVerisoulPolicy(enabled, client.pk, scope, scope_id)
 

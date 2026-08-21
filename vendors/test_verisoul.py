@@ -5,9 +5,16 @@ from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
 
+from accounts.models import EmployeeProfile
 from surveys.models import Survey, SurveyAttempt
 
-from .models import Client, SecurityPolicyMode, VendorClientAllocation
+from .models import (
+    Client,
+    OrganizationClientAccess,
+    OrganizationUnit,
+    SecurityPolicyMode,
+    VendorClientAllocation,
+)
 from .verisoul import (
     VerisoulError,
     authenticate_verisoul_session,
@@ -48,6 +55,112 @@ class VerisoulPolicyTests(TestCase):
         )
         self.attempt.client_allocation = allocation
         self.assertFalse(effective_verisoul_policy(self.attempt).enabled)
+
+        self.client_record.verisoul_enabled = False
+        self.client_record.save(update_fields=["verisoul_enabled", "updated_at"])
+        allocation.verisoul_mode = SecurityPolicyMode.ENABLED
+        allocation.save(update_fields=["verisoul_mode", "updated_at"])
+        self.assertTrue(effective_verisoul_policy(self.attempt).enabled)
+
+    def _organization_tree(self, prefix="security"):
+        owner = get_user_model().objects.create_superuser(
+            username=f"{prefix}-owner", email=f"{prefix}@example.test", password="test-pass",
+        )
+        branch = OrganizationUnit.objects.create(
+            workspace_owner=owner, unit_type=OrganizationUnit.UnitType.BRANCH,
+            name=f"{prefix} Branch", code=f"{prefix}-branch", created_by=owner,
+        )
+        sub_branch = OrganizationUnit.objects.create(
+            workspace_owner=owner, parent=branch,
+            unit_type=OrganizationUnit.UnitType.SUB_BRANCH,
+            name="Operations", code="operations", created_by=owner,
+        )
+        shift = OrganizationUnit.objects.create(
+            workspace_owner=owner, parent=sub_branch,
+            unit_type=OrganizationUnit.UnitType.SHIFT,
+            name="Morning", code="morning", created_by=owner,
+        )
+        EmployeeProfile.objects.update_or_create(
+            user=self.user, defaults={"organization_unit": shift, "created_by": owner},
+        )
+        self.attempt.platform_user = self.user
+        return branch, sub_branch, shift
+
+    def test_client_master_toggle_is_the_default_for_the_entire_tree(self):
+        branch, _, _ = self._organization_tree("master")
+        OrganizationClientAccess.objects.create(
+            organization_unit=branch, client=self.client_record,
+            verisoul_mode=SecurityPolicyMode.INHERIT,
+        )
+
+        self.assertTrue(effective_verisoul_policy(self.attempt).enabled)
+
+        self.client_record.verisoul_enabled = False
+        self.client_record.save(update_fields=["verisoul_enabled", "updated_at"])
+        self.attempt.client = self.client_record
+        self.attempt.survey.client = self.client_record
+
+        policy = effective_verisoul_policy(self.attempt)
+        self.assertFalse(policy.enabled)
+        self.assertEqual(policy.scope, "client")
+
+    def test_nearest_organization_override_wins_for_only_its_subtree(self):
+        branch, sub_branch, shift = self._organization_tree("nearest")
+        sibling_branch = OrganizationUnit.objects.create(
+            workspace_owner=branch.workspace_owner,
+            unit_type=OrganizationUnit.UnitType.BRANCH,
+            name="Sibling Branch", code="sibling-branch", created_by=branch.workspace_owner,
+        )
+        sibling_sub_branch = OrganizationUnit.objects.create(
+            workspace_owner=branch.workspace_owner, parent=sibling_branch,
+            unit_type=OrganizationUnit.UnitType.SUB_BRANCH,
+            name="Sibling Operations", code="sibling-operations", created_by=branch.workspace_owner,
+        )
+        sibling_shift = OrganizationUnit.objects.create(
+            workspace_owner=branch.workspace_owner, parent=sibling_sub_branch,
+            unit_type=OrganizationUnit.UnitType.SHIFT,
+            name="Sibling Morning", code="sibling-morning", created_by=branch.workspace_owner,
+        )
+        self.client_record.verisoul_enabled = False
+        self.client_record.save(update_fields=["verisoul_enabled", "updated_at"])
+        OrganizationClientAccess.objects.bulk_create([
+            OrganizationClientAccess(
+                organization_unit=branch, client=self.client_record,
+                verisoul_mode=SecurityPolicyMode.ENABLED,
+            ),
+            OrganizationClientAccess(
+                organization_unit=sub_branch, client=self.client_record,
+                verisoul_mode=SecurityPolicyMode.INHERIT,
+            ),
+            OrganizationClientAccess(
+                organization_unit=shift, client=self.client_record,
+                verisoul_mode=SecurityPolicyMode.DISABLED,
+            ),
+            OrganizationClientAccess(
+                organization_unit=sibling_branch, client=self.client_record,
+                verisoul_mode=SecurityPolicyMode.INHERIT,
+            ),
+        ])
+
+        # The closest Shift override disables this single path.
+        self.assertFalse(effective_verisoul_policy(self.attempt).enabled)
+
+        OrganizationClientAccess.objects.filter(
+            organization_unit=shift, client=self.client_record,
+        ).update(verisoul_mode=SecurityPolicyMode.INHERIT)
+        self.user = get_user_model().objects.get(pk=self.user.pk)
+        self.attempt.platform_user = self.user
+        inherited = effective_verisoul_policy(self.attempt)
+        self.assertTrue(inherited.enabled)
+        self.assertEqual(inherited.scope_id, branch.pk)
+
+        # A sibling without an explicit ON remains on the client master OFF.
+        EmployeeProfile.objects.filter(user=self.user).update(organization_unit=sibling_shift)
+        self.user = get_user_model().objects.get(pk=self.user.pk)
+        self.attempt.platform_user = self.user
+        sibling = effective_verisoul_policy(self.attempt)
+        self.assertFalse(sibling.enabled)
+        self.assertEqual(sibling.scope, "client")
 
     @patch("vendors.verisoul.requests.post")
     def test_only_real_below_threshold_passes(self, post):
