@@ -503,6 +503,7 @@ class SurveyAttempt(models.Model):
     class Meta:
         ordering = ["-initiated_at"]
         indexes = [
+            models.Index(fields=["initiation_ip"], name="attempt_entry_ip_idx"),
             models.Index(fields=["survey", "user_id", "-initiated_at"]),
             models.Index(fields=["-initiated_at"], name="attempt_init_idx"),
             models.Index(fields=["status", "-initiated_at"], name="attempt_status_init_idx"),
@@ -523,6 +524,29 @@ class SurveyAttempt(models.Model):
 
     def calculate_loi_seconds(self, ended_at) -> int:
         return max(0, int((ended_at - self.loi_started_at).total_seconds()))
+
+
+class SurveyEntryIPClaim(models.Model):
+    """Permanent, race-safe claim for one public respondent entry IP.
+
+    The unique IP is the actual enforcement primitive. ``first_attempt`` keeps
+    the decision auditable without putting a uniqueness constraint on the
+    historical attempt table (which legitimately also stores rejected tries).
+    """
+
+    ip_address = models.GenericIPAddressField(unique=True)
+    first_attempt = models.OneToOneField(
+        SurveyAttempt,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="entry_ip_claim",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        ordering = ["created_at"]
 
 
 class ProfileReuseMonthlyCounter(models.Model):
