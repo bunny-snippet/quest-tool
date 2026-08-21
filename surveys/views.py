@@ -75,6 +75,7 @@ from .dashboard import (
 from .excel import ExcelSheet, build_excel_response
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .identifiers import is_valid_platform_pid
+from .innovatemr_callbacks import verify_callback_request
 from .models import CanonicalQuestion, ProviderQuestionMapping, Survey, SurveyAttempt, SyncRun
 from .outcomes import provider_outcome
 from .report_pricing import (
@@ -2352,19 +2353,51 @@ def survey_status(request):
     provider_code = (
         attempt.survey.integration.provider_code
         if attempt and attempt.survey.integration_id
-        else ""
+        else "innovatemr" if attempt else ""
     )
     ip_address = get_request_ip(request)
     if attempt:
         canonical_query = set(request.GET.keys()) == {"status", "pid"} and (
             request.GET.get("pid", "").strip() == attempt.pid
         )
+        innovate_callback_verified = False
+        if (
+            provider_code == "innovatemr"
+            and not canonical_query
+            and settings.INNOVATEMR_CALLBACK_HASH_REQUIRED
+        ):
+            verification = verify_callback_request(request)
+            if not verification.valid:
+                logger.warning(
+                    "Rejected InnovateMR callback rid=%s reason=%s ip=%s",
+                    attempt.rid,
+                    verification.error,
+                    ip_address or "unknown",
+                )
+                return render(request, "surveys/flow_error.html", {
+                    "title": "Invalid survey callback",
+                    "message": "This survey result could not be verified and was not recorded.",
+                }, status=403)
+            innovate_callback_verified = True
         with transaction.atomic():
             attempt = SurveyAttempt.objects.select_related(
                 "survey__integration"
             ).select_for_update().get(pk=attempt.pk)
             now = timezone.now()
             exit_client_data = get_request_client_data(request)
+            if innovate_callback_verified:
+                exit_client_data["innovatemr_callback"] = {
+                    "status": status_code,
+                    "termReason": str(
+                        request.GET.get("termReason")
+                        or request.GET.get("term_reason")
+                        or request.GET.get("reason")
+                        or ""
+                    ).strip()[:1000],
+                    "closeQuotaId": str(request.GET.get("closeQuotaId") or "").strip()[:160],
+                    "surveyId": str(request.GET.get("surveyId") or "").strip()[:160],
+                    "verifiedAt": now.isoformat(),
+                }
             first_callback = attempt.callback_at is None
             if attempt.callback_at is None:
                 attempt.callback_at = now
@@ -2376,7 +2409,11 @@ def survey_status(request):
                 attempt.exit_device = exit_client_data.get("device", "")
                 attempt.exit_os = exit_client_data.get("os", "")
                 attempt.exit_client_data = exit_client_data
-                attempt.status_source = "browser_callback"
+                attempt.status_source = (
+                    "innovatemr_signed_redirect"
+                    if innovate_callback_verified
+                    else "browser_callback"
+                )
             update_fields = [
                 "callback_at", "callback_ip", "loi_seconds", "status", "exit_user_agent", "exit_browser",
                 "exit_device", "exit_os", "exit_client_data", "status_source",
@@ -2390,11 +2427,13 @@ def survey_status(request):
                 # The Cint respondent hash is an upstream transport signature.
                 # It is neither shown in the clean result URL nor persisted in
                 # plaintext audit JSON.
-                if "hash" in callback_data:
-                    callback_data["hash"] = "[redacted]"
+                for callback_key in list(callback_data):
+                    if callback_key.casefold() in {"hash", "hashdata"}:
+                        callback_data[callback_key] = "[redacted]"
                 audit_key = (
                     "rfg_browser_return" if provider_code == "rfg"
                     else "cint_browser_return" if provider_code == "cint"
+                    else "innovatemr_browser_return" if innovate_callback_verified
                     else "browser_return"
                 )
                 audit = {
@@ -2407,6 +2446,9 @@ def survey_status(request):
                     )
                 attempt.upstream_transaction_data = audit
                 update_fields.append("upstream_transaction_data")
+            if innovate_callback_verified:
+                attempt.is_verified = True
+                update_fields.append("is_verified")
             attempt.save(update_fields=list(dict.fromkeys(update_fields + ["updated_at"])))
             finalize_attempt_capacity(attempt)
         status_label = attempt.get_status_display()
