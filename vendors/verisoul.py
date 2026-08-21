@@ -120,6 +120,23 @@ def _safe_response_data(payload: dict) -> dict:
     }
 
 
+def _safe_error_detail(response) -> str:
+    """Return a bounded provider message without echoing request credentials."""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        return ""
+    if not isinstance(payload, dict):
+        return ""
+    detail = payload.get("message") or payload.get("detail") or payload.get("error")
+    if isinstance(detail, dict):
+        detail = detail.get("message") or detail.get("detail") or ""
+    if not isinstance(detail, str):
+        return ""
+    return " ".join(detail.split())[:180]
+
+
 def authenticate_verisoul_session(*, session_id: str, attempt) -> VerisoulDecision:
     """Authenticate one browser session without exposing the API key to the browser."""
 
@@ -149,7 +166,9 @@ def authenticate_verisoul_session(*, session_id: str, attempt) -> VerisoulDecisi
     except requests.RequestException as exc:
         raise VerisoulError("Verisoul verification is temporarily unavailable.") from exc
     if response.status_code != 200:
-        raise VerisoulError(f"Verisoul verification failed (HTTP {response.status_code}).")
+        detail = _safe_error_detail(response)
+        suffix = f": {detail}" if detail else "."
+        raise VerisoulError(f"Verisoul verification failed (HTTP {response.status_code}){suffix}")
     try:
         payload = response.json()
     except ValueError as exc:

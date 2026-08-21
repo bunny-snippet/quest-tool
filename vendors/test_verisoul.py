@@ -8,7 +8,7 @@ from django.urls import reverse
 from surveys.models import Survey, SurveyAttempt
 
 from .models import Client, SecurityPolicyMode, VendorClientAllocation
-from .verisoul import authenticate_verisoul_session, effective_verisoul_policy
+from .verisoul import VerisoulError, authenticate_verisoul_session, effective_verisoul_policy
 
 
 @override_settings(
@@ -73,6 +73,18 @@ class VerisoulPolicyTests(TestCase):
         self.assertFalse(result.passed)
 
     @patch("vendors.verisoul.requests.post")
+    def test_provider_error_keeps_safe_diagnostic_message(self, post):
+        response = Mock(status_code=400)
+        response.json.return_value = {"message": "Session ID not found"}
+        post.return_value = response
+
+        with self.assertRaisesMessage(
+            VerisoulError,
+            "Verisoul verification failed (HTTP 400): Session ID not found",
+        ):
+            authenticate_verisoul_session(session_id="session-mismatch", attempt=self.attempt)
+
+    @patch("vendors.verisoul.requests.post")
     def test_public_gate_passes_only_after_backend_authentication(self, post):
         response = Mock(status_code=200)
         response.json.return_value = {
@@ -83,6 +95,8 @@ class VerisoulPolicyTests(TestCase):
 
         gate = self.client.get(reverse("survey-start"), {"rid": self.attempt.rid})
         self.assertContains(gate, 'class="silent-loader"')
+        self.assertContains(gate, 'id="verisoul-sdk"')
+        self.assertContains(gate, "window.Verisoul = new Proxy")
         self.assertNotContains(gate, "Checking your browser")
         self.assertNotContains(gate, f"RID {self.attempt.rid}")
 

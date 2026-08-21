@@ -4,7 +4,39 @@
 {% block body_class %}security-check-body{% endblock %}
 
 {% block extra_head %}
-  <script async src="{{ verisoul_sdk_url }}" verisoul-project-id="{{ verisoul_project_id }}"></script>
+  <script async id="verisoul-sdk" src="{{ verisoul_sdk_url }}" verisoul-project-id="{{ verisoul_project_id }}"></script>
+  <script>
+  (() => {
+    if (window.Verisoul) return;
+    const pending = [];
+    const methods = {};
+    const flush = () => {
+      if (!Object.keys(methods).length) return;
+      pending.splice(0).forEach(([method, args, resolve, reject]) => {
+        try { Promise.resolve(methods[method](...args)).then(resolve, reject); }
+        catch (error) { reject(error); }
+      });
+    };
+    window.Verisoul = new Proxy(methods, {
+      get(target, method) {
+        if (method in target) return target[method];
+        return (...args) => new Promise((resolve, reject) => pending.push([method, args, resolve, reject]));
+      },
+      set(target, method, value) {
+        target[method] = value;
+        flush();
+        return true;
+      },
+    });
+    const sdk = document.getElementById('verisoul-sdk');
+    const timer = window.setInterval(flush, 40);
+    sdk.addEventListener('load', () => { flush(); window.clearInterval(timer); }, {once: true});
+    sdk.addEventListener('error', () => {
+      window.clearInterval(timer);
+      pending.splice(0).forEach(([, , , reject]) => reject(new Error('SDK unavailable')));
+    }, {once: true});
+  })();
+  </script>
 {% endblock %}
 
 {% block content %}
@@ -39,19 +71,24 @@
     else throw new Error(payload.detail || 'Security verification failed.');
   };
 
-  const waitForSdk = async () => {
-    for (let i = 0; i < 80; i += 1) {
-      if (window.Verisoul && typeof window.Verisoul.session === 'function') return;
-      await new Promise(resolve => setTimeout(resolve, 100));
+  const getSession = async () => {
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const session = await window.Verisoul.session();
+        if (session && session.session_id) return session.session_id;
+        throw new Error('Session ID unavailable');
+      } catch (error) {
+        lastError = error;
+        await new Promise(resolve => setTimeout(resolve, 350));
+      }
     }
-    throw new Error('Security service did not load.');
+    throw lastError || new Error('Session ID unavailable');
   };
 
   (async () => {
     try {
-      await waitForSdk();
-      const session = await window.Verisoul.session();
-      await postDecision(session && session.session_id);
+      await postDecision(await getSession());
     } catch (error) {
       try { await postDecision(''); } catch (_) { /* Keep the loader silent. */ }
     }
