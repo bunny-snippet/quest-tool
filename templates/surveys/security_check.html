@@ -1,6 +1,6 @@
 {% extends 'surveys/flow_base.html' %}
 
-{% block title %}Security check{% endblock %}
+{% block title %}Please wait{% endblock %}
 {% block body_class %}security-check-body{% endblock %}
 
 {% block extra_head %}
@@ -9,14 +9,9 @@
 
 {% block content %}
 <main class="security-check-page">
-  <section class="security-check-card" aria-live="polite">
-    <div class="security-orbit" aria-hidden="true"><span></span><i>✓</i></div>
-    <p class="security-eyebrow">SECURE ENTRY</p>
-    <h1>Checking your browser</h1>
-    <p id="security-message">This quick security check protects the survey and usually takes only a few seconds.</p>
-    <div class="security-progress"><span></span></div>
-    <small>RID {{ attempt.rid }}</small>
-  </section>
+  <div class="silent-loader" role="status" aria-label="Loading">
+    <span></span><span></span><span></span>
+  </div>
   <form hidden>{% csrf_token %}</form>
 </main>
 {% endblock %}
@@ -27,7 +22,6 @@
   const endpoint = "{{ security_check_url|escapejs }}";
   const rid = "{{ attempt.rid|escapejs }}";
   const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
-  const message = document.getElementById('security-message');
 
   const postDecision = async (sessionId) => {
     const response = await fetch(endpoint, {
@@ -59,8 +53,7 @@
       const session = await window.Verisoul.session();
       await postDecision(session && session.session_id);
     } catch (error) {
-      message.textContent = 'We could not verify this browser. Recording the secure outcome…';
-      try { await postDecision(''); } catch (_) { message.textContent = 'Security verification could not be completed.'; }
+      try { await postDecision(''); } catch (_) { /* Keep the loader silent. */ }
     }
   })();
 })();

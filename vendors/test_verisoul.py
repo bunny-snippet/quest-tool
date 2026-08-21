@@ -82,7 +82,9 @@ class VerisoulPolicyTests(TestCase):
         post.return_value = response
 
         gate = self.client.get(reverse("survey-start"), {"rid": self.attempt.rid})
-        self.assertContains(gate, "Checking your browser")
+        self.assertContains(gate, 'class="silent-loader"')
+        self.assertNotContains(gate, "Checking your browser")
+        self.assertNotContains(gate, f"RID {self.attempt.rid}")
 
         verified = self.client.post(
             reverse("survey-security-check"),
