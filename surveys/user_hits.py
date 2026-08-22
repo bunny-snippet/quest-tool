@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone as datetime_timezone
 
 from django.contrib.auth import get_user_model
-from django.db.models import Count, Q
-from django.db.models.functions import TruncDate
+from django.db.models import Case, Count, F, IntegerField, Q, When
+from django.db.models.functions import Cast, TruncDate
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_time
 
@@ -224,7 +224,23 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
             )
         }
 
-    attempts = SurveyAttempt.objects.filter(platform_user_id__in=visible_ids)
+    # ``platform_user`` became the authoritative relationship after the first
+    # respondent-flow release.  Older Quest rows can still contain only the
+    # numeric legacy ``user_id`` snapshot.  Include those rows as well so User
+    # Hits does not silently show an empty/incomplete report after an upgrade.
+    # The exact string filter keeps non-numeric upstream respondent IDs out of
+    # the CAST and the real FK always wins when both values are present.
+    legacy_user_ids = [str(user_id) for user_id in visible_ids]
+    attempts = SurveyAttempt.objects.filter(
+        Q(platform_user_id__in=visible_ids)
+        | Q(platform_user_id__isnull=True, user_id__in=legacy_user_ids)
+    ).annotate(
+        report_user_id=Case(
+            When(platform_user_id__isnull=False, then=F("platform_user_id")),
+            default=Cast("user_id", output_field=IntegerField()),
+            output_field=IntegerField(),
+        )
+    )
     if lower:
         attempts = attempts.filter(initiated_at__gte=lower)
     if upper:
@@ -247,7 +263,7 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
     )
     grouped = attempts.annotate(
         local_date=TruncDate("initiated_at", tzinfo=ist_timezone)
-    ).values("platform_user_id", "local_date").annotate(
+    ).values("report_user_id", "local_date").annotate(
         hits_total=Count("id"),
         hits_desktop=Count("id", filter=desktop),
         hits_mobile=Count("id", filter=mobile),
@@ -264,7 +280,7 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
 
     rows = []
     for aggregate in grouped.iterator(chunk_size=2000):
-        user_meta = metadata.get(aggregate["platform_user_id"])
+        user_meta = metadata.get(aggregate["report_user_id"])
         local_date = aggregate["local_date"]
         if not user_meta or not local_date:
             continue

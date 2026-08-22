@@ -235,4 +235,7 @@ def term_filter_metadata(user, base_queryset) -> dict:
             ),
         }
 
-    return cached_user_metadata("term-filters", user, load)
+    # Keep this namespace versioned whenever the visibility/scoping rules change.
+    # That prevents a short-lived permission leak from a payload cached by older
+    # application code during a rolling deploy.
+    return cached_user_metadata("term-filters-v2", user, load)

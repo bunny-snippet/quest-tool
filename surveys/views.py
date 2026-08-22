@@ -307,6 +307,13 @@ PRESCREENER_DATA_COLUMN_PERMISSIONS = {
     "answers": "prescreener_data.column.answers",
 }
 
+PRESCREENER_DATA_CARD_PERMISSIONS = {
+    "records": "prescreener_data.card.records",
+    "countries": "prescreener_data.card.countries",
+    "age_groups": "prescreener_data.card.age_groups",
+    "genders": "prescreener_data.card.genders",
+}
+
 UNSUCCESSFUL_STATUS_LABELS = {
     SurveyAttempt.Status.TERMINATED: "Terminated",
     SurveyAttempt.Status.OVER_QUOTA: "Quota full",
@@ -510,6 +517,7 @@ def prescreener_data_page(request):
         "vault_filters": filters_access,
         "vault_columns": columns,
         "vault_column_count": max(1, len(columns)),
+        "vault_cards": _permitted_columns(codes, PRESCREENER_DATA_CARD_PERMISSIONS),
         "can_export_vault": "prescreener_data.export" in codes,
         "can_paginate_vault": "prescreener_data.control.pagination" in codes,
         "page_query": query_without_page.urlencode(),
@@ -518,13 +526,14 @@ def prescreener_data_page(request):
 
 @function_permission_required("prescreener_data.export")
 def prescreener_data_export(request):
-    """Export the filtered vault as analysis-friendly submission and answer sheets."""
+    """Export only Panelist Data columns granted to the requesting account."""
 
     if not getattr(settings, "PRESCREENER_VAULT_ENABLED", False):
         return HttpResponse("The pre-screener vault is not enabled.", status=503)
 
     codes = effective_permission_codes(request.user)
     filters_access = _component_access(codes, PRESCREENER_DATA_FILTER_PERMISSIONS)
+    permitted = set(_permitted_columns(codes, PRESCREENER_DATA_COLUMN_PERMISSIONS))
     selected = {
         "search": request.GET.get("search", "").strip(),
         "country": request.GET.get("country", "").strip(),
@@ -541,22 +550,44 @@ def prescreener_data_export(request):
     )
     queryset = queryset.prefetch_related("question_answers").order_by("-submitted_at")
 
+    submission_specs = {
+        "uid": (["UID"], [22]),
+        "market": (["Country", "Country code", "Language", "Language code"], [20, 13, 17, 14]),
+        "profile": (
+            ["Age", "Age group", "Gender", "Ethnicity", "ZIP / postal code"],
+            [9, 13, 14, 24, 18],
+        ),
+        "captured": (["Registered at (IST)"], [22]),
+        "usage_count": (["Visits"], [13]),
+    }
+    submission_columns = [
+        name for name in PRESCREENER_DATA_COLUMN_PERMISSIONS
+        if name in permitted and name in submission_specs
+    ]
+
     def submission_rows():
         for submission in queryset.iterator(chunk_size=500):
-            yield [
-                submission.uid, submission.country, submission.country_code,
-                submission.language, submission.language_code, submission.respondent_age,
-                submission.respondent_age_group, submission.respondent_gender,
-                submission.respondent_ethnicity, submission.respondent_postal_code,
-                submission.usage_count, _excel_datetime(submission.submitted_at),
-                _excel_datetime(submission.captured_at),
-            ]
+            values_by_column = {
+                "uid": [submission.uid],
+                "market": [
+                    submission.country, submission.country_code,
+                    submission.language, submission.language_code,
+                ],
+                "profile": [
+                    submission.respondent_age, submission.respondent_age_group,
+                    submission.respondent_gender, submission.respondent_ethnicity,
+                    submission.respondent_postal_code,
+                ],
+                "captured": [_excel_datetime(submission.submitted_at)],
+                "usage_count": [submission.usage_count],
+            }
+            yield [value for name in submission_columns for value in values_by_column[name]]
 
     def answer_rows():
         for submission in queryset.iterator(chunk_size=250):
             for answer in submission.question_answers.all():
-                yield [
-                    submission.uid, answer.position, answer.question_id,
+                yield ([submission.uid] if "uid" in permitted else []) + [
+                    answer.position, answer.question_id,
                     answer.question_key, answer.question_text, answer.question_type,
                     answer.question_category, answer.canonical_attribute,
                     ", ".join(str(value) for value in answer.answer_values),
@@ -564,23 +595,35 @@ def prescreener_data_export(request):
                     ", ".join(str(value) for value in answer.upstream_values),
                 ]
 
+    sheets = []
+    if submission_columns:
+        sheets.append(
+            ExcelSheet(
+                "Submissions",
+                [header for name in submission_columns for header in submission_specs[name][0]],
+                submission_rows(),
+                [width for name in submission_columns for width in submission_specs[name][1]],
+            )
+        )
+    if "answers" in permitted:
+        sheets.append(
+            ExcelSheet(
+                "Answers",
+                (["UID"] if "uid" in permitted else []) + [
+                    "Position", "Question ID", "Question key", "Question", "Question type",
+                    "Category", "Reusable attribute", "Answer values", "Answer labels", "Upstream values",
+                ],
+                answer_rows(),
+                ([22] if "uid" in permitted else []) + [10, 16, 22, 48, 18, 18, 20, 28, 34, 25],
+            )
+        )
+    if not sheets:
+        raise PermissionDenied("No Panelist Data columns are assigned to your account.")
+
     local_now = timezone.localtime()
     return build_excel_response(
         f"panelist-data-{local_now:%Y%m%d-%H%M%S}-IST.xlsx",
-        [
-            ExcelSheet(
-                "Submissions",
-                ["UID", "Country", "Country code", "Language", "Language code", "Age", "Age group", "Gender", "Ethnicity", "ZIP / postal code", "Visits", "Registered at (IST)", "Captured at (IST)"],
-                submission_rows(),
-                [22, 20, 13, 17, 14, 9, 13, 14, 24, 18, 13, 22, 22],
-            ),
-            ExcelSheet(
-                "Answers",
-                ["UID", "Position", "Question ID", "Question key", "Question", "Question type", "Category", "Reusable attribute", "Answer values", "Answer labels", "Upstream values"],
-                answer_rows(),
-                [22, 10, 16, 22, 48, 18, 18, 20, 28, 34, 25],
-            ),
-        ],
+        sheets,
     )
 
 
@@ -663,12 +706,33 @@ def _term_report_filter_state(request, filters_access):
     return selected
 
 
-def _term_report_base_queryset():
-    return SurveyAttempt.objects.select_related(
+def _scope_attempt_queryset_to_user(queryset, user):
+    """Apply the same hierarchy boundary to every attempt-backed report.
+
+    The FK is authoritative for current journeys. Numeric legacy ``user_id``
+    snapshots are included only when their FK is empty so older records remain
+    visible to the correct user without exposing them outside that hierarchy.
+    """
+
+    if user.is_superuser:
+        return queryset
+    visible_user_ids = activity_visible_user_ids(user)
+    return queryset.filter(
+        Q(platform_user_id__in=visible_user_ids)
+        | Q(
+            platform_user_id__isnull=True,
+            user_id__in=[str(user_id) for user_id in visible_user_ids],
+        )
+    )
+
+
+def _term_report_base_queryset(user):
+    queryset = SurveyAttempt.objects.select_related(
         "survey__integration__client",
         "survey__client",
         "platform_user__employee_profile__organization_unit__parent__parent",
     ).filter(status__in=UNSUCCESSFUL_ATTEMPT_STATUSES)
+    return _scope_attempt_queryset_to_user(queryset, user)
 
 
 def _term_report_datetime(value, label):
@@ -684,7 +748,7 @@ def _term_report_datetime(value, label):
 
 def _filtered_term_report_queryset(request, filters_access):
     selected = _term_report_filter_state(request, filters_access)
-    queryset = _term_report_base_queryset()
+    queryset = _term_report_base_queryset(request.user)
     search = selected["search"]
     if search:
         queryset = queryset.filter(
@@ -758,11 +822,11 @@ def termination_reasons_page(request):
     if detail_rid and "termination_reasons.action.details" not in codes:
         raise PermissionDenied("Your account cannot open outcome details.")
 
-    base_queryset = _term_report_base_queryset()
+    base_queryset = _term_report_base_queryset(request.user)
     filter_options = term_filter_metadata(request.user, base_queryset)
 
     summary = cached_report_payload(
-        "term-summary",
+        "term-summary-v2",
         request,
         lambda: queryset.aggregate(
             total=Count("id"),
@@ -785,8 +849,11 @@ def termination_reasons_page(request):
         else:
             detail_attempt = base_queryset.filter(rid=detail_rid).first()
             if detail_attempt is None:
-                non_terminal_attempt = SurveyAttempt.objects.select_related(
+                non_terminal_attempt = _scope_attempt_queryset_to_user(
+                    SurveyAttempt.objects.select_related(
                     "survey__integration__client", "survey__client", "platform_user"
+                    ),
+                    request.user,
                 ).filter(rid=detail_rid).first()
                 if non_terminal_attempt:
                     lookup_error = (
@@ -862,23 +929,30 @@ def termination_reasons_page(request):
 
 @function_permission_required("termination_reasons.export")
 def termination_reasons_export(request):
-    """Export the exact filtered Term Reports result set with both status layers."""
+    """Export filtered Term Reports using the viewer's table-column grants."""
 
     codes = effective_permission_codes(request.user)
     filters_access = _component_access(codes, TERM_REASON_FILTER_PERMISSIONS)
     queryset, _selected = _filtered_term_report_queryset(request, filters_access)
     queryset = queryset.order_by("-callback_at", "-initiated_at")
 
-    headers = [
-        "RID", "PID", "UID", "Project ID", "Client survey ID", "Client", "Provider",
-        "Buyer ID", "Country", "Respondent", "Email", "Entry IP", "Exit IP",
-        "Platform status", "Provider status", "Term reason", "Term category",
-        "Status source", "Started at", "Ended at", "LOI (minutes)",
-    ]
-    widths = [
-        15, 13, 22, 19, 20, 22, 18, 17, 13, 22, 30, 17, 17, 20, 27, 44, 22,
-        20, 24, 24, 15,
-    ]
+    permitted = set(_permitted_columns(codes, TERM_REASON_COLUMN_PERMISSIONS))
+    specs = {
+        "rid": (["RID"], [15]),
+        "survey": (["Project ID", "Client survey ID"], [19, 20]),
+        "client": (["Client", "Provider"], [22, 18]),
+        "respondent": (["Respondent", "Email", "Entry IP", "Exit IP"], [22, 30, 17, 17]),
+        "status": (
+            ["Platform status", "Provider status", "Term reason", "Term category", "Status source"],
+            [20, 27, 44, 22, 20],
+        ),
+        "ended": (["Started at", "Ended at", "LOI (minutes)"], [24, 24, 15]),
+    }
+    ordered_columns = [name for name in TERM_REASON_COLUMN_PERMISSIONS if name in permitted and name in specs]
+    if not ordered_columns:
+        raise PermissionDenied("No Term Report columns are assigned to your account.")
+    headers = [header for name in ordered_columns for header in specs[name][0]]
+    widths = [width for name in ordered_columns for width in specs[name][1]]
 
     def rows():
         for attempt in queryset.iterator(chunk_size=500):
@@ -892,29 +966,27 @@ def termination_reasons_export(request):
                 respondent = attempt.platform_user.get_full_name() or attempt.platform_user.username
                 email = attempt.platform_user.email
             ended_at = attempt.callback_at or attempt.last_callback_at or attempt.initiated_at
-            yield [
-                attempt.rid,
-                attempt.pid,
-                attempt.provider_profile_uid or attempt.prescreener_uid or "",
-                survey.local_id,
-                survey.source_key,
-                client.name if client else survey.company_name,
-                provider,
-                survey.buyer_id,
-                survey.country_code or survey.country,
-                respondent,
-                email,
-                attempt.initiation_ip or "",
-                attempt.callback_ip or "",
-                UNSUCCESSFUL_STATUS_LABELS.get(attempt.status, attempt.get_status_display()),
-                outcome.get("status") or "Not supplied",
-                outcome.get("reason") or "",
-                outcome.get("category") or "",
-                attempt.status_source,
-                _excel_datetime(attempt.initiated_at),
-                _excel_datetime(ended_at),
-                round(attempt.loi_seconds / 60, 2) if attempt.loi_seconds is not None else "",
-            ]
+            values_by_column = {
+                "rid": [attempt.rid],
+                "survey": [survey.local_id, survey.source_key],
+                "client": [client.name if client else survey.company_name, provider],
+                "respondent": [
+                    respondent, email, attempt.initiation_ip or "", attempt.callback_ip or "",
+                ],
+                "status": [
+                    UNSUCCESSFUL_STATUS_LABELS.get(attempt.status, attempt.get_status_display()),
+                    outcome.get("status") or "Not supplied",
+                    outcome.get("reason") or "",
+                    outcome.get("category") or "",
+                    attempt.status_source,
+                ],
+                "ended": [
+                    _excel_datetime(attempt.initiated_at),
+                    _excel_datetime(ended_at),
+                    round(attempt.loi_seconds / 60, 2) if attempt.loi_seconds is not None else "",
+                ],
+            }
+            yield [value for name in ordered_columns for value in values_by_column[name]]
 
     local_now = timezone.localtime()
     return build_excel_response(
@@ -3029,8 +3101,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             ).all()
         if self.request.user.is_superuser:
             return queryset
-        visible_user_ids = activity_visible_user_ids(self.request.user)
-        return queryset.filter(platform_user_id__in=visible_user_ids)
+        return _scope_attempt_queryset_to_user(queryset, self.request.user)
 
     def filter_queryset(self, queryset):
         _enforce_query_permissions(self.request, {
@@ -3253,14 +3324,38 @@ class UserHitsAPIView(APIView):
 
         try:
             rows, summary = cached_report_payload(
-                "user-hits",
+                "user-hits-v2",
                 request,
                 load_user_hits,
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Column permissions are a data boundary, not only a presentation hint.
+        # Project the cached aggregate after loading it so hidden identities,
+        # locations, dates and metrics never reach the browser response.
+        permitted_columns = set(_permitted_columns(codes, USER_HIT_COLUMN_PERMISSIONS))
+        fields_by_column = {
+            "branch": ("branch",),
+            "sub_branch": ("sub_branch",),
+            "shift": ("shift",),
+            "user": ("user_id", "user_name", "username", "user_email"),
+            "date": ("date",),
+            "hits": ("hits",),
+            "completes": ("completes",),
+        }
+        visible_fields = {
+            field
+            for column in permitted_columns
+            for field in fields_by_column.get(column, ())
+        }
+        projected_rows = [
+            {field: value for field, value in row.items() if field in visible_fields}
+            for row in rows
+        ]
+
         paginator = SurveyPagination()
-        page = paginator.paginate_queryset(rows, request, view=self)
+        page = paginator.paginate_queryset(projected_rows, request, view=self)
         response = paginator.get_paginated_response(page)
         response.data["summary"] = summary
         return response

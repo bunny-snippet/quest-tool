@@ -13,6 +13,7 @@ from django.urls import reverse
 from django.utils import timezone
 from xml.etree import ElementTree
 
+from accounts.models import AccessFunction, UserFunctionOverride
 from surveys.models import Survey, SurveyAttempt, TargetingQuestion
 from surveys.survey_flow import create_attempt
 
@@ -243,6 +244,48 @@ class PrescreenerVaultFlowTests(TestCase):
         self.assertIn("Visits", submission_text)
         self.assertIn("What is your age?", answer_text)
         self.assertIn("Male", answer_text)
+
+    def test_panelist_mobile_markup_and_export_follow_column_permissions(self):
+        attempt = self._attempt()
+        self.assertEqual(self._submit(attempt, age="24", gender="1").status_code, 302)
+        viewer = get_user_model().objects.create_user(username="vault-scoped")
+        for code in (
+            "prescreener_data.view",
+            "prescreener_data.export",
+            "prescreener_data.column.usage_count",
+        ):
+            UserFunctionOverride.objects.create(
+                user=viewer,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
+        self.client.force_login(viewer)
+
+        page = self.client.get(reverse("prescreened-data"))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, "Visits")
+        self.assertNotContains(page, attempt.prescreener_uid)
+        self.assertNotContains(page, "Profile details")
+        self.assertNotContains(page, "What is your age?")
+
+        exported = self.client.get(reverse("prescreened-data-export"))
+        content = b"".join(exported.streaming_content)
+        with zipfile.ZipFile(BytesIO(content)) as workbook:
+            self.assertNotIn("xl/worksheets/sheet2.xml", workbook.namelist())
+            submissions = ElementTree.fromstring(workbook.read("xl/worksheets/sheet1.xml"))
+        submission_text = " ".join(submissions.itertext())
+        self.assertIn("Visits", submission_text)
+        self.assertNotIn("UID", submission_text)
+        self.assertNotIn(attempt.prescreener_uid, submission_text)
+
+        UserFunctionOverride.objects.create(
+            user=viewer,
+            function=AccessFunction.objects.get(code="prescreener_data.column.answers"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        answer_page = self.client.get(reverse("prescreened-data"))
+        self.assertContains(answer_page, "What is your age?")
+        self.assertNotContains(answer_page, attempt.prescreener_uid)
 
     def test_rfg_birthday_alias_and_display_date_are_normalized_to_age(self):
         submitted_at = datetime(2026, 8, 13, 12, tzinfo=dt_timezone.utc)

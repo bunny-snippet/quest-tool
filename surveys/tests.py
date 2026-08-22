@@ -2034,6 +2034,44 @@ class TerminationReasonPageTests(TestCase):
         self.assertIn("Pre Survey Termination", rows[1])
         self.assertIn("Off hours", rows[1])
 
+    def test_scoped_viewer_only_sees_own_rows_and_exported_columns(self):
+        viewer = get_user_model().objects.create_user(
+            username="reason-scoped", first_name="Scoped", last_name="Viewer"
+        )
+        own_attempt = SurveyAttempt.objects.create(
+            rid="OwnRe1Ab2C",
+            survey=self.survey,
+            platform_user=viewer,
+            user_id=str(viewer.pk),
+            status=SurveyAttempt.Status.TERMINATED,
+            callback_at=timezone.now(),
+            upstream_transaction_data={"status": "Early termination", "termReason": "Own reason"},
+        )
+        for code in (
+            "termination_reasons.view",
+            "termination_reasons.export",
+            "termination_reasons.column.rid",
+        ):
+            UserFunctionOverride.objects.create(
+                user=viewer,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
+        self.client.force_login(viewer)
+
+        page = self.client.get(reverse("termination-reasons"))
+        self.assertEqual(page.status_code, 200)
+        self.assertContains(page, own_attempt.rid)
+        self.assertNotContains(page, self.attempt.rid)
+        self.assertNotContains(page, self.survey.local_id)
+        self.assertNotContains(page, "Own reason")
+
+        export = self.client.get(reverse("termination-reasons-export"))
+        rows = xlsx_rows(export)
+        self.assertEqual(export.status_code, 200)
+        self.assertEqual(rows[0], ["RID"])
+        self.assertEqual(rows[1], [own_attempt.rid])
+
     def test_rfg_detail_uses_stored_provider_callback_reason(self):
         client = Client.objects.create(code="reason-rfg", name="Research For Good", provider_code="rfg")
         integration = ClientIntegration.objects.create(
@@ -2219,15 +2257,38 @@ class UserHitsTests(TestCase):
         self.assertTrue(all(row["user_id"] == self.kanik.pk for row in response.data["results"]))
         self.assertEqual(response.data["summary"]["hits"]["tablet"], 1)
 
+    def test_legacy_numeric_user_snapshot_is_included_without_platform_fk(self):
+        SurveyAttempt.objects.create(
+            rid="Lg1Aa2Bb3C",
+            survey=self.survey,
+            platform_user=None,
+            user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.COMPLETED,
+            entry_device="Desktop",
+            initiated_at=timezone.make_aware(datetime.combine(self.today, time(11, 0))),
+        )
+
+        response = self.api.get(reverse("user-hits-api"), {
+            "user": self.kanik.pk,
+            "from_date": self.today.isoformat(),
+            "to_date": self.today.isoformat(),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["hits"]["total"], 3)
+        self.assertEqual(response.data["results"][0]["completes"]["total"], 2)
+
     def test_permission_and_visibility_are_scoped_to_user_hierarchy(self):
         viewer = get_user_model().objects.create_user(
             username="hits-viewer", first_name="Scoped", email="hits-viewer@example.test"
         )
-        UserFunctionOverride.objects.create(
-            user=viewer,
-            function=AccessFunction.objects.get(code="user_hits.view"),
-            effect=UserFunctionOverride.Effect.ALLOW,
-        )
+        for code in ("user_hits.view", "user_hits.column.user"):
+            UserFunctionOverride.objects.create(
+                user=viewer,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
         SurveyAttempt.objects.create(
             rid="Vh5Ii6Jj7K", survey=self.survey, platform_user=viewer, user_id=str(viewer.pk),
             status=SurveyAttempt.Status.INITIATED, entry_device="Mobile",
@@ -2238,6 +2299,8 @@ class UserHitsTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
         self.assertEqual(response.data["results"][0]["user_id"], viewer.pk)
+        self.assertNotIn("branch", response.data["results"][0])
+        self.assertNotIn("hits", response.data["results"][0])
         self.assertEqual(scoped_api.get(reverse("user-hits-api"), {"branch": "Gurgaon"}).status_code, 403)
         self.client.force_login(viewer)
         viewer_page = self.client.get(reverse("user-hits"))
