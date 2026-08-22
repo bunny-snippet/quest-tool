@@ -21,12 +21,33 @@ class LocalIdSequence(models.Model):
 
     @classmethod
     def next_id(cls) -> str:
+        return cls.next_ids(1)[0]
+
+    @classmethod
+    def next_ids(cls, count: int) -> list[str]:
+        """Reserve a contiguous block of project IDs with one row lock.
+
+        Inventory imports can discover thousands of new surveys at once.  A
+        separate ``SELECT ... FOR UPDATE`` and ``UPDATE`` for every ID turns
+        that import into avoidable database contention, so bulk writers use
+        this method to reserve the complete block atomically.
+        """
+
+        count = int(count)
+        if count < 1:
+            return []
         prefix = timezone.localdate().strftime("%Y%m")
         with transaction.atomic():
             sequence, _ = cls.objects.select_for_update().get_or_create(year_month=prefix)
-            sequence.last_value += 1
+            first_value = sequence.last_value + 1
+            sequence.last_value += count
+            if sequence.last_value > 99_999_999:
+                raise OverflowError(f"Monthly local ID capacity exhausted for {prefix}.")
             sequence.save(update_fields=["last_value"])
-            return f"{prefix}{sequence.last_value:08d}"
+        return [
+            f"{prefix}{value:08d}"
+            for value in range(first_value, first_value + count)
+        ]
 
 
 class SyncLease(models.Model):
@@ -133,6 +154,7 @@ class Survey(models.Model):
         indexes = [
             models.Index(fields=["status", "country_code"]),
             models.Index(fields=["client", "cpi"]),
+            models.Index(fields=["integration", "last_seen_at"], name="survey_integration_seen_idx"),
         ]
         constraints = [
             models.UniqueConstraint(fields=["integration", "source_id"], name="unique_integration_survey_source"),
@@ -511,6 +533,9 @@ class SurveyAttempt(models.Model):
             models.Index(fields=["platform_user", "status", "-initiated_at"], name="attempt_user_status_idx"),
             models.Index(fields=["survey", "status"], name="attempt_survey_status_idx"),
             models.Index(fields=["status", "-callback_at"], name="attempt_status_cb_idx"),
+            models.Index(fields=["client", "-initiated_at"], name="attempt_client_init_idx"),
+            models.Index(fields=["-callback_at"], name="attempt_callback_idx"),
+            models.Index(fields=["callback_ip"], name="attempt_exit_ip_idx"),
         ]
 
     def __str__(self):

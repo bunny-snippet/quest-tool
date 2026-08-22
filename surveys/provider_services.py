@@ -239,7 +239,9 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                 "detail_failures": run.detail_failures,
             },
         )
-    if run.status in {SyncRun.Status.SUCCESS, SyncRun.Status.PARTIAL}:
+    if run.status in {SyncRun.Status.SUCCESS, SyncRun.Status.PARTIAL} and (
+        run.created or run.updated or run.closed
+    ):
         invalidate_project_cache()
     return run
 
@@ -273,8 +275,10 @@ def refresh_client_integration_details(integration: ClientIntegration, *, limit=
         except Exception:
             failures += 1
             logger.exception("Provider detail refresh failed for integration=%s survey=%s", integration.pk, survey.pk)
-    if refreshed:
-        invalidate_project_cache()
+    # Quota/targeting detail rows are read from their dedicated endpoints and
+    # do not change Project list rows or filter options.  Invalidating the
+    # complete Project cache here forced an expensive metadata rebuild after
+    # every small detail batch.
     return {"refreshed": refreshed, "failures": failures}
 
 

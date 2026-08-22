@@ -36,6 +36,17 @@
     page: 1, pages: 1, pageSize: Number(elements.pageSize?.value || 10), timer: null, controller: null,
     projectId: byId('studyProjectScope') ? (new URLSearchParams(window.location.search).get('internal_id') || '') : '',
   };
+  const istDateFormatter = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric',
+  });
+  const istTimeFormatter = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true,
+  });
+  const loiNumberFormatter = new Intl.NumberFormat('en-IN', {
+    minimumFractionDigits: 2, maximumFractionDigits: 2,
+  });
+  const moneyFormatters = new Map();
+  const metricNumberFormatters = new Map();
   const statusTone = { initiated: 'initiate', redirected: 'initiate', '1': 'complete', '2': 'terminate', '3': 'quota', '4': 'quality' };
   const deviceIcons = {
     desktop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>',
@@ -189,23 +200,27 @@
   function formatIst(value, split = false) {
     if (!value) return split ? { date: '—', time: '' } : '—';
     const parsed = new Date(value);
-    const date = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric' }).format(parsed);
-    const time = new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true }).format(parsed);
+    const date = istDateFormatter.format(parsed);
+    const time = istTimeFormatter.format(parsed);
     return split ? { date, time } : `${date}, ${time}`;
   }
 
   function formatLoi(seconds) {
     if (seconds == null) return '—';
     const minutes = Number(seconds) / 60;
-    return `${minutes.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} min`;
+    return `${loiNumberFormatter.format(minutes)} min`;
   }
 
   function formatMoney(value, currency = 'USD') {
     const amount = Number(value || 0);
     try {
-      return new Intl.NumberFormat('en-IN', {
-        style: 'currency', currency: currency || 'USD', minimumFractionDigits: 2, maximumFractionDigits: 2,
-      }).format(amount);
+      const normalizedCurrency = currency || 'USD';
+      if (!moneyFormatters.has(normalizedCurrency)) {
+        moneyFormatters.set(normalizedCurrency, new Intl.NumberFormat('en-IN', {
+          style: 'currency', currency: normalizedCurrency, minimumFractionDigits: 2, maximumFractionDigits: 2,
+        }));
+      }
+      return moneyFormatters.get(normalizedCurrency).format(amount);
     } catch (_) {
       return `${currency || 'USD'} ${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
     }
@@ -233,7 +248,10 @@
     const start = Number(element.dataset.value || 0);
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     const render = (current) => {
-      element.textContent = `${Number(current).toLocaleString('en-IN', { maximumFractionDigits })}${suffix}`;
+      if (!metricNumberFormatters.has(maximumFractionDigits)) {
+        metricNumberFormatters.set(maximumFractionDigits, new Intl.NumberFormat('en-IN', { maximumFractionDigits }));
+      }
+      element.textContent = `${metricNumberFormatters.get(maximumFractionDigits).format(Number(current))}${suffix}`;
     };
     element.dataset.value = String(target);
     if (element.metricAnimationFrame) cancelAnimationFrame(element.metricAnimationFrame);
@@ -332,13 +350,26 @@
   }
 
   async function loadAttempts() {
-    state.controller?.abort(); state.controller = new AbortController();
+    state.controller?.abort();
+    const controller = new AbortController();
+    state.controller = controller;
     elements.rows.innerHTML = `<tr><td colspan="${columnCount}"><div class="table-loader"><i></i><span>Fetching respondent activity…</span></div></td></tr>`;
+    const summaryRequest = fetch(`/api/v1/survey-attempts/summary/?${filterParams(false)}`, {
+      signal: controller.signal,
+    }).then(async (response) => {
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || `Summary request failed (${response.status})`);
+      return data.summary || {};
+    }).catch((error) => {
+      if (error.name !== 'AbortError') console.warn('Traffic summary could not be refreshed:', error);
+      return null;
+    });
     try {
-      const response = await fetch(`/api/v1/survey-attempts/?${filterParams()}`, { signal: state.controller.signal });
+      const rowParameters = new URLSearchParams(filterParams());
+      rowParameters.set('include_summary', 'false');
+      const response = await fetch(`/api/v1/survey-attempts/?${rowParameters}`, { signal: controller.signal });
       const data = await response.json(); if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
       const results = data.results || []; const count = Number(data.count || 0);
-      updateOverview(data.summary);
       state.pages = Math.max(1, Math.ceil(count / state.pageSize));
       if (state.page > state.pages) { state.page = state.pages; return loadAttempts(); }
       elements.summary.innerHTML = count ? `<strong>${count.toLocaleString('en-IN')}</strong> filtered respondent ${count === 1 ? 'journey' : 'journeys'}` : 'No attempts match these filters';
@@ -349,6 +380,8 @@
       elements.pageStatus.textContent = `Page ${state.page.toLocaleString('en-IN')} of ${state.pages.toLocaleString('en-IN')}`;
       if (elements.first && elements.prev) elements.first.disabled = elements.prev.disabled = state.page <= 1;
       if (elements.next && elements.last) elements.next.disabled = elements.last.disabled = state.page >= state.pages;
+      const summary = await summaryRequest;
+      if (summary && state.controller === controller) updateOverview(summary);
     } catch (error) {
       if (error.name === 'AbortError') return;
       elements.rows.innerHTML = `<tr><td colspan="${columnCount}"><div class="error-state"><strong>Could not load traffic reports</strong><span>${escapeHtml(error.message)}</span><button type="button" id="retryStudies">Try again</button></div></td></tr>`;
@@ -356,12 +389,12 @@
     }
   }
 
-  function scheduleLoad() { clearTimeout(state.timer); state.timer = setTimeout(() => { state.page = 1; loadAttempts(); }, 280); }
+  function scheduleLoad(delay = 700) { clearTimeout(state.timer); state.timer = setTimeout(() => { state.page = 1; loadAttempts(); }, delay); }
   function go(page) { state.page = Math.min(state.pages, Math.max(1, Number(page) || 1)); loadAttempts(); document.querySelector('.studies-panel')?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }
 
-  elements.search?.addEventListener('input', scheduleLoad);
-  [elements.from, elements.to].filter(Boolean).forEach((input) => input.addEventListener('input', scheduleLoad));
-  elements.dateField?.addEventListener('change', scheduleLoad);
+  elements.search?.addEventListener('input', () => scheduleLoad());
+  [elements.from, elements.to].filter(Boolean).forEach((input) => input.addEventListener('change', () => scheduleLoad(0)));
+  elements.dateField?.addEventListener('change', () => scheduleLoad(0));
   elements.pageSize?.addEventListener('change', () => { state.pageSize = Number(elements.pageSize.value); state.page = 1; loadAttempts(); });
   elements.clear?.addEventListener('click', () => {
     if (elements.search) elements.search.value = ''; if (elements.dateField) elements.dateField.value = 'initiated';

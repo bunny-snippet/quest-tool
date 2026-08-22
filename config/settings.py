@@ -206,6 +206,10 @@ REPORT_CACHE_DEFAULT_TTL_SECONDS = max(1, int(os.getenv("REPORT_CACHE_DEFAULT_TT
 REPORT_CACHE_RESULT_TTL_SECONDS = max(1, int(os.getenv("REPORT_CACHE_RESULT_TTL_SECONDS", "15")))
 REPORT_CACHE_METADATA_TTL_SECONDS = max(1, int(os.getenv("REPORT_CACHE_METADATA_TTL_SECONDS", "600")))
 REPORT_CACHE_TTL_JITTER_SECONDS = max(0, int(os.getenv("REPORT_CACHE_TTL_JITTER_SECONDS", "3")))
+INNOVATEMR_INVENTORY_WRITE_BATCH_SIZE = max(
+    100,
+    min(int(os.getenv("INNOVATEMR_INVENTORY_WRITE_BATCH_SIZE", "1000")), 5000),
+)
 if CACHE_ENABLED:
     CACHES = {
         "default": {
@@ -214,8 +218,8 @@ if CACHE_ENABLED:
             "TIMEOUT": CACHE_DEFAULT_TTL_SECONDS,
             "KEY_PREFIX": CACHE_KEY_PREFIX,
             "OPTIONS": {
-                "socket_connect_timeout": float(os.getenv("CACHE_CONNECT_TIMEOUT_SECONDS", "1")),
-                "socket_timeout": float(os.getenv("CACHE_SOCKET_TIMEOUT_SECONDS", "1")),
+                "socket_connect_timeout": float(os.getenv("CACHE_CONNECT_TIMEOUT_SECONDS", "0.25")),
+                "socket_timeout": float(os.getenv("CACHE_SOCKET_TIMEOUT_SECONDS", "0.25")),
                 "max_connections": max(1, int(os.getenv("CACHE_MAX_CONNECTIONS", "100"))),
             },
         },
@@ -225,8 +229,8 @@ if CACHE_ENABLED:
             "TIMEOUT": PROJECT_CACHE_DEFAULT_TTL_SECONDS,
             "KEY_PREFIX": f"{CACHE_KEY_PREFIX}-projects",
             "OPTIONS": {
-                "socket_connect_timeout": float(os.getenv("CACHE_CONNECT_TIMEOUT_SECONDS", "1")),
-                "socket_timeout": float(os.getenv("CACHE_SOCKET_TIMEOUT_SECONDS", "1")),
+                "socket_connect_timeout": float(os.getenv("CACHE_CONNECT_TIMEOUT_SECONDS", "0.25")),
+                "socket_timeout": float(os.getenv("CACHE_SOCKET_TIMEOUT_SECONDS", "0.25")),
                 "max_connections": max(1, int(os.getenv("CACHE_MAX_CONNECTIONS", "100"))),
             },
         },
@@ -236,8 +240,8 @@ if CACHE_ENABLED:
             "TIMEOUT": REPORT_CACHE_DEFAULT_TTL_SECONDS,
             "KEY_PREFIX": f"{CACHE_KEY_PREFIX}-reports",
             "OPTIONS": {
-                "socket_connect_timeout": float(os.getenv("CACHE_CONNECT_TIMEOUT_SECONDS", "1")),
-                "socket_timeout": float(os.getenv("CACHE_SOCKET_TIMEOUT_SECONDS", "1")),
+                "socket_connect_timeout": float(os.getenv("CACHE_CONNECT_TIMEOUT_SECONDS", "0.25")),
+                "socket_timeout": float(os.getenv("CACHE_SOCKET_TIMEOUT_SECONDS", "0.25")),
                 "max_connections": max(1, int(os.getenv("CACHE_MAX_CONNECTIONS", "100"))),
             },
         },
@@ -321,6 +325,11 @@ SPECTACULAR_SETTINGS = {
 
 INNOVATEMR_API_TOKEN = os.getenv("INNOVATEMR_API_TOKEN", "")
 INNOVATEMR_BASE_URL = os.getenv("INNOVATEMR_BASE_URL", "https://supplier.innovatemr.net/api/v2").rstrip("/")
+INNOVATEMR_CALLBACK_HASH_KEY = os.getenv("INNOVATEMR_CALLBACK_HASH_KEY", "")
+INNOVATEMR_CALLBACK_HASH_ALGORITHM = os.getenv(
+    "INNOVATEMR_CALLBACK_HASH_ALGORITHM", "sha256"
+).strip().lower()
+INNOVATEMR_CALLBACK_HASH_REQUIRED = bool(INNOVATEMR_CALLBACK_HASH_KEY)
 PUBLIC_SUPPLIER_CODE = os.getenv("PUBLIC_SUPPLIER_CODE", "1000").strip() or "1000"
 INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = os.getenv("INTEGRATION_CREDENTIAL_ENCRYPTION_KEY", SECRET_KEY)
 RESPONDENT_EMAIL_ENCRYPTION_KEY = os.getenv(
@@ -398,8 +407,3 @@ CELERY_BEAT_SCHEDULE = {
         "schedule": float(VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS),
     },
 } if ENABLE_SCHEDULED_JOBS else {}
-INNOVATEMR_CALLBACK_HASH_KEY = os.getenv("INNOVATEMR_CALLBACK_HASH_KEY", "")
-INNOVATEMR_CALLBACK_HASH_ALGORITHM = os.getenv(
-    "INNOVATEMR_CALLBACK_HASH_ALGORITHM", "sha256"
-).strip().lower()
-INNOVATEMR_CALLBACK_HASH_REQUIRED = bool(INNOVATEMR_CALLBACK_HASH_KEY)

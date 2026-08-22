@@ -93,6 +93,7 @@ from .serializers import (
     ProviderQuestionMappingSerializer,
     SurveyListSerializer,
     SurveyAttemptSerializer,
+    SurveyAttemptListSerializer,
     SurveyAttemptListResponseSerializer,
     SurveyQuotaSerializer,
     RFGCallbackResponseSerializer,
@@ -2801,6 +2802,43 @@ class SyncRunViewSet(viewsets.ReadOnlyModelViewSet):
     def retrieve(self, request, *args, **kwargs):
         return super().retrieve(request, *args, **kwargs)
 
+class SurveyAttemptSearchFilter(filters.SearchFilter):
+    """Use indexed exact lookups for tracking identifiers before broad search.
+
+    The existing substring search remains the fallback for names, emails,
+    browsers and partial identifiers. Exact RID/PID/UID/IP/source-ID searches
+    avoid a multi-column ``LIKE %term%`` scan when an authoritative match is
+    already present inside the viewer's filtered queryset.
+    """
+
+    def filter_queryset(self, request, queryset, view):
+        terms = self.get_search_terms(request)
+        if len(terms) == 1:
+            term = str(terms[0]).strip()
+            exact_query = (
+                Q(rid=term)
+                | Q(pid=term)
+                | Q(prescreener_uid=term)
+                | Q(provider_profile_uid=term)
+            )
+            try:
+                ipaddress.ip_address(term)
+            except ValueError:
+                pass
+            else:
+                exact_query |= Q(initiation_ip=term) | Q(callback_ip=term)
+            if term.isdigit():
+                exact_query |= Q(survey__source_key=term)
+                # ``source_key`` is the canonical identifier. Keep the legacy
+                # numeric column in the fast path where it is safely bounded.
+                if len(term) <= 18:
+                    exact_query |= Q(survey__source_id=int(term))
+
+            exact_queryset = queryset.filter(exact_query)
+            if exact_queryset.exists():
+                return exact_queryset
+        return super().filter_queryset(request, queryset, view)
+
 
 @extend_schema_view(
     list=extend_schema(
@@ -2821,7 +2859,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = SurveyAttemptSerializer
     permission_classes = [HasFunctionPermission]
     lookup_field = "rid"
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [DjangoFilterBackend, SurveyAttemptSearchFilter, filters.OrderingFilter]
     filterset_class = SurveyAttemptFilter
     search_fields = [
         "rid", "pid", "prescreener_uid", "user_id", "survey__local_id", "=survey__source_key", "=survey__source_id", "survey__name", "survey__company_name",
@@ -2902,6 +2940,25 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     @extend_schema(tags=["Survey attempts"], summary="List visible survey attempts with filter-aware totals", responses={200: SurveyAttemptListResponseSerializer})
     def list(self, request, *args, **kwargs):
         queryset = self.filter_queryset(self.get_queryset())
+        include_summary = str(request.query_params.get("include_summary", "true")).lower() not in {
+            "0", "false", "no",
+        }
+        if not include_summary:
+            # The Traffic page requests rows and its cached KPI aggregate in
+            # parallel. Existing API consumers still receive the original
+            # combined response unless they explicitly opt into this fast path.
+            page = self.paginate_queryset(queryset)
+            if page is not None:
+                return self.get_paginated_response(
+                    self.get_serializer(page, many=True).data
+                )
+            return Response({
+                "count": queryset.count(),
+                "next": None,
+                "previous": None,
+                "results": self.get_serializer(queryset, many=True).data,
+            })
+
         summary, total_count = cached_report_payload(
             "traffic-summary",
             request,
@@ -2918,16 +2975,58 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             return response
         return Response({"count": total_count, "next": None, "previous": None, "results": self.get_serializer(queryset, many=True).data, "summary": summary})
 
+    @extend_schema(
+        tags=["Survey attempts"],
+        summary="Get filter-aware Traffic Report KPI totals",
+        description="Returns the same permission-aware summary used by the Traffic Report cards without serializing page rows.",
+    )
+    @action(detail=False, methods=["get"], url_path="summary")
+    def summary(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        summary, total_count = cached_report_payload(
+            "traffic-summary",
+            request,
+            lambda: self._filtered_summary(queryset),
+        )
+        return Response({"count": total_count, "summary": summary})
+
     def get_required_function_permission(self):
         return "attempts.export" if self.action == "export" else "attempts.view"
 
+    def get_serializer_class(self):
+        if self.action == "list":
+            return SurveyAttemptListSerializer
+        return SurveyAttemptSerializer
+
     def get_queryset(self):
-        queryset = SurveyAttempt.objects.select_related(
-            "survey", "survey__client", "survey__integration", "platform_user", "platform_user__employee_profile", "platform_user__employee_profile__role",
-            "platform_user__employee_profile__organization_unit", "platform_user__employee_profile__organization_unit__parent",
-            "platform_user__employee_profile__organization_unit__parent__parent",
-            "vendor", "vendor__employee_profile", "client", "client_allocation", "survey_allocation",
-        ).all()
+        if getattr(self, "action", None) == "list":
+            queryset = SurveyAttempt.objects.select_related(
+                "survey", "survey__client", "survey__integration", "platform_user", "client",
+            ).only(
+                "id", "survey_id", "platform_user_id", "client_id",
+                "rid", "pid", "prescreener_uid", "provider_profile_uid", "user_id",
+                "source_cpi_snapshot", "cpi_snapshot_source", "cpi_cut_percent_snapshot",
+                "payable_cpi_snapshot", "cpi_currency_snapshot",
+                "status", "initiated_at", "callback_at", "loi_seconds",
+                "initiation_ip", "callback_ip", "entry_device", "upstream_transaction_data",
+                "survey__id", "survey__client_id", "survey__integration_id",
+                "survey__local_id", "survey__source_id", "survey__source_key",
+                "survey__company_name", "survey__country", "survey__country_code",
+                "survey__buyer_id", "survey__cpi",
+                "survey__client__id", "survey__client__name",
+                "survey__integration__id", "survey__integration__provider_code",
+                "survey__integration__config", "survey__integration__field_mapping",
+                "platform_user__id", "platform_user__username", "platform_user__first_name",
+                "platform_user__last_name", "platform_user__email",
+                "client__id", "client__name",
+            )
+        else:
+            queryset = SurveyAttempt.objects.select_related(
+                "survey", "survey__client", "survey__integration", "platform_user", "platform_user__employee_profile", "platform_user__employee_profile__role",
+                "platform_user__employee_profile__organization_unit", "platform_user__employee_profile__organization_unit__parent",
+                "platform_user__employee_profile__organization_unit__parent__parent",
+                "vendor", "vendor__employee_profile", "client", "client_allocation", "survey_allocation",
+            ).all()
         if self.request.user.is_superuser:
             return queryset
         visible_user_ids = activity_visible_user_ids(self.request.user)

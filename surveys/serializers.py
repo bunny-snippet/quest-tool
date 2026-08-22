@@ -651,9 +651,14 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
 
         data = super().to_representation(instance)
         request = self.context.get("request")
-        if request and not has_function_access(
-            request.user, "studies.column.client_name"
-        ):
+        if request and not hasattr(self, "_can_view_client_name"):
+            # A list serializer reuses this child instance for every row.  The
+            # effective permission is request-scoped, so resolve it once rather
+            # than re-querying role assignments for every Traffic table row.
+            self._can_view_client_name = has_function_access(
+                request.user, "studies.column.client_name"
+            )
+        if request and not self._can_view_client_name:
             data["client_name"] = ""
             data["company_name"] = ""
         return data
@@ -694,6 +699,23 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
             return "Initiated"
         return obj.get_status_display()
 
+    @staticmethod
+    def _provider_outcome_data(obj) -> dict:
+        """Parse one provider outcome at most once for a serialized attempt.
+
+        Both the reason and category columns are rendered for terminal rows. The
+        provider-neutral parser can inspect a sizeable transaction payload, so
+        retaining its normalized result on this short-lived model instance
+        avoids doing the same work twice without introducing shared state.
+        """
+
+        cache_attribute = "_serialized_provider_outcome"
+        cached = getattr(obj, cache_attribute, None)
+        if cached is None:
+            cached = provider_outcome(obj)
+            setattr(obj, cache_attribute, cached)
+        return cached
+
     def get_termination_reason(self, obj) -> str:
         if obj.status not in {
             SurveyAttempt.Status.TERMINATED,
@@ -701,7 +723,7 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
             SurveyAttempt.Status.QUALITY_TERMINATED,
         }:
             return ""
-        return provider_outcome(obj).get("reason", "")
+        return self._provider_outcome_data(obj).get("reason", "")
 
     def get_termination_category(self, obj) -> str:
         if obj.status not in {
@@ -710,7 +732,39 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
             SurveyAttempt.Status.QUALITY_TERMINATED,
         }:
             return ""
-        return provider_outcome(obj).get("category", "")
+        return self._provider_outcome_data(obj).get("category", "")
+
+
+class SurveyAttemptListSerializer(SurveyAttemptSerializer):
+    """Compact Traffic Reports row contract consumed by ``studies.js``.
+
+    The detail serializer intentionally keeps the complete operational audit.
+    List requests omit large JSON payloads, URLs and user-agent audit fields
+    which the Traffic table/cards never render.
+    """
+
+    # These fields are explicitly declared by the full parent serializer but
+    # are not part of the Traffic list contract. Setting them to ``None`` lets
+    # DRF safely narrow the inherited serializer without changing retrieve.
+    registered_profile_uid = None
+    profile_was_reused = None
+    survey_name = None
+    language_code = None
+    vendor_name = None
+    supplier = None
+    supplier_name = None
+
+    class Meta(SurveyAttemptSerializer.Meta):
+        fields = [
+            "rid", "pid", "prescreener_uid",
+            "survey_local_id", "survey_source_id", "company_name",
+            "country", "country_code", "user_id", "user_name", "username", "user_email",
+            "client_name", "buyer_id",
+            "source_cpi_snapshot", "cpi_snapshot_source", "cpi_currency_snapshot",
+            "status_label", "termination_reason", "termination_category", "status",
+            "initiated_at", "callback_at", "loi_seconds",
+            "entry_ip", "exit_ip", "entry_device",
+        ]
 
 
 class SurveyAttemptCompletedDeviceSummarySerializer(serializers.Serializer):
@@ -738,5 +792,5 @@ class SurveyAttemptListResponseSerializer(serializers.Serializer):
     count = serializers.IntegerField()
     next = serializers.URLField(allow_null=True)
     previous = serializers.URLField(allow_null=True)
-    results = SurveyAttemptSerializer(many=True)
+    results = SurveyAttemptListSerializer(many=True)
     summary = SurveyAttemptSummarySerializer()

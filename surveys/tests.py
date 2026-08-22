@@ -12,6 +12,8 @@ from xml.etree import ElementTree
 from django.test import TestCase, override_settings
 from django.contrib.auth import get_user_model
 from django.core.cache import caches
+from django.db import connection
+from django.test.utils import CaptureQueriesContext
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -133,6 +135,38 @@ class SurveySyncTests(TestCase):
         self.assertEqual(summary.updated, 1)
         self.assertEqual(summary.closed, 1)
         self.assertEqual(Survey.objects.get(source_id=2).status, Survey.Status.CLOSED)
+
+    @patch("surveys.services.invalidate_project_cache")
+    def test_large_unchanged_sync_uses_bounded_queries_and_keeps_cache_warm(self, invalidate):
+        integration = ClientIntegration.objects.filter(provider_code="innovatemr").first()
+        payloads = [survey_payload(index) for index in range(1, 41)]
+
+        created = sync_surveys(FakeClient(payloads, []), integration=integration)
+        self.assertEqual(created.created, 40)
+        self.assertEqual(Survey.objects.filter(integration=integration).count(), 40)
+        self.assertEqual(
+            Survey.objects.filter(integration=integration).values("local_id").distinct().count(),
+            40,
+        )
+        invalidate.assert_called_once()
+
+        invalidate.reset_mock()
+        with CaptureQueriesContext(connection) as queries:
+            unchanged = sync_surveys(FakeClient(payloads, []), integration=integration)
+
+        self.assertEqual(unchanged.unchanged, 40)
+        self.assertEqual(
+            Survey.objects.filter(
+                integration=integration,
+                status=Survey.Status.LIVE,
+            ).count(),
+            40,
+        )
+        # Query count is bounded by inventory batches, not by survey count.
+        # This protects the live 90k+ inventory from regressing to one SELECT
+        # and one UPDATE per item.
+        self.assertLess(len(queries), 15)
+        invalidate.assert_not_called()
 
     def test_detail_replacement_is_atomic_and_normalized(self):
         survey = Survey.objects.create(source_id=12632, name="Test")
@@ -1231,6 +1265,73 @@ class StudiesTrackingTests(TestCase):
         response = self.api.get(reverse("survey-attempt-list"), {"search": self.complete.rid})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["results"][0]["termination_reason"], "Off hours")
+
+    def test_traffic_list_is_slim_but_retrieve_keeps_full_audit_contract(self):
+        response = self.api.get(reverse("survey-attempt-list"), {"search": self.complete.rid})
+
+        self.assertEqual(response.status_code, 200)
+        result = response.data["results"][0]
+        self.assertNotIn("answers", result)
+        self.assertNotIn("upstream_transaction_data", result)
+        self.assertNotIn("entry_client_data", result)
+        self.assertNotIn("outbound_url", result)
+        self.assertIn("entry_device", result)
+        self.assertIn("termination_reason", result)
+
+        detail = self.api.get(reverse("survey-attempt-detail", args=[self.complete.rid]))
+        self.assertEqual(detail.status_code, 200)
+        self.assertIn("answers", detail.data)
+        self.assertIn("upstream_transaction_data", detail.data)
+        self.assertIn("entry_client_data", detail.data)
+        self.assertIn("outbound_url", detail.data)
+
+    def test_traffic_rows_and_summary_can_be_loaded_in_parallel(self):
+        rows = self.api.get(
+            reverse("survey-attempt-list"),
+            {"search": self.complete.rid, "include_summary": "false"},
+        )
+        self.assertEqual(rows.status_code, 200)
+        self.assertNotIn("summary", rows.data)
+        self.assertEqual(rows.data["count"], 1)
+
+        summary = self.api.get(
+            reverse("survey-attempt-summary"),
+            {"search": self.complete.rid},
+        )
+        self.assertEqual(summary.status_code, 200)
+        self.assertEqual(summary.data["count"], 1)
+        self.assertEqual(summary.data["summary"]["total"], 1)
+
+    def test_exact_tracking_search_uses_authoritative_match_and_partial_search_falls_back(self):
+        SurveyAttempt.objects.create(
+            rid="Zz1Yy2Xx3W",
+            survey=self.survey,
+            platform_user=self.kanik,
+            user_id=f"prefix-{self.complete.rid}-suffix",
+            status=SurveyAttempt.Status.INITIATED,
+        )
+
+        exact = self.api.get(reverse("survey-attempt-list"), {"search": self.complete.rid})
+        self.assertEqual(exact.status_code, 200)
+        self.assertEqual(exact.data["count"], 1)
+        self.assertEqual(exact.data["results"][0]["rid"], self.complete.rid)
+
+        partial = self.api.get(reverse("survey-attempt-list"), {"search": "Kanik"})
+        self.assertEqual(partial.status_code, 200)
+        self.assertGreaterEqual(partial.data["count"], 2)
+
+    def test_terminal_list_normalizes_provider_outcome_once_per_row(self):
+        self.complete.status = SurveyAttempt.Status.TERMINATED
+        self.complete.save(update_fields=["status", "updated_at"])
+
+        with patch("surveys.serializers.provider_outcome") as normalized:
+            normalized.return_value = {"reason": "Off hours", "category": "Timing"}
+            response = self.api.get(reverse("survey-attempt-list"), {"search": self.complete.rid})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["results"][0]["termination_reason"], "Off hours")
+        self.assertEqual(response.data["results"][0]["termination_category"], "Timing")
+        normalized.assert_called_once()
 
     def test_country_filter_and_hit_time_cpi_snapshot_are_stable(self):
         created = create_attempt(self.survey, self.kanik, "10.10.10.10")

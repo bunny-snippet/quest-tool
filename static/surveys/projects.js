@@ -21,6 +21,7 @@
     timer: null,
     controller: null,
     loading: false,
+    lastLoadedAt: 0,
   };
 
   const els = {
@@ -65,7 +66,14 @@
     url.searchParams.set('pid', generatePlatformPid());
     return url.toString();
   }
-  const formatDate = (value) => value ? new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' }).format(new Date(value)) : '—';
+  const projectDateTimeFormatter = new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+  const sourceDateFormatter = new Intl.DateTimeFormat('en-IN', {
+    day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata',
+  });
+  const sourceTimeFormatter = new Intl.DateTimeFormat('en-IN', {
+    hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZone: 'Asia/Kolkata',
+  });
+  const formatDate = (value) => value ? projectDateTimeFormatter.format(new Date(value)) : '—';
   const money = (value) => value == null ? '—' : `$${Number(value).toFixed(2)}`;
   const filterDefaults = {
     country: 'All countries', status: 'All statuses', company: 'All clients', client_name: 'All clients',
@@ -87,12 +95,8 @@
   function sourceTimestamp(displayValue, fallbackValue) {
     if (!fallbackValue) return '<strong class="source-time">—</strong>';
     const date = new Date(fallbackValue);
-    const datePart = new Intl.DateTimeFormat('en-IN', {
-      day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata',
-    }).format(date);
-    const timePart = new Intl.DateTimeFormat('en-IN', {
-      hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZone: 'Asia/Kolkata',
-    }).format(date);
+    const datePart = sourceDateFormatter.format(date);
+    const timePart = sourceTimeFormatter.format(date);
     return `<span class="source-date">${escapeHtml(datePart)}</span><strong class="source-time">${escapeHtml(timePart)} <em>IST</em></strong>`;
   }
 
@@ -239,7 +243,10 @@
     updateCpiControl(); state.page = 1; loadSurveys();
   }));
   [els.cpiMin, els.cpiMax].filter(Boolean).forEach((input) => {
-    input.addEventListener('input', () => updateCpiControl(input, true));
+    // Keep the slider feedback immediate, but wait for a committed value
+    // before requesting another potentially expensive inventory result.
+    input.addEventListener('input', () => updateCpiControl(input));
+    input.addEventListener('change', () => updateCpiControl(input, true));
     input.addEventListener('keydown', (event) => {
       const step = Number(input.step) || 0.01;
       const shortcuts = {
@@ -306,6 +313,7 @@
         return loadSurveys({ silent });
       }
       render(data.count);
+      state.lastLoadedAt = Date.now();
     } catch (error) {
       if (error.name === 'AbortError') return;
       if (silent) return;
@@ -364,12 +372,13 @@
     return `<article class="survey-card"><div class="card-top"><div>${top}</div>${projectColumns.has('actions') ? `<button class="eye-button" data-action="${escapeHtml(survey.local_id)}" aria-label="View survey details">◉</button>` : ''}</div>${projectColumns.has('survey') ? `<h3>${escapeHtml(survey.source_id ?? '—')}</h3><p>${survey.buyer_id ? escapeHtml(survey.buyer_id) : 'Buyer ID unavailable'}</p>` : ''}${metrics.length ? `<div class="card-grid">${metrics.join('')}</div>` : ''}${bottom ? `<div class="card-bottom">${bottom}</div>` : ''}</article>`;
   }
 
-  function scheduleLoad() {
+  function scheduleLoad(delay = 700) {
     clearTimeout(state.timer);
-    state.timer = setTimeout(() => { state.page = 1; loadSurveys(); }, 280);
+    state.timer = setTimeout(() => { state.page = 1; loadSurveys(); }, delay);
   }
 
-  [els.search, els.from, els.to].filter(Boolean).forEach((element) => element.addEventListener('input', scheduleLoad));
+  els.search?.addEventListener('input', () => scheduleLoad());
+  [els.from, els.to].filter(Boolean).forEach((element) => element.addEventListener('change', () => scheduleLoad(0)));
   els.dateField?.addEventListener('change', () => { state.page = 1; loadSurveys(); });
   els.pageSize?.addEventListener('change', () => { state.pageSize = Number(els.pageSize.value); state.page = 1; loadSurveys(); });
   els.clear?.addEventListener('click', () => {
@@ -532,9 +541,13 @@
   updateCpiControl();
   loadSurveys();
   window.setInterval(() => {
-    if (!document.hidden) loadSurveys({ silent: true });
+    if (!document.hidden && !state.loading && Date.now() - state.lastLoadedAt >= 60000) {
+      loadSurveys({ silent: true });
+    }
   }, 60000);
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden) loadSurveys({ silent: true });
+    if (!document.hidden && !state.loading && Date.now() - state.lastLoadedAt >= 60000) {
+      loadSurveys({ silent: true });
+    }
   });
 })();
