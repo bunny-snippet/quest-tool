@@ -7,8 +7,16 @@ module are the authoritative enforcement layer.
 from functools import wraps
 
 from django.contrib.auth.views import redirect_to_login
+from django.conf import settings
 from django.core.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
+
+from config.cache_utils import (
+    safe_cache_get,
+    safe_cache_increment,
+    safe_cache_set,
+    stable_cache_key,
+)
 
 from .models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
 from .request_cache import request_cached
@@ -41,6 +49,19 @@ EXTERNAL_VENDOR_FORBIDDEN_CODES = frozenset({
     "sync.run",
 })
 
+_PERMISSION_CACHE_GENERATION_KEY = "accounts:permissions:generation"
+_PERMISSION_CACHE_MISSING = object()
+
+
+def invalidate_effective_permission_cache() -> None:
+    """Invalidate cached role/user permission snapshots across web workers."""
+
+    safe_cache_increment(_PERMISSION_CACHE_GENERATION_KEY)
+
+
+def _permission_cache_generation() -> int:
+    return int(safe_cache_get(_PERMISSION_CACHE_GENERATION_KEY, 1) or 1)
+
 
 def is_super_admin_account(user) -> bool:
     """Return whether the account may access temporarily restricted super-admin areas."""
@@ -53,12 +74,17 @@ def is_super_admin_account(user) -> bool:
 
 
 def effective_permission_codes(user) -> set[str]:
-    """Return effective codes once per HTTP request, never across requests."""
+    """Return effective codes from a short, explicitly invalidated snapshot.
+
+    MySQL remains authoritative. Signals invalidate the shared generation as
+    soon as a role, profile, function or per-user override changes. The outer
+    request cache avoids repeated Redis reads inside the same request.
+    """
 
     if not user or not user.is_authenticated or not user.is_active:
         return set()
 
-    def load():
+    def load_from_database():
         if user.is_superuser:
             return frozenset(
                 AccessFunction.objects.filter(is_active=True).values_list("code", flat=True)
@@ -111,6 +137,28 @@ def effective_permission_codes(user) -> set[str]:
             codes.difference_update(EXTERNAL_VENDOR_FORBIDDEN_CODES)
             codes = {code for code in codes if not code.startswith("organization.")}
         return frozenset(codes)
+
+    def load():
+        generation = _permission_cache_generation()
+        key = stable_cache_key(
+            "accounts:effective-permissions",
+            {
+                "generation": generation,
+                "user_id": user.pk,
+                "superuser": bool(user.is_superuser),
+            },
+        )
+        cached = safe_cache_get(key, _PERMISSION_CACHE_MISSING)
+        if cached is not _PERMISSION_CACHE_MISSING:
+            return frozenset(cached)
+        codes = load_from_database()
+        safe_cache_set(
+            key,
+            tuple(sorted(codes)),
+            timeout=settings.PERMISSION_CACHE_TTL_SECONDS,
+            jitter_seconds=min(30, settings.PERMISSION_CACHE_TTL_SECONDS // 5),
+        )
+        return codes
 
     return set(request_cached(("effective-permissions", user.pk), load))
 

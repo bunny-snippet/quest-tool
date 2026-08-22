@@ -184,6 +184,21 @@ class FunctionAccessTests(TestCase):
         self.assertEqual(self.client.get(reverse("projects")).status_code, 403)
         self.assertRedirects(self.client.get(reverse("home")), reverse("traffic-reports"), fetch_redirect_response=False)
 
+    def test_permission_cache_is_invalidated_immediately_by_override_changes(self):
+        projects = AccessFunction.objects.get(code="projects.view")
+        self.assertTrue(has_function_access(self.user, "projects.view"))
+
+        override = UserFunctionOverride.objects.create(
+            user=self.user,
+            function=projects,
+            effect=UserFunctionOverride.Effect.DENY,
+        )
+        self.assertFalse(has_function_access(self.user, "projects.view"))
+
+        override.effect = UserFunctionOverride.Effect.ALLOW
+        override.save(update_fields=["effect", "updated_at"])
+        self.assertTrue(has_function_access(self.user, "projects.view"))
+
     def test_dashboard_access_follows_role_or_user_function_permission(self):
         dashboard = AccessFunction.objects.get(code="dashboard.view")
         UserFunctionOverride.objects.update_or_create(

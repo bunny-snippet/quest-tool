@@ -120,6 +120,7 @@ if DB_ENGINE == "mysql":
             "HOST": os.getenv("DB_HOST", "127.0.0.1"),
             "PORT": os.getenv("DB_PORT", "3306"),
             "CONN_MAX_AGE": int(os.getenv("DB_CONN_MAX_AGE", "60")),
+            "CONN_HEALTH_CHECKS": env_bool("DB_CONN_HEALTH_CHECKS", True),
             "OPTIONS": {
                 "charset": "utf8mb4",
                 "init_command": "SET sql_mode='STRICT_TRANS_TABLES'",
@@ -267,6 +268,24 @@ else:
             "OPTIONS": {"MAX_ENTRIES": 10000},
         },
     }
+
+# Production sessions are still persisted in Django's session table, while
+# repeat reads are served from Redis.  This removes one mandatory MySQL read
+# from nearly every authenticated page/API request without making Redis the
+# source of truth or logging users out when Redis is restarted.
+SESSION_ENGINE = os.getenv(
+    "DJANGO_SESSION_ENGINE",
+    (
+        "django.contrib.sessions.backends.cached_db"
+        if CACHE_ENABLED
+        else "django.contrib.sessions.backends.db"
+    ),
+)
+SESSION_CACHE_ALIAS = os.getenv("DJANGO_SESSION_CACHE_ALIAS", "default")
+PERMISSION_CACHE_TTL_SECONDS = max(
+    1,
+    int(os.getenv("PERMISSION_CACHE_TTL_SECONDS", "300")),
+)
 
 REST_FRAMEWORK = {
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
