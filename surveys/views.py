@@ -1490,7 +1490,7 @@ def _finish_wrong_target_country_attempt(attempt, request, location):
 
 
 def _finish_duplicate_ip_attempt(attempt, request, prior_attempt=None):
-    """Record an all-client duplicate entry IP as an immediate local S4."""
+    """Record a same-project duplicate entry IP as an immediate local S4."""
 
     now = timezone.now()
     with transaction.atomic():
@@ -1568,7 +1568,13 @@ def _finish_verisoul_attempt(attempt, request, *, reason, decision="", score=Non
 
 
 def _verisoul_status_url(attempt):
-    return f"{reverse('survey-status')}?{urlencode({'status': '4', 'rid': attempt.rid})}"
+    return _recorded_status_url(attempt, "4")
+
+
+def _recorded_status_url(attempt, status_code):
+    """Build a trusted local result URL without invoking provider callback checks."""
+
+    return f"{reverse('survey-status')}?{urlencode({'status': str(status_code), 'pid': attempt.pid})}"
 
 
 @require_http_methods(["POST"])
@@ -1904,9 +1910,7 @@ def survey_start(request):
             return _invalid_survey_link(request, str(exc), status_code=409)
         if duplicate_ip:
             attempt = _finish_duplicate_ip_attempt(attempt, request, prior_ip_attempt)
-            return HttpResponseRedirect(
-                f"{reverse('survey-status')}?{urlencode({'status': '4', 'rid': attempt.rid})}"
-            )
+            return HttpResponseRedirect(_recorded_status_url(attempt, "4"))
         if targeting_warning:
             request.session[f"attempt_warning_{attempt.rid}"] = targeting_warning
         return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(attempt.rid)}")
@@ -1944,9 +1948,7 @@ def survey_start(request):
         and is_wrong_target_country(attempt.survey, entry_location)
     ):
         attempt = _finish_wrong_target_country_attempt(attempt, request, entry_location)
-        return HttpResponseRedirect(
-            f"{reverse('survey-status')}?{urlencode({'status': '4', 'rid': attempt.rid})}"
-        )
+        return HttpResponseRedirect(_recorded_status_url(attempt, "4"))
 
     verisoul_policy = effective_verisoul_policy(attempt)
     if verisoul_policy.enabled and attempt.status == SurveyAttempt.Status.INITIATED:
@@ -2104,6 +2106,33 @@ STATUS_PAGES = {
     "3": {"title": "Quota already filled", "message": "The required quota was filled before your response could be completed.", "tone": "warning"},
     "4": {"title": "Quality check unsuccessful", "message": "This response did not pass the survey's quality checks.", "tone": "danger"},
 }
+
+
+def _status_presentation_for_attempt(attempt, page, status_label):
+    """Explain locally enforced outcomes instead of showing a generic S4."""
+
+    if not attempt:
+        return page, status_label
+    audit = attempt.upstream_transaction_data or {}
+    if attempt.status_source == "local_country_guard":
+        guard = audit.get("local_country_guard") or {}
+        expected = str(guard.get("expected_country") or "").upper()
+        actual = str(guard.get("detected_country") or "").upper()
+        message = "Your location does not match this survey's target country."
+        if expected and actual:
+            message = f"Your detected country ({actual}) does not match this survey's target country ({expected})."
+        return {
+            "title": "Location not eligible",
+            "message": message,
+            "tone": "danger",
+        }, "Wrong target country"
+    if attempt.status_source == "local_duplicate_ip_guard":
+        return {
+            "title": "Duplicate entry blocked",
+            "message": "This IP address has already entered this project, so another entry from the same IP is not allowed.",
+            "tone": "danger",
+        }, "Duplicate IP blocked"
+    return page, status_label
 
 
 RFG_CALLBACK_IPS = {
@@ -2457,6 +2486,8 @@ def survey_status(request):
             return HttpResponseRedirect(f"{reverse('survey-status')}?{clean_query}")
     else:
         status_label = "Unknown attempt"
+
+    page, status_label = _status_presentation_for_attempt(attempt, page, status_label)
 
     return render(request, "surveys/status.html", {
         **page,
