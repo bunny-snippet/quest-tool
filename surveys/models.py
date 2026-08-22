@@ -574,6 +574,40 @@ class SurveyEntryIPClaim(models.Model):
         ordering = ["created_at"]
 
 
+class SurveyProjectEntryIPClaim(models.Model):
+    """Race-safe first-entry claim for one public IP inside one project.
+
+    This table intentionally starts empty. Legacy global-IP decisions and
+    historical rejected attempts must not make the first post-deployment entry
+    for an otherwise untouched project look like a duplicate.
+    """
+
+    survey = models.ForeignKey(
+        Survey,
+        on_delete=models.CASCADE,
+        related_name="entry_ip_claims",
+    )
+    ip_address = models.GenericIPAddressField()
+    first_attempt = models.OneToOneField(
+        SurveyAttempt,
+        null=True,
+        blank=True,
+        on_delete=models.PROTECT,
+        related_name="project_entry_ip_claim",
+    )
+    created_at = models.DateTimeField(auto_now_add=True)
+    updated_at = models.DateTimeField(auto_now=True)
+
+    class Meta:
+        constraints = [
+            models.UniqueConstraint(
+                fields=["survey", "ip_address"],
+                name="unique_survey_entry_ip_claim",
+            ),
+        ]
+        ordering = ["created_at"]
+
+
 class ProfileReuseMonthlyCounter(models.Model):
     """Concurrency-safe monthly client budget for previously registered UIDs."""
 

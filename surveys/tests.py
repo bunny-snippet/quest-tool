@@ -23,7 +23,15 @@ from vendors.models import Client, ClientIntegration, OrganizationUnit
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
 from .identifiers import generate_platform_pid, is_valid_platform_pid
-from .models import Survey, SurveyAttempt, SurveyQuota, SyncLease, SyncRun, TargetingQuestion
+from .models import (
+    Survey,
+    SurveyAttempt,
+    SurveyProjectEntryIPClaim,
+    SurveyQuota,
+    SyncLease,
+    SyncRun,
+    TargetingQuestion,
+)
 from .services import (
     merge_inventory,
     parse_upstream_datetime,
@@ -682,6 +690,12 @@ class SurveyFlowTests(TestCase):
         }, REMOTE_ADDR="31.13.71.44")
         self.assertEqual(first.status_code, 302)
         first_rid = parse_qs(urlsplit(first["Location"]).query)["rid"][0]
+        first_attempt = SurveyAttempt.objects.get(rid=first_rid)
+        first_claim = SurveyProjectEntryIPClaim.objects.get(
+            survey=self.survey,
+            ip_address="31.13.71.44",
+        )
+        self.assertEqual(first_claim.first_attempt, first_attempt)
 
         other = Survey.objects.create(
             source_id=32655972,
@@ -708,6 +722,17 @@ class SurveyFlowTests(TestCase):
         allowed = SurveyAttempt.objects.get(rid=second_query["rid"][0])
         self.assertEqual(allowed.survey, other)
         self.assertEqual(allowed.status, SurveyAttempt.Status.INITIATED)
+        self.assertTrue(
+            SurveyProjectEntryIPClaim.objects.filter(
+                survey=other,
+                ip_address="31.13.71.44",
+                first_attempt=allowed,
+            ).exists()
+        )
+        self.assertEqual(
+            SurveyProjectEntryIPClaim.objects.filter(ip_address="31.13.71.44").count(),
+            2,
+        )
 
         duplicate_response = self.client.get(reverse("survey-start"), {
             "surveyId": self.survey.source_id,
@@ -732,6 +757,13 @@ class SurveyFlowTests(TestCase):
         self.assertContains(result, "Duplicate entry blocked")
         self.assertContains(result, "Duplicate IP blocked")
         self.assertNotContains(result, "Invalid survey callback")
+        self.assertEqual(
+            SurveyProjectEntryIPClaim.objects.filter(
+                survey=self.survey,
+                ip_address="31.13.71.44",
+            ).count(),
+            1,
+        )
 
     @override_settings(ENFORCE_SURVEY_TARGET_COUNTRY=True)
     def test_wrong_target_country_shows_recorded_reason_instead_of_invalid_callback(self):

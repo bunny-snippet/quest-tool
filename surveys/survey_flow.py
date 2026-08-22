@@ -10,7 +10,7 @@ from django.conf import settings
 from django.db import IntegrityError, transaction
 
 from .identifiers import generate_platform_pid, is_valid_platform_pid
-from .models import Survey, SurveyAttempt
+from .models import Survey, SurveyAttempt, SurveyProjectEntryIPClaim
 
 
 RID_ALPHABET = string.ascii_letters + string.digits
@@ -244,28 +244,36 @@ def create_attempt(
 
 
 def claim_project_entry_ip(survey: Survey, ip_address: str | None):
-    """Race-safely reject an IP only when it already entered this survey.
+    """Race-safely claim an IP only inside the requested survey/project.
 
     Locking the survey row serializes simultaneous entry requests for the same
     project. Different surveys lock different rows and therefore never block
-    one another. Historical attempts rejected by the former global guard do
-    not become authoritative project claims.
+    one another. The dedicated claim table avoids treating legacy attempt rows
+    from the former global guard as authoritative project claims.
     """
 
     if not settings.ENFORCE_PROJECT_UNIQUE_ENTRY_IP or not ip_address:
-        return None, False
+        return None, None, False
     Survey.objects.select_for_update().only("pk").get(pk=survey.pk)
-    prior_attempt = (
-        SurveyAttempt.objects.filter(
-            survey_id=survey.pk,
-            initiation_ip=ip_address,
-        )
-        .exclude(status_source="local_duplicate_ip_guard")
-        .only("id", "rid", "initiated_at")
-        .order_by("initiated_at", "id")
-        .first()
+    claim, created = SurveyProjectEntryIPClaim.objects.select_related(
+        "first_attempt"
+    ).get_or_create(
+        survey_id=survey.pk,
+        ip_address=ip_address,
     )
-    return prior_attempt, prior_attempt is not None
+    return claim, claim.first_attempt, not created
+
+
+def attach_project_entry_ip_claim(
+    claim: SurveyProjectEntryIPClaim | None,
+    attempt: SurveyAttempt,
+) -> None:
+    """Bind the first accepted attempt to its project/IP claim for auditing."""
+
+    if claim is None:
+        return
+    claim.first_attempt = attempt
+    claim.save(update_fields=["first_attempt", "updated_at"])
 
 
 def build_outbound_url(entry_link: str, rid: str, answers: dict) -> str:

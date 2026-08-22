@@ -136,6 +136,7 @@ from .rfg_outcomes import RFG_STATUS_MAP, describe_rfg_outcome
 from .rfg_text import clean_rfg_display_text
 from .services import reconcile_attempt_status, replace_survey_quotas, replace_survey_targeting, sync_surveys
 from .survey_flow import (
+    attach_project_entry_ip_claim,
     backfill_attempt_entry_audit,
     build_biobrain_outbound_url,
     build_outbound_url,
@@ -1948,7 +1949,7 @@ def survey_start(request):
                     require_capacity=True,
                     for_update=True,
                 )
-                prior_ip_attempt, duplicate_ip = claim_project_entry_ip(survey, entry_ip)
+                ip_claim, prior_ip_attempt, duplicate_ip = claim_project_entry_ip(survey, entry_ip)
                 attempt = create_attempt(
                     survey,
                     platform_user,
@@ -1956,6 +1957,8 @@ def survey_start(request):
                     client_data=entry_client_data,
                     pid=platform_pid or None,
                 )
+                if not duplicate_ip:
+                    attach_project_entry_ip_claim(ip_claim, attempt)
                 if allocation_context:
                     reserve_attempt_capacity(
                         attempt,
