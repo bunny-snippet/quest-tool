@@ -2071,6 +2071,7 @@ def survey_start(request):
                             capture_prescreener_submission(
                                 attempt,
                                 answers_with_entry_postal_code(attempt, answers),
+                                allow_draft_replace=True,
                             )
                         _finish_local_rfg_attempt(
                             attempt, answers, request, result="7", reason=reason
@@ -2086,6 +2087,11 @@ def survey_start(request):
                     capture_prescreener_submission(
                         attempt,
                         answers_with_entry_postal_code(attempt, answers),
+                        allow_draft_replace=(
+                            attempt.status == SurveyAttempt.Status.INITIATED
+                            and not attempt.redirected_at
+                            and not attempt.outbound_url
+                        ),
                     )
 
                 if provider and attempt.survey.integration.provider_code == "rfg":

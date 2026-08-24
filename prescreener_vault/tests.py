@@ -8,6 +8,7 @@ from unittest.mock import patch
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
 from django.core.management import call_command
+from django.db import OperationalError, transaction
 from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
@@ -15,12 +16,18 @@ from xml.etree import ElementTree
 
 from accounts.models import AccessFunction, UserFunctionOverride
 from surveys.models import Survey, SurveyAttempt, TargetingQuestion
+from surveys.providers import ProviderError
 from surveys.survey_flow import create_attempt
 
 from .constants import DATABASE_ALIAS
 from .models import PrescreenerAnswer, PrescreenerSubmission
 from .cache import cached_profile, invalidate_vault_cache, vault_filter_options, vault_filtered_summary
-from .services import _age_from_value, _canonical_attribute, increment_profile_usage
+from .services import (
+    _age_from_value,
+    _canonical_attribute,
+    capture_prescreener_submission,
+    increment_profile_usage,
+)
 from .services import PrescreenerVaultError
 
 
@@ -334,6 +341,56 @@ class PrescreenerVaultFlowTests(TestCase):
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, SurveyAttempt.Status.INITIATED)
         self.assertEqual(attempt.answers, {})
+
+    def test_provider_failure_allows_corrected_answers_on_same_rid_retry(self):
+        attempt = self._attempt()
+        with patch(
+            "surveys.views.build_outbound_url",
+            side_effect=ProviderError("provider temporarily unavailable"),
+        ):
+            first = self._submit(attempt, age="24", gender="1")
+        self.assertEqual(first.status_code, 200)
+        self.assertContains(first, "provider temporarily unavailable")
+        original = PrescreenerSubmission.objects.using(DATABASE_ALIAS).get(rid=attempt.rid)
+        self.assertEqual(original.respondent_age, 24)
+
+        second = self._submit(attempt, age="25", gender="1")
+
+        self.assertEqual(second.status_code, 302)
+        corrected = PrescreenerSubmission.objects.using(DATABASE_ALIAS).get(rid=attempt.rid)
+        self.assertEqual(corrected.uid, original.uid)
+        self.assertEqual(corrected.respondent_age, 25)
+        self.assertEqual(corrected.usage_count, 1)
+
+    @patch("prescreener_vault.services.time.sleep")
+    def test_transient_mysql_lock_timeout_is_retried(self, sleep_mock):
+        attempt = self._attempt()
+        answers = {
+            str(self.age.pk): {
+                "question_id": self.age.question_id,
+                "question_key": self.age.key,
+                "question_text": self.age.text,
+                "values": ["24"],
+                "upstream_values": ["24"],
+            }
+        }
+        real_atomic = transaction.atomic
+        call_count = 0
+
+        def flaky_atomic(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            if call_count == 1:
+                raise OperationalError(1205, "Lock wait timeout exceeded")
+            return real_atomic(*args, **kwargs)
+
+        with patch("prescreener_vault.services.transaction.atomic", side_effect=flaky_atomic):
+            submission, created = capture_prescreener_submission(attempt, answers)
+
+        self.assertTrue(created)
+        self.assertEqual(submission.rid, attempt.rid)
+        self.assertEqual(call_count, 2)
+        sleep_mock.assert_called_once_with(0.05)
 
     def test_backfill_can_verify_then_clear_existing_operational_answers(self):
         attempt = SurveyAttempt.objects.create(
