@@ -19,7 +19,7 @@ from django.utils import timezone
 from rest_framework.test import APIClient
 
 from accounts.models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
-from vendors.models import Client, ClientIntegration, OrganizationUnit
+from vendors.models import Client, ClientIntegration, OrganizationUnit, VendorCommercialProfile
 
 from .integrations import InnovateMRClient, InnovateMRNotFound, PagedSurveyResult
 from .identifiers import generate_platform_pid, is_valid_platform_pid
@@ -1292,6 +1292,27 @@ class StudiesTrackingTests(TestCase):
         self.assertContains(page, "Project filter")
         self.assertContains(page, self.survey.local_id)
 
+    def test_supplier_filter_lists_and_filters_external_supplier_attempts(self):
+        supplier = get_user_model().objects.create_user(
+            username="traffic-supplier",
+            first_name="Traffic",
+            last_name="Supplier",
+            email="traffic-supplier@example.test",
+        )
+        self.complete.vendor = supplier
+        self.complete.save(update_fields=["vendor", "updated_at"])
+
+        self.client.force_login(self.owner)
+        page = self.client.get(reverse("studies"))
+        self.assertContains(page, 'data-multi-filter="supplier"')
+        self.assertContains(page, "Traffic Supplier")
+        self.assertContains(page, 'aria-label="Search suppliers"')
+
+        response = self.api.get(reverse("survey-attempt-list"), {"supplier": supplier.pk})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["rid"], self.complete.rid)
+
     def test_traffic_report_api_exposes_clean_provider_termination_reason(self):
         self.complete.status = SurveyAttempt.Status.TERMINATED
         self.complete.upstream_transaction_data = [{
@@ -1303,6 +1324,48 @@ class StudiesTrackingTests(TestCase):
         response = self.api.get(reverse("survey-attempt-list"), {"search": self.complete.rid})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["results"][0]["termination_reason"], "Off hours")
+
+    def test_traffic_provider_reason_is_independently_permission_scoped(self):
+        self.complete.status = SurveyAttempt.Status.TERMINATED
+        self.complete.upstream_transaction_data = {
+            "status": "Early termination",
+            "termReason": "Provider-only reason",
+        }
+        self.complete.status_source = "browser_callback"
+        self.complete.save(update_fields=["status", "status_source", "upstream_transaction_data", "updated_at"])
+        for code in ("attempts.view", "studies.column.status"):
+            UserFunctionOverride.objects.create(
+                user=self.kanik,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
+        api = APIClient()
+        api.force_authenticate(self.kanik)
+
+        hidden = api.get(reverse("survey-attempt-list"))
+
+        self.assertEqual(hidden.status_code, 200)
+        self.assertEqual(hidden.data["results"][0]["termination_reason"], "")
+        self.assertEqual(hidden.data["results"][0]["status_source"], "")
+        UserFunctionOverride.objects.create(
+            user=self.kanik,
+            function=AccessFunction.objects.get(code="studies.field.provider_status"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+
+        visible = api.get(reverse("survey-attempt-list"))
+
+        self.assertEqual(visible.status_code, 200)
+        self.assertEqual(visible.data["results"][0]["termination_reason"], "Provider-only reason")
+        self.assertEqual(visible.data["results"][0]["status_source"], "")
+
+        UserFunctionOverride.objects.create(
+            user=self.kanik,
+            function=AccessFunction.objects.get(code="studies.field.status_source"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        source_visible = api.get(reverse("survey-attempt-list"))
+        self.assertEqual(source_visible.data["results"][0]["status_source"], "browser_callback")
 
     def test_traffic_list_is_slim_but_retrieve_keeps_full_audit_contract(self):
         response = self.api.get(reverse("survey-attempt-list"), {"search": self.complete.rid})
@@ -1461,7 +1524,8 @@ class StudiesTrackingTests(TestCase):
             "Project id", "Client name", "Cleint survey id", "Country",
             "Current Client CPI", "Client entry link CPI", "Vendor CPI", "Vendor name",
             "RID", "PID", "User name", "Device", "OS", "Browser", "User agent",
-            "Entry IP", "Exit IP", "Actual LOI (minutes)", "Status", "Status source",
+            "Entry IP", "Exit IP", "Actual LOI (minutes)", "Status",
+            "Provider status", "Term reason", "Term category", "Status source",
             "Inisitate at", "Presecreent at", "Redirect at", "entry date time",
             "Exit date time",
         ])
@@ -2109,6 +2173,62 @@ class TerminationReasonPageTests(TestCase):
         self.assertEqual(export.status_code, 200)
         self.assertEqual(rows[0], ["RID"])
         self.assertEqual(rows[1], [own_attempt.rid])
+
+    def test_external_supplier_can_be_granted_scoped_term_reports(self):
+        supplier = get_user_model().objects.create_user(
+            username="external-reason-supplier",
+            first_name="External",
+            last_name="Supplier",
+            password="test-password",
+        )
+        EmployeeProfile.objects.update_or_create(
+            user=supplier,
+            defaults={
+                "account_type": EmployeeProfile.AccountType.EXTERNAL_VENDOR,
+                "role": Role.objects.get(slug="external-vendor"),
+            },
+        )
+        VendorCommercialProfile.objects.create(
+            vendor=supplier,
+            delivery_mode=VendorCommercialProfile.DeliveryMode.PANEL,
+            is_active=True,
+        )
+        own_attempt = SurveyAttempt.objects.create(
+            rid="ExtRe1Ab2C",
+            survey=self.survey,
+            platform_user=supplier,
+            user_id=str(supplier.pk),
+            status=SurveyAttempt.Status.TERMINATED,
+            callback_at=timezone.now(),
+            upstream_transaction_data={
+                "status": "Early termination",
+                "termReason": "Supplier scoped reason",
+            },
+        )
+        for code in (
+            "termination_reasons.view",
+            "termination_reasons.column.rid",
+            "termination_reasons.column.status",
+            "termination_reasons.table.provider_status",
+            "termination_reasons.table.reason",
+        ):
+            UserFunctionOverride.objects.create(
+                user=supplier,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
+        self.assertTrue(self.client.login(
+            username="external-reason-supplier",
+            password="test-password",
+        ))
+
+        response = self.client.get(reverse("termination-reasons"))
+
+        self.assertEqual(response.status_code, 200, response.headers.get("Location"))
+        self.assertContains(response, "Term Reports")
+        self.assertContains(response, own_attempt.rid)
+        self.assertContains(response, "Supplier scoped reason")
+        self.assertNotContains(response, self.attempt.rid)
 
     def test_rfg_detail_uses_stored_provider_callback_reason(self):
         client = Client.objects.create(code="reason-rfg", name="Research For Good", provider_code="rfg")

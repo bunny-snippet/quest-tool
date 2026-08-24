@@ -389,8 +389,12 @@ class PrescreenerVaultFlowTests(TestCase):
 
         self.assertTrue(created)
         self.assertEqual(submission.rid, attempt.rid)
-        self.assertEqual(call_count, 2)
-        sleep_mock.assert_called_once_with(0.05)
+        # The second top-level attempt succeeds. ``bulk_create`` may open
+        # additional internal atomic blocks depending on the DB backend.
+        self.assertGreaterEqual(call_count, 2)
+        sleep_mock.assert_called_once()
+        self.assertGreaterEqual(sleep_mock.call_args.args[0], 0.0375)
+        self.assertLessEqual(sleep_mock.call_args.args[0], 0.0625)
 
     def test_backfill_can_verify_then_clear_existing_operational_answers(self):
         attempt = SurveyAttempt.objects.create(

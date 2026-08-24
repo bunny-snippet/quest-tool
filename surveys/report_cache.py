@@ -181,8 +181,31 @@ def traffic_filter_metadata(user, visible_attempts, visible_surveys) -> dict:
         from .user_hits import user_hit_filter_options
 
         hierarchy = user_hit_filter_options(user)
+        supplier_rows = list(
+            visible_attempts.filter(vendor__isnull=False)
+            .values(
+                "vendor_id",
+                "vendor__first_name",
+                "vendor__last_name",
+                "vendor__username",
+                "vendor__email",
+            )
+            .distinct()
+            .order_by("vendor__first_name", "vendor__last_name", "vendor__username")
+        )
+        suppliers = []
+        for row in supplier_rows:
+            full_name = " ".join(
+                part for part in (row["vendor__first_name"], row["vendor__last_name"]) if part
+            ).strip()
+            suppliers.append({
+                "value": str(row["vendor_id"]),
+                "name": full_name or row["vendor__username"] or row["vendor__email"] or f"Supplier {row['vendor_id']}",
+                "email": row["vendor__email"] or "",
+            })
         return {
             **hierarchy,
+            "suppliers": suppliers,
             "countries": list(
                 visible_surveys.exclude(country_code="")
                 .values("country_code", "country")
@@ -203,7 +226,9 @@ def traffic_filter_metadata(user, visible_attempts, visible_surveys) -> dict:
             ),
         }
 
-    return cached_user_metadata("traffic-filters", user, load)
+    # v2 invalidates metadata created before supplier-aware filters and also
+    # refreshes organization labels after this deployment.
+    return cached_user_metadata("traffic-filters-v2", user, load)
 
 
 def term_filter_metadata(user, base_queryset) -> dict:

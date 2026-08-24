@@ -44,7 +44,7 @@
         {% if 'survey' in reason_columns %}<th>Project / Survey</th>{% endif %}
         {% if 'client' in reason_columns %}<th>Client</th>{% endif %}
         {% if 'respondent' in reason_columns %}<th>Respondent</th>{% endif %}
-        {% if 'status' in reason_columns %}<th>Status</th>{% endif %}
+        {% if show_reason_status_cell %}<th>Status</th>{% endif %}
         {% if 'ended' in reason_columns %}<th>Ended</th>{% endif %}
         {% if 'actions' in reason_columns %}<th>Action</th>{% endif %}
       </tr></thead>
@@ -53,7 +53,7 @@
         {% if 'survey' in reason_columns %}<td><strong>{{ row.survey.local_id }}</strong><span class="sub-id">Survey {{ row.survey.source_key }}</span></td>{% endif %}
         {% if 'client' in reason_columns %}<td><strong>{% if row.survey.client %}{{ row.survey.client.name }}{% else %}{{ row.survey.company_name|default:"Unknown client" }}{% endif %}</strong><span class="sub-id">{% if row.survey.integration %}{{ row.survey.integration.provider_code }}{% else %}innovatemr{% endif %}</span></td>{% endif %}
         {% if 'respondent' in reason_columns %}<td><strong>{% if row.platform_user %}{{ row.platform_user.get_full_name|default:row.platform_user.username }}{% else %}Unavailable{% endif %}</strong><span class="sub-id">{{ row.callback_ip|default:row.initiation_ip|default:"No IP" }}</span></td>{% endif %}
-        {% if 'status' in reason_columns %}<td><div class="reason-table-outcome"><span class="reason-state reason-state-{{ row.status }}">{{ row.reason_outcome.status|default:"Provider status unavailable" }}</span><small class="reason-platform-status">Platform: {{ row.reason_status_label }}</small>{% if row.reason_outcome.reason %}<small title="{{ row.reason_outcome.reason }}">{{ row.reason_outcome.reason }}</small>{% elif row.reason_outcome.category %}<small>{{ row.reason_outcome.category }}</small>{% endif %}</div></td>{% endif %}
+        {% if show_reason_status_cell %}<td><div class="reason-table-outcome">{% if reason_table_details.provider_status %}<span class="reason-state reason-state-{{ row.status }}">{{ row.reason_outcome.status|default:"Provider status unavailable" }}</span>{% endif %}{% if 'status' in reason_columns %}<small class="reason-platform-status">Platform: {{ row.reason_status_label }}</small>{% endif %}{% if reason_table_details.reason %}{% if row.reason_outcome.reason %}<small title="{{ row.reason_outcome.reason }}">{{ row.reason_outcome.reason }}</small>{% elif row.reason_outcome.category %}<small>{{ row.reason_outcome.category }}</small>{% endif %}{% endif %}</div></td>{% endif %}
         {% if 'ended' in reason_columns %}<td><time>{{ row.callback_at|default:row.last_callback_at|default:row.initiated_at|date:"d M Y" }}<span>{{ row.callback_at|default:row.last_callback_at|default:row.initiated_at|date:"h:i:s A T" }}</span></time></td>{% endif %}
         {% if 'actions' in reason_columns %}<td>{% if can_view_reason_details %}<a class="reason-detail-button" href="?{% if detail_query %}{{ detail_query }}&amp;{% endif %}detail={{ row.rid }}">Details <span>→</span></a>{% endif %}</td>{% endif %}
       </tr>{% empty %}<tr><td colspan="{{ reason_column_count }}"><div class="empty-state"><span>?</span><strong>No unsuccessful outcomes found</strong><small>Change the current filters or wait for a final provider status.</small></div></td></tr>{% endfor %}</tbody>
@@ -61,9 +61,9 @@
   </div>
 
   <div class="mobile-cards reason-mobile-cards">{% for row in page_obj %}<article class="survey-card reason-mobile-card">
-    {% if 'rid' in reason_columns or 'status' in reason_columns %}<div class="card-top">{% if 'rid' in reason_columns %}<strong class="reason-rid">{{ row.rid }}</strong>{% endif %}{% if 'status' in reason_columns %}<span class="reason-state reason-state-{{ row.status }}">{{ row.reason_outcome.status|default:"Provider status unavailable" }}</span>{% endif %}</div>{% endif %}
-    {% if 'status' in reason_columns %}<small class="reason-platform-status">Platform: {{ row.reason_status_label }}</small>
-    {% if row.reason_outcome.reason %}<p class="reason-card-cause">{{ row.reason_outcome.reason }}</p>{% elif row.reason_outcome.category %}<p class="reason-card-cause">{{ row.reason_outcome.category }}</p>{% endif %}{% endif %}
+    {% if 'rid' in reason_columns or show_reason_status_cell %}<div class="card-top">{% if 'rid' in reason_columns %}<strong class="reason-rid">{{ row.rid }}</strong>{% endif %}{% if reason_table_details.provider_status %}<span class="reason-state reason-state-{{ row.status }}">{{ row.reason_outcome.status|default:"Provider status unavailable" }}</span>{% endif %}</div>{% endif %}
+    {% if 'status' in reason_columns %}<small class="reason-platform-status">Platform: {{ row.reason_status_label }}</small>{% endif %}
+    {% if reason_table_details.reason %}{% if row.reason_outcome.reason %}<p class="reason-card-cause">{{ row.reason_outcome.reason }}</p>{% elif row.reason_outcome.category %}<p class="reason-card-cause">{{ row.reason_outcome.category }}</p>{% endif %}{% endif %}
     {% if 'client' in reason_columns %}<h3>{% if row.survey.client %}{{ row.survey.client.name }}{% else %}{{ row.survey.company_name|default:"Unknown client" }}{% endif %}</h3>{% endif %}
     {% if 'survey' in reason_columns %}<p>Project {{ row.survey.local_id }} · Survey {{ row.survey.source_key }}</p>{% endif %}
     {% if 'respondent' in reason_columns or 'ended' in reason_columns %}<div class="card-grid">{% if 'respondent' in reason_columns %}<span><small>Respondent</small><b>{% if row.platform_user %}{{ row.platform_user.get_full_name|default:row.platform_user.username }}{% else %}Unavailable{% endif %}</b></span>{% endif %}{% if 'ended' in reason_columns %}<span><small>Ended</small><b>{{ row.callback_at|default:row.last_callback_at|default:row.initiated_at|date:"d M, h:i A" }}</b></span>{% endif %}</div>{% endif %}

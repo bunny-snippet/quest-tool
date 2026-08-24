@@ -3,6 +3,7 @@
 (() => {
   const byId = (id) => document.getElementById(id);
   const columns = new Set(JSON.parse(byId('studyColumnAccess')?.textContent || '[]'));
+  const canViewProviderStatus = JSON.parse(byId('studyProviderStatusAccess')?.textContent || 'false');
   const canViewClientName = JSON.parse(byId('studyClientNameAccess')?.textContent || 'false');
   const columnCount = Math.max(1, columns.size);
   const elements = {
@@ -10,6 +11,7 @@
     subBranchFilters: document.querySelector('[data-multi-filter="sub_branch"]'),
     shiftFilters: document.querySelector('[data-multi-filter="shift"]'),
     userFilters: document.querySelector('[data-multi-filter="user"]'),
+    supplierFilters: document.querySelector('[data-multi-filter="supplier"]'),
     statusFilters: document.querySelector('[data-multi-filter="status"]'),
     countryFilters: document.querySelector('[data-multi-filter="country"]'),
     clientFilters: document.querySelector('[data-multi-filter="client"]'),
@@ -69,7 +71,7 @@
     const button = container.querySelector('.multi-trigger');
     const fallback = {
       branch: 'All branches', sub_branch: 'All sub-branches', shift: 'All shifts',
-      user: 'All users', status: 'All statuses', country: 'All countries', client: 'All clients', buyer_id: 'All buyer IDs',
+      user: 'All users', supplier: 'All suppliers', status: 'All statuses', country: 'All countries', client: 'All clients', buyer_id: 'All buyer IDs',
     }[container.dataset.multiFilter] || 'All options';
     button.querySelector('span').textContent = checked.length === 0 ? fallback : checked.length === 1 ? checked[0].closest('label').innerText.trim() : `${checked.length} selected`;
     button.classList.toggle('has-value', checked.length > 0);
@@ -177,6 +179,7 @@
     const subBranches = selectedValues(elements.subBranchFilters);
     const shifts = selectedValues(elements.shiftFilters);
     const users = selectedValues(elements.userFilters);
+    const suppliers = selectedValues(elements.supplierFilters);
     const statuses = selectedValues(elements.statusFilters);
     const countries = selectedValues(elements.countryFilters);
     const clients = selectedValues(elements.clientFilters);
@@ -186,6 +189,7 @@
     if (subBranches.length) params.set('sub_branch', subBranches.join(','));
     if (shifts.length) params.set('shift', shifts.join(','));
     if (users.length) params.set('user', users.join(','));
+    if (suppliers.length) params.set('supplier', suppliers.join(','));
     if (statuses.length) params.set('status', statuses.join(','));
     if (countries.length) params.set('country', countries.join(','));
     if (clients.length) params.set('client', clients.join(','));
@@ -296,7 +300,7 @@
   function timestampCell(value) { const stamp = formatIst(value, true); return `<div class="study-timestamp"><strong>${stamp.date}</strong><span>${stamp.time} IST</span></div>`; }
   function statusPill(attempt) {
     const label = ['initiated', 'redirected'].includes(attempt.status) ? 'Initiated' : (attempt.status_label || attempt.status);
-    const reason = attempt.termination_reason || attempt.termination_category || '';
+    const reason = canViewProviderStatus ? (attempt.termination_reason || attempt.termination_category || '') : '';
     return `<div class="attempt-outcome"><span class="attempt-status ${statusTone[attempt.status] || 'neutral'}"><i></i>${escapeHtml(label)}</span>${reason ? `<small class="attempt-reason" title="${escapeAttr(reason)}">${escapeHtml(reason)}</small>` : ''}</div>`;
   }
 

@@ -1,12 +1,13 @@
 """Normalize and immutably persist prescreener submissions in the vault DB."""
 
 import copy
+import random
 import re
 import time
 from datetime import date, datetime
 
 from django.conf import settings
-from django.db import OperationalError, close_old_connections, transaction
+from django.db import OperationalError, close_old_connections, connections, transaction
 from django.db.models import F
 from django.utils import timezone
 
@@ -25,7 +26,14 @@ class PrescreenerVaultDisabled(PrescreenerVaultError):
     pass
 
 
-RETRYABLE_MYSQL_ERROR_CODES = {1205, 1213, 2006, 2013}
+RETRYABLE_MYSQL_ERROR_CODES = {
+    1040, 1047,
+    1158, 1159, 1160, 1161,
+    1205, 1213,
+    1927,
+    2002, 2003, 2006, 2013,
+}
+VAULT_WRITE_RETRY_DELAYS = (0, 0.05, 0.15, 0.35, 0.75, 1.25, 2.0)
 
 
 def operational_answer_value(answers):
@@ -296,17 +304,32 @@ def wrong_target_country_answers(attempt, location):
 
 
 def _write_answer_rows(submission, snapshots, survey):
-    """Write normalized child rows for an already-created vault submission."""
+    """Write normalized children with bounded queries, not row-by-row locks."""
 
+    answer_rows = []
+    value_specs = {}
     for source_snapshot in snapshots:
         snapshot = dict(source_snapshot)
         normalized_values = snapshot.pop("normalized_values")
-        answer = PrescreenerAnswer.objects.using(DATABASE_ALIAS).create(
+        answer_rows.append(PrescreenerAnswer(
             submission=submission,
             **snapshot,
-        )
+        ))
         source_values = snapshot["answer_values"] or snapshot["upstream_values"]
         labels = snapshot["answer_labels"] or source_values
+        value_specs[snapshot["position"]] = (snapshot, source_values, labels, normalized_values)
+
+    PrescreenerAnswer.objects.using(DATABASE_ALIAS).bulk_create(answer_rows, batch_size=100)
+    persisted_answers = {
+        answer.position: answer
+        for answer in PrescreenerAnswer.objects.using(DATABASE_ALIAS).filter(
+            submission=submission,
+            position__in=value_specs,
+        )
+    }
+    value_rows = []
+    for answer_position, (snapshot, source_values, labels, normalized_values) in value_specs.items():
+        answer = persisted_answers[answer_position]
         for value_position, value in enumerate(source_values, start=1):
             label = labels[value_position - 1] if value_position <= len(labels) else value
             normalized = (
@@ -314,7 +337,7 @@ def _write_answer_rows(submission, snapshots, survey):
                 if value_position <= len(normalized_values)
                 else _normalize_profile_value(snapshot["canonical_attribute"], label)
             )
-            PrescreenerAnswerValue.objects.using(DATABASE_ALIAS).create(
+            value_rows.append(PrescreenerAnswerValue(
                 answer=answer,
                 position=value_position,
                 value=str(value),
@@ -322,7 +345,12 @@ def _write_answer_rows(submission, snapshots, survey):
                 normalized_value=normalized,
                 canonical_attribute=snapshot["canonical_attribute"],
                 country_code=survey.country_code.upper(),
-            )
+            ))
+    if value_rows:
+        PrescreenerAnswerValue.objects.using(DATABASE_ALIAS).bulk_create(
+            value_rows,
+            batch_size=250,
+        )
 
 
 def capture_prescreener_submission(
@@ -431,15 +459,23 @@ def capture_prescreener_submission(
         # Concurrent submissions can briefly hit an InnoDB deadlock, lock
         # timeout or stale connection. Each attempt is idempotent by UID and
         # runs in its own transaction, so bounded retries are safe.
-        for retry_number, delay in enumerate((0, 0.05, 0.15, 0.35)):
+        for retry_number, delay in enumerate(VAULT_WRITE_RETRY_DELAYS):
             if delay:
-                time.sleep(delay)
+                # Avoid a thundering herd when many prescreeners collide with
+                # the same brief lock/connection incident.
+                time.sleep(random.uniform(delay * 0.75, delay * 1.25))
             try:
                 return persist_once()
             except OperationalError as exc:
                 error_code = exc.args[0] if exc.args else None
-                if error_code not in RETRYABLE_MYSQL_ERROR_CODES or retry_number == 3:
+                if (
+                    error_code not in RETRYABLE_MYSQL_ERROR_CODES
+                    or retry_number == len(VAULT_WRITE_RETRY_DELAYS) - 1
+                ):
                     raise
+                # A broken socket or aborted transaction must never be reused
+                # by the next request attempt.
+                connections[DATABASE_ALIAS].close()
                 close_old_connections()
     except PrescreenerVaultError:
         raise

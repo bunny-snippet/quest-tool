@@ -661,6 +661,19 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
         if request and not self._can_view_client_name:
             data["client_name"] = ""
             data["company_name"] = ""
+        if request and not hasattr(self, "_can_view_provider_status"):
+            self._can_view_provider_status = has_function_access(
+                request.user, "studies.field.provider_status"
+            )
+        if request and not self._can_view_provider_status:
+            data["termination_reason"] = ""
+            data["termination_category"] = ""
+        if request and not hasattr(self, "_can_view_status_source"):
+            self._can_view_status_source = has_function_access(
+                request.user, "studies.field.status_source"
+            )
+        if request and not self._can_view_status_source:
+            data["status_source"] = ""
         return data
 
     def get_user_name(self, obj) -> str:
@@ -762,6 +775,7 @@ class SurveyAttemptListSerializer(SurveyAttemptSerializer):
             "client_name", "buyer_id",
             "source_cpi_snapshot", "cpi_snapshot_source", "cpi_currency_snapshot",
             "status_label", "termination_reason", "termination_category", "status",
+            "status_source",
             "initiated_at", "callback_at", "loi_seconds",
             "entry_ip", "exit_ip", "entry_device",
         ]

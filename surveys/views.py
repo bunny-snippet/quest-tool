@@ -186,10 +186,13 @@ STUDY_COLUMN_PERMISSIONS = {
 }
 
 STUDY_CLIENT_NAME_PERMISSION = "studies.column.client_name"
+STUDY_PROVIDER_STATUS_PERMISSION = "studies.field.provider_status"
+STUDY_STATUS_SOURCE_PERMISSION = "studies.field.status_source"
 
 STUDY_FILTER_PERMISSIONS = {
     "search": "studies.filter.search", "branch": "studies.filter.branch",
     "sub_branch": "studies.filter.sub_branch", "shift": "studies.filter.shift", "user": "studies.filter.user",
+    "supplier": "studies.filter.supplier",
     "status": "studies.filter.status", "country": "studies.filter.country",
     "client": "studies.filter.client", "buyer": "studies.filter.buyer",
     "project": "studies.filter.project", "date": "studies.filter.date",
@@ -289,6 +292,13 @@ TERM_REASON_CARD_PERMISSIONS = {
     "quota": "termination_reasons.card.quota",
     "quality": "termination_reasons.card.quality",
 }
+
+TERM_REASON_TABLE_DETAIL_PERMISSIONS = {
+    "provider_status": "termination_reasons.table.provider_status",
+    "reason": "termination_reasons.table.reason",
+}
+
+TERM_REASON_STATUS_SOURCE_EXPORT_PERMISSION = "termination_reasons.export.status_source"
 
 PRESCREENER_DATA_FILTER_PERMISSIONS = {
     "search": "prescreener_data.filter.search",
@@ -424,6 +434,7 @@ def studies_page(request):
         "study_branches": metadata["branches"],
         "study_sub_branches": metadata["sub_branches"],
         "study_shifts": metadata["shifts"],
+        "study_suppliers": metadata["suppliers"],
         "study_countries": metadata["countries"],
         "study_clients": metadata["clients"],
         "study_buyers": metadata["buyers"],
@@ -438,6 +449,7 @@ def studies_page(request):
         "study_columns": _permitted_columns(codes, STUDY_COLUMN_PERMISSIONS),
         "study_column_count": max(1, len(_permitted_columns(codes, STUDY_COLUMN_PERMISSIONS))),
         "can_view_study_client_name": STUDY_CLIENT_NAME_PERMISSION in codes,
+        "can_view_study_provider_status": STUDY_PROVIDER_STATUS_PERMISSION in codes,
         "study_cards": _permitted_columns(codes, STUDY_CARD_PERMISSIONS),
         "can_export": "attempts.export" in codes,
         "can_change_study_page_size": "studies.control.page_size" in codes,
@@ -814,6 +826,7 @@ def termination_reasons_page(request):
     codes = effective_permission_codes(request.user)
     filters_access = _component_access(codes, TERM_REASON_FILTER_PERMISSIONS)
     columns = _permitted_columns(codes, TERM_REASON_COLUMN_PERMISSIONS)
+    table_details = _component_access(codes, TERM_REASON_TABLE_DETAIL_PERMISSIONS)
     queryset, selected = _filtered_term_report_queryset(request, filters_access)
     detail_rid = (request.GET.get("detail") or request.GET.get("rid") or "").strip()
     detail_attempt = None
@@ -912,7 +925,12 @@ def termination_reasons_page(request):
         "summary": summary,
         "page_obj": page_obj,
         "reason_columns": columns,
-        "reason_column_count": max(1, len(columns)),
+        "reason_column_count": max(
+            1,
+            len(columns) + (1 if "status" not in columns and any(table_details.values()) else 0),
+        ),
+        "reason_table_details": table_details,
+        "show_reason_status_cell": "status" in columns or any(table_details.values()),
         "reason_filters": filters_access,
         "reason_cards": _permitted_columns(codes, TERM_REASON_CARD_PERMISSIONS),
         "can_paginate_reasons": "termination_reasons.control.pagination" in codes,
@@ -943,17 +961,41 @@ def termination_reasons_export(request):
         "survey": (["Project ID", "Client survey ID"], [19, 20]),
         "client": (["Client", "Provider"], [22, 18]),
         "respondent": (["Respondent", "Email", "Entry IP", "Exit IP"], [22, 30, 17, 17]),
-        "status": (
-            ["Platform status", "Provider status", "Term reason", "Term category", "Status source"],
-            [20, 27, 44, 22, 20],
-        ),
+        "status": (["Platform status"], [20]),
         "ended": (["Started at", "Ended at", "LOI (minutes)"], [24, 24, 15]),
     }
     ordered_columns = [name for name in TERM_REASON_COLUMN_PERMISSIONS if name in permitted and name in specs]
-    if not ordered_columns:
-        raise PermissionDenied("No Term Report columns are assigned to your account.")
-    headers = [header for name in ordered_columns for header in specs[name][0]]
-    widths = [width for name in ordered_columns for width in specs[name][1]]
+    table_details = _component_access(codes, TERM_REASON_TABLE_DETAIL_PERMISSIONS)
+    extra_status_fields = []
+    if table_details["provider_status"]:
+        extra_status_fields.append(("provider_status", "Provider status", 27))
+    if table_details["reason"]:
+        extra_status_fields.extend([
+            ("reason", "Term reason", 44),
+            ("category", "Term category", 22),
+        ])
+    if TERM_REASON_STATUS_SOURCE_EXPORT_PERMISSION in codes:
+        extra_status_fields.append(("status_source", "Status source", 20))
+    export_fields = []
+    for name in ordered_columns:
+        export_fields.append(("column", name))
+        if name == "status":
+            export_fields.extend(("status_detail", key) for key, _header, _width in extra_status_fields)
+    if "status" not in ordered_columns:
+        export_fields.extend(("status_detail", key) for key, _header, _width in extra_status_fields)
+    if not export_fields:
+        raise PermissionDenied("No Term Report export fields are assigned to your account.")
+    extra_specs = {key: (header, width) for key, header, width in extra_status_fields}
+    headers = []
+    widths = []
+    for field_type, name in export_fields:
+        if field_type == "column":
+            headers.extend(specs[name][0])
+            widths.extend(specs[name][1])
+        else:
+            header, width = extra_specs[name]
+            headers.append(header)
+            widths.append(width)
 
     def rows():
         for attempt in queryset.iterator(chunk_size=500):
@@ -974,20 +1016,26 @@ def termination_reasons_export(request):
                 "respondent": [
                     respondent, email, attempt.initiation_ip or "", attempt.callback_ip or "",
                 ],
-                "status": [
-                    UNSUCCESSFUL_STATUS_LABELS.get(attempt.status, attempt.get_status_display()),
-                    outcome.get("status") or "Not supplied",
-                    outcome.get("reason") or "",
-                    outcome.get("category") or "",
-                    attempt.status_source,
-                ],
+                "status": [UNSUCCESSFUL_STATUS_LABELS.get(attempt.status, attempt.get_status_display())],
                 "ended": [
                     _excel_datetime(attempt.initiated_at),
                     _excel_datetime(ended_at),
                     round(attempt.loi_seconds / 60, 2) if attempt.loi_seconds is not None else "",
                 ],
             }
-            yield [value for name in ordered_columns for value in values_by_column[name]]
+            status_detail_values = {
+                "provider_status": outcome.get("status") or "Not supplied",
+                "reason": outcome.get("reason") or "",
+                "category": outcome.get("category") or "",
+                "status_source": attempt.status_source,
+            }
+            values = []
+            for field_type, name in export_fields:
+                if field_type == "column":
+                    values.extend(values_by_column[name])
+                else:
+                    values.append(status_detail_values[name])
+            yield values
 
     local_now = timezone.localtime()
     return build_excel_response(
@@ -3170,6 +3218,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             "studies.filter.sub_branch": ("sub_branch",),
             "studies.filter.shift": ("shift",),
             "studies.filter.user": ("user",),
+            "studies.filter.supplier": ("supplier",),
             "studies.filter.status": ("status",),
             "studies.filter.country": ("country",),
             "studies.filter.client": ("client",),
@@ -3189,6 +3238,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         parameters=[
             OpenApiParameter("search", OpenApiTypes.STR, description="Search RID, user, survey, IP or client metadata."),
             OpenApiParameter("user", OpenApiTypes.STR, description="Comma-separated platform user IDs."),
+            OpenApiParameter("supplier", OpenApiTypes.STR, description="Comma-separated external supplier user IDs."),
             OpenApiParameter("branch", OpenApiTypes.STR, description="Comma-separated organization Branch IDs or legacy labels."),
             OpenApiParameter("sub_branch", OpenApiTypes.STR, description="Comma-separated organization Sub-branch IDs or legacy labels."),
             OpenApiParameter("shift", OpenApiTypes.STR, description="Comma-separated organization Shift IDs or legacy labels."),
@@ -3511,6 +3561,12 @@ def _attempt_excel_rows(queryset, requesting_user=None):
     can_view_client_name = has_function_access(
         requesting_user, STUDY_CLIENT_NAME_PERMISSION
     )
+    can_view_provider_status = has_function_access(
+        requesting_user, STUDY_PROVIDER_STATUS_PERMISSION
+    )
+    can_view_status_source = has_function_access(
+        requesting_user, STUDY_STATUS_SOURCE_PERMISSION
+    )
     permitted = set(_permitted_columns(
         effective_permission_codes(requesting_user), STUDY_COLUMN_PERMISSIONS
     ))
@@ -3522,7 +3578,14 @@ def _attempt_excel_rows(queryset, requesting_user=None):
         "survey_id": (["Cleint survey id"], [18]),
         "pid": (["PID"], [12]),
         "respondent_id": (["RID"], [14]),
-        "status": (["Status", "Status source"], [19, 18]),
+        "status": (
+            ["Status"]
+            + (["Provider status", "Term reason", "Term category"] if can_view_provider_status else [])
+            + (["Status source"] if can_view_status_source else []),
+            [19]
+            + ([27, 44, 22] if can_view_provider_status else [])
+            + ([18] if can_view_status_source else []),
+        ),
         "country": (["Country"], [18]),
         "cpi": (
             ["Current Client CPI", "Client entry link CPI"]
@@ -3553,6 +3616,7 @@ def _attempt_excel_rows(queryset, requesting_user=None):
                 if attempt.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED}
                 else attempt.get_status_display()
             )
+            outcome = provider_outcome(attempt) if can_view_provider_status else {}
             values_by_column = {
                 "project_id": (
                     [survey.local_id]
@@ -3561,7 +3625,15 @@ def _attempt_excel_rows(queryset, requesting_user=None):
                 "survey_id": [survey.source_identifier],
                 "pid": [attempt.pid],
                 "respondent_id": [attempt.rid],
-                "status": [status_label, attempt.status_source],
+                "status": (
+                    [status_label]
+                    + ([
+                        outcome.get("status") or "",
+                        outcome.get("reason") or "",
+                        outcome.get("category") or "",
+                    ] if can_view_provider_status else [])
+                    + ([attempt.status_source] if can_view_status_source else [])
+                ),
                 "country": [survey.country or survey.country_code],
                 "cpi": [
                     viewer_attempt_cpi(attempt, requesting_user, current=True),
