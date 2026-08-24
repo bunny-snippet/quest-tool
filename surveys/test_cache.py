@@ -2,7 +2,10 @@ from unittest.mock import patch
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache, caches
+from django.db import connection
+from django.db.models import Value
 from django.test import SimpleTestCase, TestCase, override_settings
+from django.test.utils import CaptureQueriesContext
 from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory
 
@@ -175,6 +178,25 @@ class ProjectCacheTests(TestCase):
         self.assertTrue(Survey.objects.filter(pk=second.pk).exists())
         invalidate_project_cache()
         self.assertEqual(project_filtered_count(request, queryset), 2)
+
+    def test_filtered_count_selects_only_distinct_project_ids(self):
+        request = Request(APIRequestFactory().get("/api/v1/surveys/?country=US"))
+        request.user = self.user
+        queryset = (
+            Survey.objects.filter(country_code="US")
+            .annotate(expensive_list_annotation=Value("not-needed-for-count"))
+            .order_by("-source_modified_at", "-created_at")
+            .distinct()
+        )
+
+        with CaptureQueriesContext(connection) as captured:
+            self.assertEqual(project_filtered_count(request, queryset), 1)
+
+        count_sql = captured.captured_queries[-1]["sql"]
+        self.assertIn("COUNT", count_sql.upper())
+        self.assertIn("surveys_survey", count_sql)
+        self.assertNotIn("local_id", count_sql)
+        self.assertNotIn("expensive_list_annotation", count_sql)
 
 
 @override_settings(

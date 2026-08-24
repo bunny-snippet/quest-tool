@@ -151,9 +151,23 @@ def project_filtered_count(request, queryset) -> int:
             ),
         },
     )
+
+    def load_count():
+        """Count only unique project IDs, not every annotated list column.
+
+        The Projects list queryset can carry viewer-pricing and completes
+        annotations plus joins used by organization/supplier visibility. A
+        direct ``queryset.count()`` makes MySQL materialize those wide rows in
+        a DISTINCT subquery. Pagination only needs unique survey primary keys,
+        so clear ordering and narrow the selected columns before counting.
+        Filters and permission predicates remain attached to the queryset.
+        """
+
+        return queryset.order_by().values("pk").distinct().count()
+
     return int(safe_cache_get_or_set(
         key,
-        queryset.count,
+        load_count,
         timeout=settings.PROJECT_CACHE_COUNT_TTL_SECONDS,
         jitter_seconds=settings.PROJECT_CACHE_TTL_JITTER_SECONDS,
         alias=CACHE_ALIAS,

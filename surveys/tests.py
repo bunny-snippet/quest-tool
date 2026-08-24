@@ -501,11 +501,17 @@ class SurveyAPITests(TestCase):
         self.survey.completes = 999
         self.survey.save(update_fields=["completes"])
 
-        response = self.api.get(reverse("survey-list"))
+        caches["projects"].clear()
+        with CaptureQueriesContext(connection) as captured:
+            response = self.api.get(reverse("survey-list"))
 
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["results"][0]["completes"], 12)
         self.assertEqual(response.data["results"][0]["progress_percent"], 24.0)
+        list_sql = "\n".join(query["sql"] for query in captured.captured_queries)
+        self.assertNotIn("SELECT COUNT(U0", list_sql)
+        self.assertIn("GROUP BY", list_sql)
+        self.assertIn("surveys_surveyattempt", list_sql)
         export_rows = xlsx_rows(self.api.get(reverse("survey-export")))
         self.assertEqual(
             Decimal(str(export_rows[1][export_rows[0].index("Completes")])),

@@ -2675,25 +2675,73 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     def get_queryset(self):
         queryset = scope_surveys_for_user(super().get_queryset(), self.request.user)
         queryset = scope_surveys_for_api_key(queryset, self.request.auth)
-        queryset = annotate_survey_pricing_for_user(queryset, self.request.user)
-        completed_attempts = (
+
+        # Viewer-visible CPI must be calculated in SQL only when a request
+        # filters or sorts by it. Ordinary list rows are priced by the existing
+        # serializer using prefetched allocation data, avoiding two correlated
+        # pricing subqueries in both the page query and its pagination count.
+        cpi_ordering = self.request.query_params.get("ordering", "").lstrip("-") == "cpi"
+        cpi_filtering = any(
+            self.request.query_params.get(name) not in {None, ""}
+            for name in ("min_cpi", "max_cpi")
+        )
+        if self.action != "list" or cpi_ordering or cpi_filtering:
+            queryset = annotate_survey_pricing_for_user(queryset, self.request.user)
+
+        # A list page needs completes for only the rows it returns. Detail and
+        # export paths keep the correlated annotation because they consume the
+        # queryset outside the paginated list handler.
+        if self.action != "list":
+            completed_attempts = (
+                SurveyAttempt.objects.filter(
+                    survey_id=OuterRef("pk"),
+                    status=SurveyAttempt.Status.COMPLETED,
+                )
+                .values("survey_id")
+                .annotate(total=Count("pk"))
+                .values("total")[:1]
+            )
+            queryset = queryset.annotate(
+                platform_completes=Coalesce(
+                    Subquery(completed_attempts, output_field=IntegerField()),
+                    Value(0),
+                )
+            )
+        if self.action == "retrieve":
+            queryset = queryset.prefetch_related("quotas", "targeting_questions")
+        return queryset
+
+    @staticmethod
+    def _attach_page_platform_completes(surveys):
+        """Attach completes using one grouped query for the current page."""
+
+        survey_ids = [survey.pk for survey in surveys]
+        if not survey_ids:
+            return
+        totals = dict(
             SurveyAttempt.objects.filter(
-                survey_id=OuterRef("pk"),
+                survey_id__in=survey_ids,
                 status=SurveyAttempt.Status.COMPLETED,
             )
             .values("survey_id")
             .annotate(total=Count("pk"))
-            .values("total")[:1]
+            .values_list("survey_id", "total")
         )
-        queryset = queryset.annotate(
-            platform_completes=Coalesce(
-                Subquery(completed_attempts, output_field=IntegerField()),
-                Value(0),
-            )
-        )
-        if self.action == "retrieve":
-            queryset = queryset.prefetch_related("quotas", "targeting_questions")
-        return queryset
+        for survey in surveys:
+            survey.platform_completes = totals.get(survey.pk, 0)
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        if page is not None:
+            self._attach_page_platform_completes(page)
+            serializer = self.get_serializer(page, many=True)
+            return self.get_paginated_response(serializer.data)
+
+        rows = list(queryset)
+        self._attach_page_platform_completes(rows)
+        serializer = self.get_serializer(rows, many=True)
+        return Response(serializer.data)
 
     def get_required_function_permission(self):
         if self.action == "export":
