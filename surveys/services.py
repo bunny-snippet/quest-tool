@@ -17,7 +17,12 @@ from django.utils import timezone
 
 from vendors.models import ClientIntegration
 
-from .integrations import InnovateMRAPIError, InnovateMRClient, InnovateMRNotFound
+from .integrations import (
+    BIOBRAIN_DETAIL_ADAPTER_VERSION,
+    InnovateMRAPIError,
+    InnovateMRClient,
+    InnovateMRNotFound,
+)
 from .models import LocalIdSequence, Survey, SurveyAttempt, SurveyQuota, SyncRun, TargetingQuestion
 from .project_cache import invalidate_project_cache
 from .survey_flow import normalize_client_ip
@@ -60,6 +65,24 @@ def _stable_question_id(item: dict[str, Any]) -> int:
         return parsed
     digest = hashlib.sha256(json.dumps(item, sort_keys=True, default=str).encode()).hexdigest()
     return -int(digest[:12], 16)
+
+
+def _biobrain_language_id(survey: Survey):
+    """Recover LanguageId from current and legacy BioBrain inventory shapes."""
+
+    pending = [survey.raw_data or {}]
+    accepted = {"languageid", "language_id"}
+    while pending:
+        value = pending.pop()
+        if isinstance(value, dict):
+            for key, nested in value.items():
+                if str(key).replace("-", "_").lower() in accepted and nested not in (None, ""):
+                    return nested
+                if isinstance(nested, (dict, list)):
+                    pending.append(nested)
+        elif isinstance(value, list):
+            pending.extend(item for item in value if isinstance(item, (dict, list)))
+    return None
 
 
 def parse_upstream_datetime(value: Any) -> datetime | None:
@@ -168,7 +191,7 @@ def replace_survey_quotas(client: InnovateMRClient, survey: Survey) -> None:
     try:
         request_options = {}
         if getattr(client, "is_biobrain", False):
-            request_options["language_id"] = (survey.raw_data or {}).get("LanguageId")
+            request_options["language_id"] = _biobrain_language_id(survey)
         quotas = client.get_quota_for_survey(survey.source_id, **request_options)
     except InnovateMRNotFound:
         quotas = []
@@ -199,7 +222,7 @@ def replace_survey_targeting(client: InnovateMRClient, survey: Survey) -> None:
     try:
         request_options = {}
         if getattr(client, "is_biobrain", False):
-            request_options["language_id"] = (survey.raw_data or {}).get("LanguageId")
+            request_options["language_id"] = _biobrain_language_id(survey)
         targeting = client.get_survey_targeting(survey.source_id, **request_options)
     except InnovateMRNotFound:
         targeting = []
@@ -389,6 +412,9 @@ def sync_surveys(client: InnovateMRClient | None = None, integration: ClientInte
             "source_created_at",
             "source_modified_at",
             "last_seen_at",
+            "detail_synced_at",
+            "quota_synced_at",
+            "targeting_synced_at",
             "raw_data",
             "updated_at",
         ]
@@ -421,6 +447,18 @@ def sync_surveys(client: InnovateMRClient | None = None, integration: ClientInte
                 values["client"] = source_client
                 values["integration"] = integration
                 values["source_key"] = source_key
+                if (
+                    existing is not None
+                    and getattr(client, "is_biobrain", False)
+                    and int((existing.raw_data or {}).get("_biobrain_detail_adapter_version") or 0)
+                    < BIOBRAIN_DETAIL_ADAPTER_VERSION
+                ):
+                    # One-time, non-destructive rehydration: inventory and all
+                    # respondent traffic remain untouched while the bounded
+                    # detail worker replaces only raw-ID targeting/quota rows.
+                    values["detail_synced_at"] = None
+                    values["quota_synced_at"] = None
+                    values["targeting_synced_at"] = None
                 if existing is None:
                     pending_creates.append(Survey(source_id=source_id, **values))
                     run.created += 1
