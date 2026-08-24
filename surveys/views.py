@@ -3375,7 +3375,7 @@ class UserHitsAPIView(APIView):
 
         try:
             rows, summary = cached_report_payload(
-                "user-hits-v2",
+                "user-hits-v3",
                 request,
                 load_user_hits,
             )

@@ -2317,6 +2317,53 @@ class UserHitsTests(TestCase):
         self.assertEqual(response.data["results"][0]["hits"]["total"], 3)
         self.assertEqual(response.data["results"][0]["completes"]["total"], 2)
 
+    def test_legacy_employee_id_snapshot_is_included_without_platform_fk(self):
+        EmployeeProfile.objects.filter(user=self.kanik).update(employee_id="87821")
+        SurveyAttempt.objects.create(
+            rid="Le8Ga7Cy6I",
+            survey=self.survey,
+            platform_user=None,
+            user_id="87821",
+            status=SurveyAttempt.Status.COMPLETED,
+            entry_device="Mobile",
+            initiated_at=timezone.make_aware(datetime.combine(self.today, time(11, 30))),
+        )
+
+        response = self.api.get(reverse("user-hits-api"), {
+            "user": self.kanik.pk,
+            "from_date": self.today.isoformat(),
+            "to_date": self.today.isoformat(),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["hits"]["total"], 3)
+        self.assertEqual(response.data["results"][0]["hits"]["mobile"], 2)
+
+    def test_role_based_super_admin_sees_all_user_activity(self):
+        role_owner = get_user_model().objects.create_user(
+            username="hits-role-owner", first_name="Role", last_name="Owner"
+        )
+        EmployeeProfile.objects.filter(user=role_owner).update(
+            role=Role.objects.get(slug="super-admin")
+        )
+        for code in ("user_hits.view", "user_hits.column.user"):
+            UserFunctionOverride.objects.create(
+                user=role_owner,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
+        role_owner_api = APIClient()
+        role_owner_api.force_authenticate(role_owner)
+
+        response = role_owner_api.get(reverse("user-hits-api"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            {row["user_id"] for row in response.data["results"]},
+            {self.kanik.pk, self.other.pk},
+        )
+
     def test_permission_and_visibility_are_scoped_to_user_hierarchy(self):
         viewer = get_user_model().objects.create_user(
             username="hits-viewer", first_name="Scoped", email="hits-viewer@example.test"

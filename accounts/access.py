@@ -272,7 +272,7 @@ def activity_visible_user_ids(user) -> set[int]:
 def _activity_visible_user_ids_uncached(user) -> set[int]:
     """Uncached implementation used by the request-local public resolver."""
 
-    if user.is_superuser:
+    if is_super_admin_account(user):
         from django.contrib.auth import get_user_model
         return set(get_user_model().objects.values_list("id", flat=True))
 

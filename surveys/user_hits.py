@@ -5,8 +5,8 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone as datetime_timezone
 
 from django.contrib.auth import get_user_model
-from django.db.models import Case, Count, F, IntegerField, Q, When
-from django.db.models.functions import Cast, TruncDate
+from django.db.models import Count, Q
+from django.db.models.functions import TruncDate
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_time
 
@@ -107,6 +107,7 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
             "user_name": platform_user.get_full_name() or platform_user.username,
             "username": platform_user.username,
             "user_email": platform_user.email,
+            "employee_id": (profile.employee_id or "").strip() if profile else "",
             "branch": branch,
             "sub_branch": sub_branch,
             "shift": shift,
@@ -115,6 +116,24 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
             "shift_id": shift_id,
         }
     return metadata
+
+
+def _legacy_identifier_user_map(metadata: dict[int, dict]) -> dict[str, int]:
+    """Map historical attempt snapshots back to their platform users.
+
+    Early respondent links stored the profile/API ``userId`` string before the
+    explicit ``platform_user`` foreign key existed.  A user PK remains the most
+    authoritative legacy identifier; employee ID, username and email provide
+    safe exact-match fallbacks for older production records.
+    """
+
+    mapping = {str(user_id): user_id for user_id in metadata}
+    for user_id, item in metadata.items():
+        for value in (item.get("employee_id"), item.get("username"), item.get("user_email")):
+            identifier = str(value or "").strip()
+            if identifier:
+                mapping.setdefault(identifier, user_id)
+    return mapping
 
 
 def user_hit_filter_options(user) -> dict:
@@ -224,22 +243,19 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
             )
         }
 
-    # ``platform_user`` became the authoritative relationship after the first
-    # respondent-flow release.  Older Quest rows can still contain only the
-    # numeric legacy ``user_id`` snapshot.  Include those rows as well so User
-    # Hits does not silently show an empty/incomplete report after an upgrade.
-    # The exact string filter keeps non-numeric upstream respondent IDs out of
-    # the CAST and the real FK always wins when both values are present.
-    legacy_user_ids = [str(user_id) for user_id in visible_ids]
+    # ``platform_user`` is authoritative for current rows. Older production
+    # rows can contain only a profile/API employee ID in the string snapshot.
+    # Resolve those exact identifiers without casting or exposing users outside
+    # the requester's current hierarchy scope.
+    visible_metadata = {
+        user_id: metadata[user_id]
+        for user_id in visible_ids
+        if user_id in metadata
+    }
+    legacy_user_map = _legacy_identifier_user_map(visible_metadata)
     attempts = SurveyAttempt.objects.filter(
         Q(platform_user_id__in=visible_ids)
-        | Q(platform_user_id__isnull=True, user_id__in=legacy_user_ids)
-    ).annotate(
-        report_user_id=Case(
-            When(platform_user_id__isnull=False, then=F("platform_user_id")),
-            default=Cast("user_id", output_field=IntegerField()),
-            output_field=IntegerField(),
-        )
+        | Q(platform_user_id__isnull=True, user_id__in=tuple(legacy_user_map))
     )
     if lower:
         attempts = attempts.filter(initiated_at__gte=lower)
@@ -263,7 +279,7 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
     )
     grouped = attempts.annotate(
         local_date=TruncDate("initiated_at", tzinfo=ist_timezone)
-    ).values("report_user_id", "local_date").annotate(
+    ).values("platform_user_id", "user_id", "local_date").annotate(
         hits_total=Count("id"),
         hits_desktop=Count("id", filter=desktop),
         hits_mobile=Count("id", filter=mobile),
@@ -278,11 +294,35 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
         ),
     )
 
-    rows = []
+    # A user's current FK rows and historical snapshot-only rows are separate
+    # SQL groups. Merge them into the same user/date bucket before presenting
+    # the report.
+    merged = {}
     for aggregate in grouped.iterator(chunk_size=2000):
-        user_meta = metadata.get(aggregate["report_user_id"])
+        report_user_id = aggregate["platform_user_id"]
+        if report_user_id is None:
+            report_user_id = legacy_user_map.get(str(aggregate["user_id"] or "").strip())
         local_date = aggregate["local_date"]
-        if not user_meta or not local_date:
+        if report_user_id not in visible_ids or not local_date:
+            continue
+        bucket = merged.setdefault(
+            (report_user_id, local_date),
+            {
+                key: 0
+                for key in (
+                    "hits_total", "hits_desktop", "hits_mobile", "hits_tablet",
+                    "completes_total", "completes_desktop", "completes_mobile",
+                    "completes_tablet", "survey_terminations",
+                )
+            },
+        )
+        for key in bucket:
+            bucket[key] += aggregate[key]
+
+    rows = []
+    for (report_user_id, local_date), aggregate in merged.items():
+        user_meta = metadata.get(report_user_id)
+        if not user_meta:
             continue
         hits_classified = (
             aggregate["hits_desktop"] + aggregate["hits_mobile"] + aggregate["hits_tablet"]
