@@ -103,7 +103,7 @@ from .serializers import (
     UserHitsResponseSerializer,
 )
 from .pagination import SurveyPagination
-from .project_cache import project_filter_metadata
+from .project_cache import invalidate_project_cache, project_filter_metadata
 from .report_cache import (
     cached_report_payload,
     cached_user_metadata,
@@ -125,7 +125,7 @@ from prescreener_vault.cache import (
     vault_filter_options,
     vault_filtered_summary,
 )
-from .providers import ProviderError, get_provider, has_provider
+from .providers import ProviderError, ProviderSurveyUnavailable, get_provider, has_provider
 from .geolocation import (
     geolocation_client_data,
     is_wrong_target_country,
@@ -2144,12 +2144,33 @@ def survey_start(request):
                     )
 
                 if provider and attempt.survey.integration.provider_code == "rfg":
-                    if provider.duplicate_check(
-                        attempt.survey,
-                        attempt,
-                        get_request_ip(request) or attempt.initiation_ip,
-                        request.POST.get("rfg_fingerprint", "0"),
-                    ):
+                    try:
+                        is_duplicate = provider.duplicate_check(
+                            attempt.survey,
+                            attempt,
+                            get_request_ip(request) or attempt.initiation_ip,
+                            request.POST.get("rfg_fingerprint", "0"),
+                        )
+                    except ProviderSurveyUnavailable as exc:
+                        # Retire stale/testing inventory immediately. Existing
+                        # copied links finish as a recorded Survey Closed result;
+                        # fresh Projects listings stop exposing this code.
+                        Survey.objects.filter(pk=attempt.survey_id).update(
+                            status=Survey.Status.CLOSED,
+                            updated_at=timezone.now(),
+                        )
+                        invalidate_project_cache()
+                        _finish_local_rfg_attempt(
+                            attempt,
+                            answers,
+                            request,
+                            result="5",
+                            reason=str(exc),
+                        )
+                        return HttpResponseRedirect(
+                            _rfg_result_url(attempt.rid, "5")
+                        )
+                    if is_duplicate:
                         _finish_local_rfg_attempt(
                             attempt,
                             answers,

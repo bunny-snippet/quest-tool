@@ -16,7 +16,11 @@ from vendors.models import Client, ClientIntegration
 from .models import Survey, SurveyAttempt, SurveyQuota, TargetingQuestion
 from .outcomes import provider_outcome
 from .provider_services import sync_client_integration
-from .providers.base import NormalizedSurvey, ProviderConfigurationError
+from .providers.base import (
+    NormalizedSurvey,
+    ProviderConfigurationError,
+    ProviderSurveyUnavailable,
+)
 from .providers.rfg import ResearchForGoodProvider
 from .serializers import SurveyQuotaSerializer, TargetingQuestionSerializer
 from .views import SurveyViewSet
@@ -112,6 +116,23 @@ class ResearchForGoodIntegrationTests(TestCase):
             with self.assertRaises(ProviderConfigurationError):
                 ResearchForGoodProvider(self.integration)
         self.assertEqual(self.integration.credential_env_keys["secret"], "RFG_SECRET")
+
+    @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
+    def test_rfg_unauthorized_project_is_classified_as_unavailable(self):
+        session = RecordingSession({
+            "result": 1,
+            "message": "You are not authorized for RFG2284721788-066",
+        })
+        provider = ResearchForGoodProvider(self.integration, session=session)
+
+        with self.assertRaisesMessage(
+            ProviderSurveyUnavailable,
+            "This Research For Good survey is no longer available.",
+        ):
+            provider._command({
+                "command": "livealert/duplicateCheck/1",
+                "rfg_id": "RFG2284721788-066",
+            })
 
     @patch("surveys.provider_services.get_provider")
     def test_sync_is_scoped_by_client_and_accepts_string_provider_id(self, get_provider_mock):
@@ -739,6 +760,70 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertEqual(outbound_query["birthday"], ["2000-01-01"])
         relaxed_attempt.refresh_from_db()
         self.assertEqual(relaxed_attempt.status, SurveyAttempt.Status.REDIRECTED)
+
+    @override_settings(PRESCREENER_VAULT_ENABLED=False)
+    @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
+    def test_unauthorized_rfg_prescreener_closes_stale_survey_cleanly(self):
+        user = get_user_model().objects.create_superuser(
+            "stale-rfg-owner", "stale-rfg@example.com", "pass"
+        )
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG2284721788-066",
+            local_id="20260812345999",
+            country_code="US",
+            status=Survey.Status.LIVE,
+            entry_link="https://survey.saysoforgood.com/live/survey/stale?init=token",
+        )
+        birthday = TargetingQuestion.objects.create(
+            survey=survey, question_id=-101, key="RFG_BIRTHDAY",
+            text="Date of birth", question_type="date",
+        )
+        gender = TargetingQuestion.objects.create(
+            survey=survey, question_id=-102, key="RFG_GENDER",
+            text="Gender", question_type="single",
+            options=[
+                {"OptionId": "M", "OptionText": "Male"},
+                {"OptionId": "F", "OptionText": "Female"},
+            ],
+        )
+        postal = TargetingQuestion.objects.create(
+            survey=survey, question_id=-103, key="RFG_POSTAL_CODE",
+            text="Postal code", question_type="text",
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="StaleRfg01", survey=survey, platform_user=user,
+            user_id=str(user.pk),
+        )
+
+        with patch.object(
+            ResearchForGoodProvider,
+            "duplicate_check",
+            side_effect=ProviderSurveyUnavailable(
+                "This Research For Good survey is no longer available."
+            ),
+        ):
+            response = self.client.post("/survey/start", {
+                "rid": attempt.rid,
+                f"question_{birthday.pk}": "02-06-1988",
+                f"question_{gender.pk}": "F",
+                f"question_{postal.pk}": "10178",
+                "rfg_fingerprint": "0",
+            }, follow=True)
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Survey closed")
+        self.assertNotContains(response, "You are not authorized")
+        survey.refresh_from_db()
+        attempt.refresh_from_db()
+        self.assertEqual(survey.status, Survey.Status.CLOSED)
+        self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)
+        self.assertEqual(attempt.status_source, "local_prescreener")
+        self.assertEqual(
+            attempt.upstream_transaction_data["rfg_local_outcome"]["result"],
+            "5",
+        )
 
     def test_trusted_rfg_callback_completes_attempt(self):
         self.integration.last_test_status = "success"

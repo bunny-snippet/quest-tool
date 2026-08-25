@@ -21,6 +21,7 @@ from .base import (
     NormalizedSurvey,
     ProviderConfigurationError,
     ProviderError,
+    ProviderSurveyUnavailable,
     SurveyProvider,
     environment_value,
 )
@@ -103,7 +104,19 @@ class ResearchForGoodProvider(SurveyProvider):
         if not isinstance(data, dict):
             raise ProviderError("Research For Good returned an invalid JSON response.")
         if data.get("result") != 0:
-            raise ProviderError(str(data.get("message") or f"Research For Good result={data.get('result')}"))
+            message = str(
+                data.get("message")
+                or f"Research For Good result={data.get('result')}"
+            )
+            # After an account/key migration RFG can leave an old project in
+            # local inventory while refusing project-scoped commands for the
+            # currently authenticated APID. Treat that as provider inventory
+            # closure, not as a respondent answer error.
+            if re.search(r"\byou are not authorized for\s+rfg", message, re.IGNORECASE):
+                raise ProviderSurveyUnavailable(
+                    "This Research For Good survey is no longer available."
+                )
+            raise ProviderError(message)
         result = data.get("response") or {}
         if not isinstance(result, dict):
             raise ProviderError("Research For Good response payload must be an object.")

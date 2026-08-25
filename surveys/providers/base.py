@@ -22,6 +22,10 @@ class ProviderConfigurationError(ProviderError):
     """Raised when an integration references missing or invalid environment configuration."""
 
 
+class ProviderSurveyUnavailable(ProviderError):
+    """Raised when the authenticated provider account cannot serve a survey anymore."""
+
+
 @dataclass(frozen=True)
 class NormalizedSurvey:
     source_key: str
