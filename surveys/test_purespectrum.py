@@ -40,17 +40,25 @@ class RecordingSession:
 
 class PureSpectrumProviderTests(TestCase):
     def setUp(self):
-        self.client_record = Client.objects.create(
-            code="purespectrum", name="PureSpectrum", provider_code="purespectrum"
+        self.client_record, _ = Client.objects.update_or_create(
+            code="purespectrum",
+            defaults={"name": "PureSpectrum", "provider_code": "purespectrum"},
         )
-        self.integration = ClientIntegration.objects.create(
+        self.integration, _ = ClientIntegration.objects.update_or_create(
             client=self.client_record,
             name="Fusion Match",
-            provider_code="purespectrum",
-            base_url="https://fusionapi.spectrumsurveys.com/surveys/fusionMatch",
-            credential_env_key="PURESPECTRUM_TEST_ACCESS_TOKEN",
-            sync_interval_seconds=60,
+            defaults={
+                "provider_code": "purespectrum",
+                "base_url": "https://fusionapi.spectrumsurveys.com/surveys/fusionMatch",
+                "credential_env_key": "PURESPECTRUM_TEST_ACCESS_TOKEN",
+                "sync_interval_seconds": 60,
+            },
         )
+
+    def test_deployment_migration_publishes_integration_card(self):
+        self.assertTrue(self.client_record.is_active)
+        self.assertTrue(self.integration.is_active)
+        self.assertEqual(self.integration.provider_code, "purespectrum")
 
     @patch.dict("os.environ", {"PURESPECTRUM_TEST_ACCESS_TOKEN": "private-token"}, clear=False)
     def test_inventory_sends_exact_three_params_and_never_member_id(self):
