@@ -319,7 +319,9 @@ class ResearchForGoodProvider(SurveyProvider):
         return details
 
     @classmethod
-    def _geo_targeting_requirement(cls, datapoint, metadata, locale):
+    def _geo_targeting_requirement(
+        cls, datapoint, metadata, locale, *, scope="project"
+    ):
         """Decode one derived-geo or postal-code rule for respondent display."""
 
         try:
@@ -373,20 +375,34 @@ class ResearchForGoodProvider(SurveyProvider):
         lowered_name = name.lower()
         uses_wildcards = bool(datapoint.get("usesWildcards"))
         if "dma" in lowered_name:
-            label = "Required DMA"
+            dimension_label = "DMA"
         elif question_type == 18:
-            label = "Required ZIP+4 codes"
+            dimension_label = "ZIP+4 codes"
         elif uses_wildcards:
-            label = "Required ZIP codes/patterns"
+            dimension_label = "ZIP codes/patterns"
         elif question_type == 16 or "zip" in lowered_name or "postal" in lowered_name:
-            label = "Required ZIP codes"
+            dimension_label = "ZIP codes"
+        elif "region" in lowered_name:
+            dimension_label = "region"
+        elif "state" in lowered_name:
+            dimension_label = "state"
+        elif "county" in lowered_name:
+            dimension_label = "county"
+        elif "city" in lowered_name:
+            dimension_label = "city"
         else:
-            label = f"Required {name}"
+            dimension_label = name
+        label = (
+            f"Open quota {dimension_label}"
+            if scope == "quota"
+            else f"Required {dimension_label}"
+        )
         return {
             "name": name,
             "label": label,
             "values": values,
             "uses_wildcards": uses_wildcards,
+            "scope": scope,
         }
 
     def create_link(self, source_key):
@@ -454,6 +470,19 @@ class ResearchForGoodProvider(SurveyProvider):
             TargetingQuestion(survey=survey, question_id=self._question_id("rfg-postal"), key="RFG_POSTAL_CODE", text="What is your postal code?", question_type="text", category="Required profile", options=[], raw_data={"adapter_version": 2, "mandatory_link_parameter": "postalCode", "country": survey.country_code}),
         ]
         geo_requirements = []
+        geo_requirement_keys = set()
+
+        def add_geo_requirement(requirement):
+            if not requirement:
+                return
+            key = (
+                str(requirement.get("name") or "").lower(),
+                tuple(str(value) for value in requirement.get("values") or []),
+            )
+            if key not in geo_requirement_keys:
+                geo_requirement_keys.add(key)
+                geo_requirements.append(requirement)
+
         for target in datapoints:
             if not isinstance(target, dict) or not target.get("name"):
                 continue
@@ -462,8 +491,7 @@ class ResearchForGoodProvider(SurveyProvider):
             if initial_dimension not in {"age", "gender"}:
                 metadata = metadata_for(target["name"])
                 requirement = self._geo_targeting_requirement(target, metadata, locale)
-                if requirement:
-                    geo_requirements.append(requirement)
+                add_geo_requirement(requirement)
             if initial_dimension in {"age", "gender", "postal"}:
                 continue
             metadata = metadata or metadata_for(target["name"])
@@ -525,15 +553,6 @@ class ResearchForGoodProvider(SurveyProvider):
                     "targeting_choices": sorted(allowed),
                 },
             ))
-        if geo_requirements:
-            questions[2].raw_data["targeting_requirements"] = geo_requirements
-            questions[2].raw_data["targeting_note"] = " · ".join(
-                f"{item['label']}: {', '.join(item['values'])}"
-                for item in geo_requirements
-            )
-            questions[2].text = (
-                f"What is your postal code? {questions[2].raw_data['targeting_note']}"
-            )
         quotas = targeting.get("quotas") if isinstance(targeting.get("quotas"), list) else []
         quota_rows = []
         for index, quota in enumerate(quotas):
@@ -557,6 +576,17 @@ class ResearchForGoodProvider(SurveyProvider):
             limit_type = str(quota.get("quotaLimitBy") or targeting.get("quotaLimitBy") or "completes")
             key = hashlib.sha256(json.dumps(quota, sort_keys=True, default=str).encode()).hexdigest()
             quota_datapoints = quota.get("datapoints") or []
+            if remaining > 0 and quota.get("quotaThrottle") != 1:
+                for quota_datapoint in quota_datapoints:
+                    if not isinstance(quota_datapoint, dict) or not quota_datapoint.get("name"):
+                        continue
+                    quota_metadata = metadata_for(quota_datapoint["name"])
+                    add_geo_requirement(self._geo_targeting_requirement(
+                        quota_datapoint,
+                        quota_metadata,
+                        locale,
+                        scope="quota",
+                    ))
             readable_targeting = self._readable_targeting_details(
                 quota_datapoints,
                 metadata_for,
@@ -577,6 +607,15 @@ class ResearchForGoodProvider(SurveyProvider):
                 },
                 raw_data={**quota, "targeting_details": readable_targeting},
             ))
+        if geo_requirements:
+            questions[2].raw_data["targeting_requirements"] = geo_requirements
+            questions[2].raw_data["targeting_note"] = " · ".join(
+                f"{item['label']}: {', '.join(item['values'])}"
+                for item in geo_requirements
+            )
+            questions[2].text = (
+                f"What is your postal code? {questions[2].raw_data['targeting_note']}"
+            )
         link = survey.entry_link or self.create_link(survey.source_key)
         now = timezone.now()
         with transaction.atomic():
