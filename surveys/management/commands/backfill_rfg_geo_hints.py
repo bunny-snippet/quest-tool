@@ -82,14 +82,14 @@ def backfill_survey_geo_hint(survey):
     changed = (
         raw.get("targeting_requirements") != requirements
         or raw.get("targeting_note") != note
-        or postal.text != f"What is your postal code? {note}"
+        or postal.text != "What is your postal code?"
     )
     if not changed:
         return False
     raw["targeting_requirements"] = requirements
     raw["targeting_note"] = note
     postal.raw_data = raw
-    postal.text = f"What is your postal code? {note}"
+    postal.text = "What is your postal code?"
     postal.save(update_fields=["text", "raw_data", "updated_at"])
     return True
 

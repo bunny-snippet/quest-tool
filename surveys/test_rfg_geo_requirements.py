@@ -92,17 +92,18 @@ class RFGGeoRequirementDisplayTests(TestCase):
         )
         self.assertEqual(
             postal.text,
-            f"What is your postal code? {expected_note}",
+            "What is your postal code?",
         )
-        self.assertIn(
+        self.assertEqual(
+            TargetingQuestionSerializer(postal).data["targeting_note"],
             expected_note,
-            TargetingQuestionSerializer(postal).data["text"],
         )
         prepared_postal = next(
             item for item in _prescreener_questions(self.survey)
             if item["model"].key == "RFG_POSTAL_CODE"
         )
-        self.assertIn(expected_note, prepared_postal["display_text"])
+        self.assertEqual(prepared_postal["display_text"], "What is your postal code?")
+        self.assertEqual(prepared_postal["targeting_note"], expected_note)
 
     @patch.dict(
         "os.environ",
@@ -168,7 +169,7 @@ class RFGGeoRequirementDisplayTests(TestCase):
         postal = self.survey.targeting_questions.get(key="RFG_POSTAL_CODE")
         expected_note = "Open quota region: Derry and Strabane"
         self.assertEqual(postal.raw_data["targeting_note"], expected_note)
-        self.assertNotIn("Belfast", postal.text)
+        self.assertNotIn("Belfast", postal.raw_data["targeting_note"])
         self.assertEqual(
             postal.raw_data["targeting_requirements"],
             [{
@@ -183,7 +184,7 @@ class RFGGeoRequirementDisplayTests(TestCase):
             item for item in _prescreener_questions(self.survey)
             if item["model"].key == "RFG_POSTAL_CODE"
         )
-        self.assertIn(expected_note, prepared_postal["display_text"])
+        self.assertEqual(prepared_postal["targeting_note"], expected_note)
 
         # A cached survey whose provider endpoint is no longer available can
         # rebuild the same hint from its already-normalized quota details.
@@ -200,4 +201,5 @@ class RFGGeoRequirementDisplayTests(TestCase):
         )
         postal.refresh_from_db()
         self.assertEqual(postal.raw_data["targeting_note"], expected_note)
-        self.assertNotIn("Belfast", postal.text)
+        self.assertEqual(postal.text, "What is your postal code?")
+        self.assertNotIn("Belfast", postal.raw_data["targeting_note"])

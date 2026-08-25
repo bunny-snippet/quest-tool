@@ -613,9 +613,6 @@ class ResearchForGoodProvider(SurveyProvider):
                 f"{item['label']}: {', '.join(item['values'])}"
                 for item in geo_requirements
             )
-            questions[2].text = (
-                f"What is your postal code? {questions[2].raw_data['targeting_note']}"
-            )
         link = survey.entry_link or self.create_link(survey.source_key)
         now = timezone.now()
         with transaction.atomic():
