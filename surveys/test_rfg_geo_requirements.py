@@ -1,5 +1,6 @@
 from unittest.mock import patch
 
+from django.core.management import call_command
 from django.test import TestCase
 
 from vendors.models import Client, ClientIntegration
@@ -183,3 +184,20 @@ class RFGGeoRequirementDisplayTests(TestCase):
             if item["model"].key == "RFG_POSTAL_CODE"
         )
         self.assertIn(expected_note, prepared_postal["display_text"])
+
+        # A cached survey whose provider endpoint is no longer available can
+        # rebuild the same hint from its already-normalized quota details.
+        postal.text = "What is your postal code?"
+        postal.raw_data = {
+            key: value for key, value in postal.raw_data.items()
+            if key not in {"targeting_note", "targeting_requirements"}
+        }
+        postal.save(update_fields=["text", "raw_data", "updated_at"])
+        call_command(
+            "backfill_rfg_geo_hints",
+            survey=self.survey.source_key,
+            verbosity=0,
+        )
+        postal.refresh_from_db()
+        self.assertEqual(postal.raw_data["targeting_note"], expected_note)
+        self.assertNotIn("Belfast", postal.text)
