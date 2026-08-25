@@ -1950,9 +1950,14 @@ def survey_start(request):
         if supports_lazy_entry_link:
             stale = stale or not survey.entry_link
         if is_rfg:
-            stale = stale or not survey.entry_link or not survey.targeting_questions.filter(
-                raw_data__adapter_version__in=[2, 3]
-            ).exists()
+            stale = (
+                stale
+                or not survey.entry_link
+                or not survey.targeting_questions.filter(
+                    key="RFG_POSTAL_CODE",
+                    raw_data__adapter_version__gte=4,
+                ).exists()
+            )
         if provider_code == "biobrain":
             stale = stale or any(
                 not question.text
