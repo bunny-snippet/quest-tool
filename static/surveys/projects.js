@@ -75,6 +75,14 @@
   });
   const formatDate = (value) => value ? projectDateTimeFormatter.format(new Date(value)) : '—';
   const money = (value) => value == null ? '—' : `$${Number(value).toFixed(2)}`;
+  const displaySurveyId = (survey) => {
+    const sourceId = String(survey.source_id ?? '').trim();
+    if (!sourceId) return '—';
+    return survey.provider_code === 'purespectrum'
+      ? sourceId.replace(/^[a-z]{2}_[a-z]{2}:/i, '')
+      : sourceId;
+  };
+  const displayBuyerId = (survey) => survey.buyer_id ? String(survey.buyer_id) : 'Buyer N/A';
   const filterDefaults = {
     country: 'All countries', status: 'All statuses', company: 'All clients', client_name: 'All clients',
     buyer_id: 'All buyer IDs', survey_type: 'All survey types',
@@ -348,7 +356,7 @@
     const cells = [];
     const clientName = survey.client_name || survey.display_company_name || survey.company_name || 'Survey client';
     if (projectColumns.has('project_id')) cells.push(`<td><div class="project-id-stack">${projectIdControl(survey)}${canViewProjectClientName ? `<small>${escapeHtml(clientName)}</small>` : ''}</div></td>`);
-    if (projectColumns.has('survey')) cells.push(`<td><div class="survey-name"><strong>${escapeHtml(survey.source_id ?? '—')}</strong><span>${survey.buyer_id ? escapeHtml(survey.buyer_id) : 'Buyer ID unavailable'}</span></div></td>`);
+    if (projectColumns.has('survey')) cells.push(`<td><div class="survey-name"><strong>${escapeHtml(displaySurveyId(survey))}</strong><span>${escapeHtml(displayBuyerId(survey))}</span></div></td>`);
     if (projectColumns.has('market')) cells.push(`<td><span class="market-pill">${escapeHtml(survey.country_code || '—')} <i>${escapeHtml(survey.language_code || '')}</i></span><small class="country-name">${escapeHtml(survey.country || '')}</small></td>`);
     if (projectColumns.has('completes')) cells.push(`<td><div class="complete-value"><strong>${survey.completes.toLocaleString()} / ${survey.sample_size.toLocaleString()}</strong><span><i style="width:${percent}%"></i></span></div></td>`);
     if (projectColumns.has('cpi')) cells.push(`<td><strong class="cpi">${money(survey.cpi)}</strong></td>`);
@@ -369,7 +377,7 @@
     if (projectColumns.has('cpi')) metrics.push(`<span><small>CPI</small><b>${money(survey.cpi)}</b></span>`);
     if (projectColumns.has('loi_ir')) metrics.push(`<span><small>LOI / IR · Type</small><b>${survey.loi ?? '—'}m · ${survey.incidence_rate ?? '—'}% · ${escapeHtml(survey.survey_type || survey.group_type || '—')}</b></span>`);
     const bottom = `${projectColumns.has('modified') ? `<div class="source-timestamp"><small>Updated</small>${sourceTimestamp(survey.source_modified_display, survey.source_modified_at || survey.updated_at)}</div>` : ''}${projectColumns.has('entry_link') ? (survey.start_link ? `<button class="copy-link" data-copy-link="${escapeHtml(survey.start_link)}">Copy link</button>` : '<button class="copy-link" type="button" disabled title="The supplier callback link is still being verified">Preparing link...</button>') : ''}`;
-    return `<article class="survey-card"><div class="card-top"><div>${top}</div>${projectColumns.has('actions') ? `<button class="eye-button" data-action="${escapeHtml(survey.local_id)}" aria-label="View survey details">◉</button>` : ''}</div>${projectColumns.has('survey') ? `<h3>${escapeHtml(survey.source_id ?? '—')}</h3><p>${survey.buyer_id ? escapeHtml(survey.buyer_id) : 'Buyer ID unavailable'}</p>` : ''}${metrics.length ? `<div class="card-grid">${metrics.join('')}</div>` : ''}${bottom ? `<div class="card-bottom">${bottom}</div>` : ''}</article>`;
+    return `<article class="survey-card"><div class="card-top"><div>${top}</div>${projectColumns.has('actions') ? `<button class="eye-button" data-action="${escapeHtml(survey.local_id)}" aria-label="View survey details">◉</button>` : ''}</div>${projectColumns.has('survey') ? `<h3>${escapeHtml(displaySurveyId(survey))}</h3><p>${escapeHtml(displayBuyerId(survey))}</p>` : ''}${metrics.length ? `<div class="card-grid">${metrics.join('')}</div>` : ''}${bottom ? `<div class="card-bottom">${bottom}</div>` : ''}</article>`;
   }
 
   function scheduleLoad(delay = 700) {
