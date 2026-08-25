@@ -318,6 +318,77 @@ class ResearchForGoodProvider(SurveyProvider):
             })
         return details
 
+    @classmethod
+    def _geo_targeting_requirement(cls, datapoint, metadata, locale):
+        """Decode one derived-geo or postal-code rule for respondent display."""
+
+        try:
+            question_type = int(metadata.get("type") or 0)
+        except (TypeError, ValueError):
+            return None
+        if question_type not in {13, 16, 18}:
+            return None
+
+        name = clean_rfg_display_text(
+            datapoint.get("name") or metadata.get("name") or "Geographic area"
+        )
+        values = []
+        if question_type == 13:
+            answers = metadata.get("answers") if isinstance(metadata.get("answers"), list) else []
+            for value in datapoint.get("values") or []:
+                if not isinstance(value, dict) or value.get("choice") is None:
+                    continue
+                choice = value.get("choice")
+                try:
+                    answer = answers[int(choice)]
+                except (IndexError, TypeError, ValueError):
+                    answer = None
+                label = cls._localized_text(answer, locale, f"Choice {choice}")
+                if label and label not in values:
+                    values.append(label)
+        else:
+            for value in datapoint.get("values") or []:
+                if not isinstance(value, dict):
+                    continue
+                if question_type == 16:
+                    free_list = value.get("freelist", value.get("freeList"))
+                    if free_list not in (None, ""):
+                        for item in str(free_list).split(","):
+                            item = clean_rfg_display_text(item.strip().strip("\"'"))
+                            if item and item not in values:
+                                values.append(item)
+                    for item in value.get("ziplist") or []:
+                        item = str(item).strip()
+                        if item and item not in values:
+                            values.append(item)
+                else:
+                    zip_values = value.get("zip4list") or value.get("ziplist") or []
+                    for item in zip_values:
+                        item = str(item).strip()
+                        if item and item not in values:
+                            values.append(item)
+
+        if not values:
+            return None
+        lowered_name = name.lower()
+        uses_wildcards = bool(datapoint.get("usesWildcards"))
+        if "dma" in lowered_name:
+            label = "Required DMA"
+        elif question_type == 18:
+            label = "Required ZIP+4 codes"
+        elif uses_wildcards:
+            label = "Required ZIP codes/patterns"
+        elif question_type == 16 or "zip" in lowered_name or "postal" in lowered_name:
+            label = "Required ZIP codes"
+        else:
+            label = f"Required {name}"
+        return {
+            "name": name,
+            "label": label,
+            "values": values,
+            "uses_wildcards": uses_wildcards,
+        }
+
     def create_link(self, source_key):
         """Request the RFG respondent entry base link for one survey."""
 
@@ -382,13 +453,20 @@ class ResearchForGoodProvider(SurveyProvider):
             TargetingQuestion(survey=survey, question_id=self._question_id("rfg-gender"), key="RFG_GENDER", text="What is your gender?", question_type="single", category="Required profile", options=[{"OptionId": "M", "OptionText": "Male"}, {"OptionId": "F", "OptionText": "Female"}], raw_data={"adapter_version": 2, "mandatory_link_parameter": "gender", "targeting_choices": gender_choices}),
             TargetingQuestion(survey=survey, question_id=self._question_id("rfg-postal"), key="RFG_POSTAL_CODE", text="What is your postal code?", question_type="text", category="Required profile", options=[], raw_data={"adapter_version": 2, "mandatory_link_parameter": "postalCode", "country": survey.country_code}),
         ]
+        geo_requirements = []
         for target in datapoints:
             if not isinstance(target, dict) or not target.get("name"):
                 continue
             initial_dimension = self._profile_dimension(target.get("name"))
+            metadata = None
+            if initial_dimension not in {"age", "gender"}:
+                metadata = metadata_for(target["name"])
+                requirement = self._geo_targeting_requirement(target, metadata, locale)
+                if requirement:
+                    geo_requirements.append(requirement)
             if initial_dimension in {"age", "gender", "postal"}:
                 continue
-            metadata = metadata_for(target["name"])
+            metadata = metadata or metadata_for(target["name"])
             question_type = int(metadata.get("type") or 0)
             if question_type in {13, 15, 16, 17, 18}:
                 continue
@@ -447,6 +525,15 @@ class ResearchForGoodProvider(SurveyProvider):
                     "targeting_choices": sorted(allowed),
                 },
             ))
+        if geo_requirements:
+            questions[2].raw_data["targeting_requirements"] = geo_requirements
+            questions[2].raw_data["targeting_note"] = " · ".join(
+                f"{item['label']}: {', '.join(item['values'])}"
+                for item in geo_requirements
+            )
+            questions[2].text = (
+                f"What is your postal code? {questions[2].raw_data['targeting_note']}"
+            )
         quotas = targeting.get("quotas") if isinstance(targeting.get("quotas"), list) else []
         quota_rows = []
         for index, quota in enumerate(quotas):
