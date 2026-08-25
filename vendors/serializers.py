@@ -294,6 +294,68 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     "scheduled_sync_enabled": "Test and verify this connection before scheduling it."
                 })
+        elif provider_key == "purespectrum":
+            expected_url = "https://fusionapi.spectrumsurveys.com/surveys/fusionMatch"
+            configured_url = str(attrs.get(
+                "base_url", getattr(self.instance, "base_url", expected_url)
+            ) or "").rstrip("/")
+            if configured_url and configured_url != expected_url:
+                raise serializers.ValidationError({
+                    "base_url": f"PureSpectrum Fusion Match must use {expected_url}."
+                })
+            attrs["base_url"] = expected_url
+            credential_env_key = str(attrs.get(
+                "credential_env_key", getattr(self.instance, "credential_env_key", "")
+            ) or "").strip()
+            if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", credential_env_key):
+                raise serializers.ValidationError({
+                    "credential_env_key": (
+                        "PureSpectrum requires the environment-variable name containing its access token."
+                    )
+                })
+            config = attrs.get("config", getattr(self.instance, "config", {})) or {}
+            unexpected = set(config) - {"timeout_seconds"}
+            if unexpected:
+                raise serializers.ValidationError({
+                    "config": f"Unsupported PureSpectrum settings: {', '.join(sorted(unexpected))}."
+                })
+            try:
+                timeout_seconds = int(config.get("timeout_seconds", 30))
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError({
+                    "config": "PureSpectrum timeout_seconds must be a whole number."
+                }) from exc
+            if not 1 <= timeout_seconds <= 120:
+                raise serializers.ValidationError({
+                    "config": "PureSpectrum timeout_seconds must be between 1 and 120."
+                })
+            attrs["config"] = {"timeout_seconds": timeout_seconds}
+            try:
+                interval = int(attrs.get(
+                    "sync_interval_seconds", getattr(self.instance, "sync_interval_seconds", 60)
+                ))
+            except (TypeError, ValueError) as exc:
+                raise serializers.ValidationError({
+                    "sync_interval_seconds": "Sync interval must be a whole number."
+                }) from exc
+            if interval < 60:
+                raise serializers.ValidationError({
+                    "sync_interval_seconds": "PureSpectrum inventory sync must be at least 60 seconds."
+                })
+            if attrs.get("scheduled_sync_enabled", False) and getattr(
+                self.instance, "last_test_status", ""
+            ) != "success":
+                raise serializers.ValidationError({
+                    "scheduled_sync_enabled": "Test and verify this connection before scheduling it."
+                })
+            attrs["inventory_endpoint"] = ""
+            attrs["paged_inventory_endpoint"] = ""
+            attrs["quota_endpoint_template"] = ""
+            attrs["targeting_endpoint_template"] = ""
+            attrs["transaction_endpoint_template"] = ""
+            attrs["auth_header_name"] = "access-token"
+            attrs["auth_header_prefix"] = ""
+            attrs["inventory_result_key"] = "surveys"
         elif provider_key == "cint":
             attrs.setdefault("base_url", "https://api.samplicio.us")
             supplier_code = str(attrs.get(
@@ -510,7 +572,7 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
         instance = super().update(instance, validated_data)
         if token is not None:
             set_integration_token(instance, token)
-        if connection_changed and instance.provider_code in {"rfg", "cint"}:
+        if connection_changed and instance.provider_code in {"rfg", "cint", "purespectrum"}:
             instance.last_test_status = ""
             instance.last_test_error = "Connection settings changed; test the connection again."
             instance.scheduled_sync_enabled = False

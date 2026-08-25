@@ -41,6 +41,7 @@ def dispatch_due_integrations_task():
         | Q(provider_code="innovatemr")
         | Q(provider_code="rfg", last_test_status="success")
         | Q(provider_code="cint", last_test_status="success")
+        | Q(provider_code="purespectrum", last_test_status="success")
     ).only(
         "id", "provider_code", "sync_interval_seconds", "last_sync_started_at",
         "credential_env_key", "encrypted_api_token", "config",
@@ -62,6 +63,7 @@ def dispatch_due_integrations_task():
             "innovatemr": settings.CLIENT_INTEGRATION_INNOVATEMR_SYNC_INTERVAL_SECONDS,
             "rfg": settings.CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS,
             "cint": settings.CLIENT_INTEGRATION_CINT_SYNC_INTERVAL_SECONDS,
+            "purespectrum": settings.CLIENT_INTEGRATION_PURESPECTRUM_SYNC_INTERVAL_SECONDS,
         }.get(integration.provider_code, integration.sync_interval_seconds)
         interval_seconds = max(60, interval_seconds)
         due_at = (integration.last_sync_started_at or (now - timedelta(days=1))) + timedelta(

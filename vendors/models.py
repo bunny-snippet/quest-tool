@@ -212,13 +212,13 @@ class ClientIntegration(models.Model):
 
     def clean(self):
         super().clean()
-        if self.provider_code in {"rfg", "cint"} and self.sync_interval_seconds < 60:
+        if self.provider_code in {"rfg", "cint", "purespectrum"} and self.sync_interval_seconds < 60:
             raise ValidationError({
                 "sync_interval_seconds": (
                     "This provider inventory cannot be polled more often than every 60 seconds."
                 )
             })
-        if self.provider_code in {"rfg", "cint"} and self.scheduled_sync_enabled and self.last_test_status != "success":
+        if self.provider_code in {"rfg", "cint", "purespectrum"} and self.scheduled_sync_enabled and self.last_test_status != "success":
             raise ValidationError({
                 "scheduled_sync_enabled": "Test and verify the connection before enabling scheduled sync."
             })

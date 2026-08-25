@@ -111,6 +111,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   const cards=document.getElementById('cards');
   let integrations=[],clients=[],providers=[],editingRecord=null;
   const fallbackProviders=[
+    {code:'purespectrum',label:'PureSpectrum Fusion Match',default_base_url:'https://fusionapi.spectrumsurveys.com/surveys/fusionMatch',minimum_sync_interval_seconds:60},
     {code:'cint',label:'Cint Exchange',default_base_url:'https://api.samplicio.us',minimum_sync_interval_seconds:60},
     {code:'rfg',label:'Research For Good',default_base_url:'https://api.researchforgood.com/API',minimum_sync_interval_seconds:60},
     {code:'innovatemr',label:'InnovateMR',default_base_url:'https://supplier.innovatemr.net/api/v2',minimum_sync_interval_seconds:60},
@@ -118,6 +119,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     {code:'custom',label:'Custom REST API',default_base_url:'',minimum_sync_interval_seconds:60}
   ];
   const presets={
+    purespectrum:{inventoryEndpoint:'',authHeader:'access-token',inventoryKey:'surveys',pagedEndpoint:'',quotaEndpoint:'',quotaKey:'result',targetingEndpoint:'',targetingKey:'result',transactionEndpoint:'',transactionKey:'result'},
     cint:{inventoryEndpoint:'/Supply/v1/Surveys/AllOfferwall/ByCountryLanguage/{country_language_id}/{supplier_code}',authHeader:'Authorization',inventoryKey:'Surveys',pagedEndpoint:'',quotaEndpoint:'/Supply/v1/SurveyQuotas/BySurveyNumber/{survey_id}/{supplier_code}',quotaKey:'SurveyQuotas',targetingEndpoint:'/Supply/v1/SurveyQualifications/BySurveyNumberForOfferwall/{survey_id}',targetingKey:'SurveyQualification.Questions',transactionEndpoint:'',transactionKey:'result'},
     innovatemr:{inventoryEndpoint:'/supply/getAllocatedSurveys',authHeader:'x-access-token',inventoryKey:'result',pagedEndpoint:'/supply/getAllocatedSurveysPaged',quotaEndpoint:'/supply/getQuotaForSurvey/{survey_id}',quotaKey:'result',targetingEndpoint:'/supply/getSurveyTargeting/{survey_id}',targetingKey:'result',transactionEndpoint:'/supply/getSurveyTransactionsByCond/{survey_id}/{pid}',transactionKey:'result'},
     biobrain:{inventoryEndpoint:'',authHeader:'EQ-PARTNER-ACCESS-KEY',inventoryKey:'Surveys',pagedEndpoint:'',quotaEndpoint:'https://partner-api.voqall.com/api/v1/survey-quotas/{survey_id}',quotaKey:'Quotas',targetingEndpoint:'https://partner-api.voqall.com/api/v1/survey-qualifications/{survey_id}',targetingKey:'Qualifications',transactionEndpoint:'',transactionKey:'result'},
@@ -185,7 +187,7 @@ document.addEventListener('DOMContentLoaded',()=>{
       const reuseBaselineSource=reuseStatus.baseline_source==='current_month_bootstrap'?'current month bootstrap':'previous month';
       const policyStats=`<div class="reuse-stats"><span>First after ${durationLabel(item.profile_reuse_first_delay_minutes||86400)}</span><span>Gap ${durationLabel(item.profile_reuse_min_interval_minutes||43200)}</span><span>Max ${item.profile_reuse_max_uses_per_window||1} / ${durationLabel(item.profile_reuse_window_minutes||1440)}</span><span>Same project: blocked</span></div>`;
       const reuseControl=`<div class="flow-mode reuse-card"><div><strong>Reusable UID flow</strong><small>${escapeHtml(item.profile_reuse_monthly_percentage)}% of ${reuseBaselineSource} &middot; exact mapped-profile match</small><div class="reuse-stats"><span>Baseline ${reuseStatus.baseline_attempts||0}</span><span>Target ${reuseStatus.target_reuses||0}</span><span>Used ${reuseStatus.used_reuses||0}</span><span>Remaining ${reuseStatus.remaining_reuses||0}</span></div>${policyStats}</div>${canManage?`<label class="mode-switch" title="Activate or deactivate UID reuse"><input type="checkbox" data-reuse-toggle="${item.id}" ${item.profile_reuse_enabled?'checked':''}><span></span></label>`:`<span class="badge ${item.profile_reuse_enabled?'success':''}">${item.profile_reuse_enabled?'On':'Off'}</span>`}</div>`;
-      const automatic=item.provider_code==='innovatemr'||isCintWebhook||(['rfg','cint'].includes(item.provider_code)&&item.last_test_status==='success');
+      const automatic=item.provider_code==='innovatemr'||isCintWebhook||(['rfg','cint','purespectrum'].includes(item.provider_code)&&item.last_test_status==='success');
       return `<article class="card"><span class="badge ${escapeHtml(item.last_sync_status)}">${item.is_active?'Active':'Inactive'} &middot; ${automatic?'Automatic':item.scheduled_sync_enabled?'Scheduled':'Manual'}</span><div class="card-provider">${escapeHtml(meta.label)}</div><h3>${escapeHtml(item.client_name)} &middot; ${escapeHtml(item.name)}</h3><div class="meta">Supplier ${escapeHtml(item.supplier_code)}<br>${contract}<br>${credentials} &middot; ${escapeHtml(item.survey_count)} surveys<br>Last test: ${escapeHtml(item.last_test_status||'never')} (${escapeHtml(fmt(item.last_tested_at))})<br>Last sync: ${escapeHtml(item.last_sync_status||'never')} (${escapeHtml(fmt(item.last_sync_finished_at))})${item.last_sync_error?`<br>${escapeHtml(item.last_sync_error)}`:''}</div>${flowControl}${webhook}${reuseControl}${canManage?`<div class="actions"><button class="secondary" data-edit="${item.id}">Edit policy</button><button class="secondary" data-test="${item.id}">Test connection</button><button class="primary" data-sync="${item.id}">Sync now</button></div>`:''}</article>`;
     }).join(''):'<div class="card empty">No client integrations yet.</div>';
   }
@@ -197,16 +199,19 @@ document.addEventListener('DOMContentLoaded',()=>{
   function updateScheduleState(){
     const rfg=el('provider').value==='rfg';
     const cint=el('provider').value==='cint';
+    const pureSpectrum=el('provider').value==='purespectrum';
     const cintWebhook=cint&&el('cintWebhookEnabled').checked;
     const innovate=el('provider').value==='innovatemr';
-    const verified=['rfg','cint'].includes(editingRecord?.provider_code)&&editingRecord?.last_test_status==='success';
-    el('scheduled').disabled=innovate||rfg||cint;
+    const verified=['rfg','cint','purespectrum'].includes(editingRecord?.provider_code)&&editingRecord?.last_test_status==='success';
+    el('scheduled').disabled=innovate||rfg||cint||pureSpectrum;
     if(innovate){el('scheduled').checked=true;el('scheduleHelp').textContent='InnovateMR inventory runs automatically every 150 seconds.';el('scheduleHelp').className='schedule-help'}
     else if(rfg&&!verified){el('scheduled').checked=false;el('scheduleHelp').textContent='Test this RFG connection once; automatic 60-second sync starts after verification.';el('scheduleHelp').className='schedule-help warning'}
     else if(rfg){el('scheduled').checked=true;el('scheduleHelp').textContent='RFG inventory runs automatically every 60 seconds.';el('scheduleHelp').className='schedule-help'}
     else if(cintWebhook){el('scheduled').checked=false;el('scheduleHelp').textContent='Signed Feed Opportunities is active; periodic Cint inventory polling is disabled.';el('scheduleHelp').className='schedule-help'}
     else if(cint&&!verified){el('scheduled').checked=false;el('scheduleHelp').textContent='Test this Cint connection once; automatic 60-second polling starts after verification.';el('scheduleHelp').className='schedule-help warning'}
     else if(cint){el('scheduled').checked=true;el('scheduleHelp').textContent='Cint Model 2 inventory polls automatically every 60 seconds.';el('scheduleHelp').className='schedule-help'}
+    else if(pureSpectrum&&!verified){el('scheduled').checked=false;el('scheduleHelp').textContent='Test this PureSpectrum connection once; automatic sync starts after verification.';el('scheduleHelp').className='schedule-help warning'}
+    else if(pureSpectrum){el('scheduled').checked=true;el('scheduleHelp').textContent='PureSpectrum Fusion Match inventory sync runs automatically.';el('scheduleHelp').className='schedule-help'}
     else{el('scheduleHelp').textContent='Scheduled sync uses the interval configured above.';el('scheduleHelp').className='schedule-help'}
   }
 
@@ -215,19 +220,26 @@ document.addEventListener('DOMContentLoaded',()=>{
     const meta=providerMeta(code);
     const isRfg=code==='rfg';
     const isCint=code==='cint';
+    const isPureSpectrum=code==='purespectrum';
+    el('baseUrl').readOnly=isPureSpectrum;
+    el('inventoryEndpoint').readOnly=isPureSpectrum;
+    el('authHeader').readOnly=isPureSpectrum;
+    el('inventoryKey').readOnly=isPureSpectrum;
+    el('apiToken').disabled=isPureSpectrum;
     el('rfgCredentialSection').classList.toggle('hidden',!isRfg);
     el('cintWebhookSection').classList.toggle('hidden',!isCint);
     el('genericConnectionSection').classList.toggle('hidden',!code||isRfg);
-    el('advancedSection').classList.toggle('hidden',!code||isRfg);
+    el('advancedSection').classList.toggle('hidden',!code||isRfg||isPureSpectrum);
     el('providerNote').classList.toggle('hidden',!code);
     el('interval').min=String(meta.minimum_sync_interval_seconds||60);
     el('intervalLabel').textContent=`Sync interval (seconds, min ${meta.minimum_sync_interval_seconds||60})`;
-    el('intervalHelp').textContent=isRfg?'RFG Live Alert inventory refreshes automatically every 60 seconds.':isCint?'Cint Supply polling is limited to once per minute.':code==='innovatemr'?'InnovateMR inventory refreshes automatically every 150 seconds.':`Minimum ${meta.minimum_sync_interval_seconds||60} seconds.`;
-    el('baseUrlHelp').textContent=isRfg?'Official RFG command endpoint. HMAC signing is handled by the backend adapter.':isCint?'Official Cint Exchange production API root. There is no Supply sandbox.':'Provider API root. Endpoint fields below may be relative to this URL.';
+    el('intervalHelp').textContent=isRfg?'RFG Live Alert inventory refreshes automatically every 60 seconds.':isCint?'Cint Supply polling is limited to once per minute.':isPureSpectrum?'Three approved localizations are fetched on every inventory sync.':code==='innovatemr'?'InnovateMR inventory refreshes automatically every 150 seconds.':`Minimum ${meta.minimum_sync_interval_seconds||60} seconds.`;
+    el('baseUrlHelp').textContent=isRfg?'Official RFG command endpoint. HMAC signing is handled by the backend adapter.':isCint?'Official Cint Exchange production API root. There is no Supply sandbox.':isPureSpectrum?'Official Fusion Match endpoint; the backend locks this value.':'Provider API root. Endpoint fields below may be relative to this URL.';
     el('supplierCodeLabel').textContent=isCint?'Cint Supplier Code':'Public supplier code';
     el('supplierCodeHelp').textContent=isCint?'Enter the real numeric Supplier Code issued by Cint; this is used only for upstream API calls.':'Respondent URLs continue to expose 1000.';
     if(isRfg){el('providerNoteTitle').textContent='RFG uses a signed command API.';el('providerNoteText').textContent=' APID and secret values stay in .env. Generic inventory, header, response-key and Advanced REST fields do not apply, so they are hidden.'}
     else if(isCint){el('providerNoteTitle').textContent='Cint Exchange Model 2 with signed Feed Opportunities.';el('providerNoteText').textContent=' Webhook batches are verified and deduplicated; supplier callback links are provisioned asynchronously before respondent entry is allowed.'}
+    else if(isPureSpectrum){el('providerNoteTitle').textContent='PureSpectrum Fusion Match preset loaded.';el('providerNoteText').textContent=' The backend sends respondentId=[RID], the selected localization and maxNumberOfSurveysReturned=200. memberId is never sent.'}
     else if(code==='innovatemr'){el('providerNoteTitle').textContent='InnovateMR preset loaded.';el('providerNoteText').textContent=' You can review or override its inventory, quota, targeting and transaction endpoints.'}
     else if(code==='biobrain'){el('providerNoteTitle').textContent='BioBrain / Voqall preset loaded.';el('providerNoteText').textContent=' The partner access-key header and response keys follow the BioBrain API contract.'}
     else{el('providerNoteTitle').textContent='Custom REST contract.';el('providerNoteText').textContent=' Enter only the endpoints and field mappings provided by this client. No InnovateMR values are inherited.'}
@@ -236,7 +248,7 @@ document.addEventListener('DOMContentLoaded',()=>{
       el('interval').value=String(code==='innovatemr'?150:isRfg?60:(meta.minimum_sync_interval_seconds||60));
       el('detailBatch').value=isCint?'1':'3';el('supplierCode').value=isCint?'':'1000';
       if(isRfg){el('rfgApidEnv').value='RFG_APID';el('rfgSecretEnv').value='RFG_SECRET';el('rfgCountry').value='';el('rfgCategory').value='';el('rfgRecontacts').checked=false;el('rfgStrictTargeting').checked=true}
-      else{Object.entries(presets[code]||presets.custom).forEach(([id,value])=>el(id).value=value);el('tokenEnv').value=isCint?'CINT_API_KEY':'';el('apiToken').value='';el('authPrefix').value='';el('fieldMapping').value='';el('cintWebhookEnabled').checked=false;el('cintCallbackUrl').value=isCint?`${window.location.origin}/api/cint/webhook/surveys`:'';el('cintKeyId').value='';el('cintPublicKey').value=''}
+      else{Object.entries(presets[code]||presets.custom).forEach(([id,value])=>el(id).value=value);el('tokenEnv').value=isCint?'CINT_API_KEY':isPureSpectrum?'PURESPECTRUM_ACCESS_TOKEN':'';el('apiToken').value='';el('authPrefix').value='';el('fieldMapping').value='';el('cintWebhookEnabled').checked=false;el('cintCallbackUrl').value=isCint?`${window.location.origin}/api/cint/webhook/surveys`:'';el('cintKeyId').value='';el('cintPublicKey').value=''}
     }
     updateScheduleState();
   }
