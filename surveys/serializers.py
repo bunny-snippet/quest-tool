@@ -237,6 +237,9 @@ class TargetingQuestionSerializer(serializers.ModelSerializer):
 
     def get_targeting_note(self, obj) -> str:
         raw = obj.raw_data or {}
+        provider_note = clean_rfg_display_text(raw.get("targeting_note") or "")
+        if provider_note:
+            return provider_note
         ranges = raw.get("targeting_age_ranges") or []
         if ranges:
             labels = [SurveyQuotaSerializer._range_label(item) for item in ranges if isinstance(item, dict)]

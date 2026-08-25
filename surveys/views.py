@@ -1396,14 +1396,19 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                 qualifying_options_only and allowed_values
             ),
             "targeting_note": (
-                f"Qualifying age: {', '.join(age_range_labels)}"
-                if (is_age_question or is_dob_question) and age_range_labels
-                else "Only answers accepted by this survey are shown."
-                if provider_code == "rfg" and qualifying_options_only and allowed_values
-                else "Enter a ZIP/postal code accepted by this survey."
-                if is_postal_question and qualifying_options_only and allowed_values
-                else qualifying_answer_note
-                if qualifying_options_only and allowed_values else ""
+                clean_rfg_display_text(
+                    (question.raw_data or {}).get("targeting_note") or ""
+                )
+                or (
+                    f"Qualifying age: {', '.join(age_range_labels)}"
+                    if (is_age_question or is_dob_question) and age_range_labels
+                    else "Only answers accepted by this survey are shown."
+                    if provider_code == "rfg" and qualifying_options_only and allowed_values
+                    else "Enter a ZIP/postal code accepted by this survey."
+                    if is_postal_question and qualifying_options_only and allowed_values
+                    else qualifying_answer_note
+                    if qualifying_options_only and allowed_values else ""
+                )
             ),
         })
     return prepared
