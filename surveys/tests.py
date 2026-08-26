@@ -45,6 +45,7 @@ from .views import (
     PRESCREENER_MAX_LIST_VALUES,
     PRESCREENER_MAX_TEXT_LENGTH,
     _collect_prescreener_answers,
+    _prescreener_questions,
 )
 
 
@@ -922,6 +923,116 @@ class PrescreenerAnswerValidationTests(TestCase):
                     answers[str(self.age.pk)]["upstream_values"], [str(boundary_age)]
                 )
 
+    def test_open_ended_age_bands_are_accepted_through_99_for_every_provider(self):
+        shapes = (
+            (
+                "innovatemr",
+                [{"OptionId": "band", "OptionText": "65+", "ageStart": 65, "ageEnd": 65}],
+                {"targeting_choices": ["band"]},
+                65,
+            ),
+            (
+                "toluna",
+                [{"OptionId": "band", "OptionText": "65 and older"}],
+                {
+                    "targeting_choices": ["band"],
+                    "targeting_age_ranges": [{"min": 65, "max": 65}],
+                },
+                65,
+            ),
+            (
+                "biobrain",
+                [{"OptionId": "band", "OptionText": "25 or older"}],
+                {"targeting_choices": ["band"]},
+                25,
+            ),
+            (
+                "cint",
+                [{"OptionId": "band", "OptionText": "65 and above"}],
+                {"targeting_choices": ["band"]},
+                65,
+            ),
+            (
+                "rfg",
+                [{"OptionId": "band", "OptionText": "25 years and over"}],
+                {"targeting_choices": ["band"]},
+                25,
+            ),
+            (
+                "purespectrum",
+                [],
+                {"targeting_age_ranges": [{"min": 13, "max": 120}]},
+                13,
+            ),
+            (
+                "custom",
+                [],
+                {"targeting_age_ranges": [{"min": 25, "max": None, "label": "25+"}]},
+                25,
+            ),
+        )
+        for index, (provider_code, options, raw_data, minimum) in enumerate(shapes):
+            with self.subTest(provider=provider_code):
+                client = Client.objects.create(
+                    code=f"age-{index}",
+                    name=f"Age {provider_code}",
+                    provider_code=provider_code,
+                )
+                integration = ClientIntegration.objects.create(
+                    client=client,
+                    name=f"Age {provider_code}",
+                    provider_code=provider_code,
+                    base_url=f"https://{provider_code}.example.test",
+                )
+                self.survey.integration = integration
+                self.survey.save(update_fields=["integration", "updated_at"])
+                self.age.options = options
+                self.age.raw_data = raw_data
+                self.age.save(update_fields=["options", "raw_data", "updated_at"])
+
+                prepared = next(
+                    item for item in _prescreener_questions(self.survey)
+                    if item["model"].pk == self.age.pk
+                )
+                self.assertEqual((prepared["min_value"], prepared["max_value"]), (minimum, 99))
+
+                for accepted_age in (minimum + 1, 99):
+                    payload = self.valid_payload()
+                    payload[self.field(self.age)] = str(accepted_age)
+                    answers, errors = self.collect(payload)
+                    self.assertEqual(errors, [])
+                    self.assertEqual(
+                        answers[str(self.age.pk)]["upstream_values"],
+                        [str(accepted_age)],
+                    )
+
+                payload = self.valid_payload()
+                payload[self.field(self.age)] = "100"
+                answers, errors = self.collect(payload)
+                self.assertNotIn(str(self.age.pk), answers)
+                self.assertTrue(any("between" in error for error in errors))
+
+    def test_explicit_closed_age_range_is_not_widened(self):
+        self.age.options = [{
+            "OptionId": "25-29",
+            "OptionText": "25-29",
+            "ageStart": 25,
+            "ageEnd": 29,
+        }]
+        self.age.raw_data = {"targeting_choices": ["25-29"]}
+        self.age.save(update_fields=["options", "raw_data", "updated_at"])
+
+        prepared = next(
+            item for item in _prescreener_questions(self.survey)
+            if item["model"].pk == self.age.pk
+        )
+        self.assertEqual((prepared["min_value"], prepared["max_value"]), (25, 29))
+        payload = self.valid_payload()
+        payload[self.field(self.age)] = "30"
+        answers, errors = self.collect(payload)
+        self.assertNotIn(str(self.age.pk), answers)
+        self.assertTrue(any("between 25 and 29" in error for error in errors))
+
     def test_text_and_checkbox_submission_limits_are_enforced(self):
         payload = self.valid_payload()
         payload[self.field(self.comment)] = "x" * (PRESCREENER_MAX_TEXT_LENGTH + 1)
@@ -1180,7 +1291,10 @@ class SurveyFlowTests(TestCase):
             text="What is your zipcode?",
             question_type="Numeric Open Ended",
             category="Demographic",
-            options=[{"OptionId": 77, "OptionText": "90012"}],
+            options=[
+                {"OptionId": 77, "OptionText": "90012"},
+                {"OptionId": 78, "OptionText": "02108"},
+            ],
         )
         start = self.client.get(reverse("survey-start"), {
             "surveyId": self.survey.source_id,
@@ -1189,6 +1303,11 @@ class SurveyFlowTests(TestCase):
             "code": self.survey.local_id,
         })
         rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
+        form = self.client.get(reverse("survey-start"), {"rid": rid})
+        self.assertContains(form, "What is your zipcode?")
+        self.assertContains(form, "Required ZIP/postal codes: 90012, 02108")
+        self.assertContains(form, "Enter your ZIP / postal code")
+        self.assertContains(form, 'autocomplete="postal-code"')
         submit = self.client.post(reverse("survey-start"), {
             "rid": rid,
             f"question_{self.question.pk}": "1",
@@ -1204,6 +1323,50 @@ class SurveyFlowTests(TestCase):
         params = parse_qs(urlsplit(submit["Location"]).query)
         self.assertEqual(params["AGE"], ["24"])
         self.assertEqual(params["ZIPCODES"], ["90012"])
+
+    def test_innovate_zip_targeting_rejects_values_outside_provider_options(self):
+        zipcode = TargetingQuestion.objects.create(
+            survey=self.survey,
+            question_id=11,
+            key="ZIPCODES",
+            text="What is your zipcode?",
+            question_type="Numeric Open Ended",
+            category="Geographic",
+            options=[
+                {"OptionId": 1, "OptionText": "A1A 1A1"},
+                {"OptionId": 2, "OptionText": "B2B 2B2"},
+            ],
+        )
+        start = self.client.get(reverse("survey-start"), {
+            "surveyId": self.survey.source_id,
+            "supplierCode": "1000",
+            "userId": self.platform_user.pk,
+            "code": self.survey.local_id,
+        })
+        rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
+
+        rejected = self.client.post(reverse("survey-start"), {
+            "rid": rid,
+            f"question_{self.question.pk}": "1",
+            f"question_{zipcode.pk}": "C3C 3C3",
+        })
+        self.assertEqual(rejected.status_code, 200)
+        self.assertContains(rejected, "Enter a ZIP/postal code accepted by this survey")
+        self.assertEqual(
+            SurveyAttempt.objects.get(rid=rid).status,
+            SurveyAttempt.Status.INITIATED,
+        )
+
+        accepted = self.client.post(reverse("survey-start"), {
+            "rid": rid,
+            f"question_{self.question.pk}": "1",
+            f"question_{zipcode.pk}": "a1a1a1",
+        })
+        self.assertEqual(accepted.status_code, 302)
+        self.assertEqual(
+            parse_qs(urlsplit(accepted["Location"]).query)["ZIPCODES"],
+            ["A1A 1A1"],
+        )
 
     def test_copied_platform_pid_is_preserved_and_separate_from_rid_and_uid(self):
         copied_pid = "A1bcD2eF3"
@@ -1816,6 +1979,52 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(summary.status_code, 200)
         self.assertEqual(summary.data["count"], 1)
         self.assertEqual(summary.data["summary"]["total"], 1)
+
+    def test_combined_traffic_keeps_a_live_pagination_count(self):
+        caches["reports"].clear()
+
+        with CaptureQueriesContext(connection) as queries:
+            response = self.api.get(
+                reverse("survey-attempt-list"),
+                {"search": self.complete.rid},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["summary"]["total"], 1)
+        count_queries = [
+            item["sql"] for item in queries.captured_queries
+            if "COUNT(" in item["sql"].upper()
+        ]
+        self.assertEqual(len(count_queries), 2)
+        self.assertTrue(any('AS "__count"' in sql for sql in count_queries))
+
+    def test_cached_traffic_summary_cannot_hide_a_new_page(self):
+        caches["reports"].clear()
+        first = self.api.get(
+            reverse("survey-attempt-list"),
+            {"page_size": 1},
+        )
+        self.assertEqual(first.status_code, 200)
+        original_count = first.data["count"]
+
+        SurveyAttempt.objects.create(
+            rid="Pg1Na2Ti3N",
+            survey=self.survey,
+            platform_user=self.kanik,
+            user_id=str(self.kanik.pk),
+            status=SurveyAttempt.Status.INITIATED,
+        )
+        next_page = self.api.get(
+            reverse("survey-attempt-list"),
+            {"page_size": 1, "page": original_count + 1},
+        )
+
+        self.assertEqual(next_page.status_code, 200)
+        self.assertEqual(next_page.data["count"], original_count + 1)
+        self.assertEqual(len(next_page.data["results"]), 1)
+        # KPI cards may remain briefly cached, but row pagination never does.
+        self.assertEqual(next_page.data["summary"]["total"], original_count)
 
     def test_exact_tracking_search_uses_authoritative_match_and_partial_search_falls_back(self):
         SurveyAttempt.objects.create(
@@ -2561,6 +2770,63 @@ class TerminationReasonPageTests(TestCase):
         self.assertContains(response, "Quali1Ab2C")
         self.assertContains(response, "Details", count=3)
 
+    def test_term_page_query_count_does_not_scale_with_page_rows(self):
+        SurveyAttempt.objects.bulk_create([
+            SurveyAttempt(
+                rid=f"R{index:09d}",
+                survey=self.survey,
+                platform_user=self.respondent,
+                user_id=str(self.respondent.pk),
+                status=SurveyAttempt.Status.TERMINATED,
+                status_source="browser_callback",
+                callback_at=timezone.now(),
+                upstream_transaction_data={
+                    "status": "Terminated",
+                    "termReason": "Profile mismatch",
+                },
+            )
+            for index in range(24)
+        ])
+        self.client.force_login(self.owner)
+        url = reverse("termination-reasons")
+
+        self.client.get(url)
+        self.client.get(url, {"search": self.attempt.rid})
+
+        with CaptureQueriesContext(connection) as single_row_queries:
+            single_row = self.client.get(url, {"search": self.attempt.rid})
+        with CaptureQueriesContext(connection) as multiple_row_queries:
+            multiple_rows = self.client.get(url)
+
+        self.assertEqual(single_row.status_code, 200)
+        self.assertEqual(multiple_rows.status_code, 200)
+        self.assertEqual(len(single_row.context["page_obj"].object_list), 1)
+        self.assertEqual(len(multiple_rows.context["page_obj"].object_list), 20)
+        self.assertEqual(len(single_row_queries), len(multiple_row_queries))
+
+    def test_term_page_skips_provider_outcome_when_details_are_not_permitted(self):
+        viewer = get_user_model().objects.create_user(username="reason-list-only")
+        for code in (
+            "termination_reasons.view",
+            "termination_reasons.column.rid",
+        ):
+            UserFunctionOverride.objects.create(
+                user=viewer,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
+        self.attempt.platform_user = viewer
+        self.attempt.user_id = str(viewer.pk)
+        self.attempt.save(update_fields=["platform_user", "user_id", "updated_at"])
+        self.client.force_login(viewer)
+
+        with patch("surveys.views.provider_outcome") as normalized:
+            response = self.client.get(reverse("termination-reasons"))
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.attempt.rid)
+        normalized.assert_not_called()
+
     def test_traffic_style_filters_support_multiple_statuses_country_and_search(self):
         self.survey.country_code = "US"
         self.survey.country = "United States"
@@ -2897,6 +3163,93 @@ class UserHitsTests(TestCase):
         self.assertEqual(response.data["count"], 2)
         self.assertTrue(all(row["user_id"] == self.kanik.pk for row in response.data["results"]))
         self.assertEqual(response.data["summary"]["hits"]["tablet"], 1)
+
+    def test_super_admin_user_filter_uses_narrow_attempt_index_scope(self):
+        from .user_hits import aggregate_user_hit_payload
+
+        caches["reports"].clear()
+        with CaptureQueriesContext(connection) as captured:
+            payload = aggregate_user_hit_payload(
+                self.owner,
+                {"user": str(self.kanik.pk)},
+            )
+
+        self.assertTrue(payload["rows"])
+        attempt_sql = [
+            query["sql"] for query in captured.captured_queries
+            if "surveys_surveyattempt" in query["sql"].lower()
+        ]
+        self.assertTrue(attempt_sql)
+        expected_scope = (
+            '"surveys_surveyattempt"."platform_user_id" IN '
+            f'({self.kanik.pk})'
+        )
+        self.assertTrue(any(expected_scope in sql for sql in attempt_sql))
+
+    def test_compact_aggregate_is_paged_before_row_expansion_and_projection(self):
+        from .user_hits import expand_user_hit_rows as real_expand_user_hit_rows
+
+        caches["reports"].clear()
+        with (
+            patch(
+                "surveys.views.expand_user_hit_rows",
+                wraps=real_expand_user_hit_rows,
+            ) as expand_rows,
+            CaptureQueriesContext(connection) as captured,
+        ):
+            first_page = self.api.get(
+                reverse("user-hits-api"),
+                {"page": 1, "page_size": 2},
+            )
+
+        self.assertEqual(first_page.status_code, 200)
+        self.assertEqual(first_page.data["count"], 3)
+        self.assertEqual(len(first_page.data["results"]), 2)
+        self.assertEqual(
+            [(row["date"], row["user_name"]) for row in first_page.data["results"]],
+            [
+                (self.today.isoformat(), "Kanik Gupta"),
+                (self.today.isoformat(), "Other User"),
+            ],
+        )
+        self.assertEqual(len(expand_rows.call_args.args[0]), 2)
+        attempt_queries = [
+            query["sql"] for query in captured.captured_queries
+            if "surveys_surveyattempt" in query["sql"].lower()
+        ]
+        self.assertEqual(len(attempt_queries), 1)
+        self.assertIn("GROUP BY", attempt_queries[0].upper())
+
+        with CaptureQueriesContext(connection) as cached_queries:
+            second_page = self.api.get(
+                reverse("user-hits-api"),
+                {"page": 2, "page_size": 2},
+            )
+
+        self.assertEqual(second_page.status_code, 200)
+        self.assertEqual(second_page.data["count"], 3)
+        self.assertEqual(
+            [(row["date"], row["user_name"]) for row in second_page.data["results"]],
+            [((self.today - timedelta(days=1)).isoformat(), "Kanik Gupta")],
+        )
+        self.assertEqual(first_page.data["summary"], second_page.data["summary"])
+        self.assertFalse([
+            query for query in cached_queries.captured_queries
+            if "surveys_surveyattempt" in query["sql"].lower()
+        ])
+
+    def test_mysql_ist_grouping_uses_numeric_offsets_without_timezone_tables(self):
+        from .user_hits import _local_date_expression
+
+        queryset = SurveyAttempt.objects.all()
+        with patch.object(connection, "vendor", "mysql"):
+            expression = _local_date_expression(queryset)
+            sql = str(queryset.annotate(local_date=expression).values("local_date").query)
+
+        self.assertIn("CONVERT_TZ", sql)
+        self.assertIn("'+00:00'", sql)
+        self.assertIn("'+05:30'", sql)
+        self.assertNotIn("'UTC'", sql)
 
     def test_legacy_numeric_user_snapshot_is_included_without_platform_fk(self):
         SurveyAttempt.objects.create(

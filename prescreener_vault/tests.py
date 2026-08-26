@@ -21,7 +21,15 @@ from surveys.survey_flow import create_attempt
 
 from .constants import DATABASE_ALIAS
 from .models import PrescreenerAnswer, PrescreenerSubmission
-from .cache import cached_profile, invalidate_vault_cache, vault_filter_options, vault_filtered_summary
+from .cache import (
+    _namespace_version,
+    _options_namespace_version,
+    _summary_namespace_version,
+    cached_profile,
+    invalidate_vault_cache,
+    vault_filter_options,
+    vault_filtered_summary,
+)
 from .services import (
     _age_from_value,
     _canonical_attribute,
@@ -107,7 +115,10 @@ class PrescreenerVaultFlowTests(TestCase):
         self.assertEqual(submission.respondent_gender, "male")
         self.assertEqual(submission.answer_count, 2)
         self.assertEqual(submission.usage_count, 1)
-        self.assertEqual(increment_profile_usage(submission.uid), 2)
+        self.assertEqual(cached_profile(submission.uid)["usage_count"], 1)
+        with self.captureOnCommitCallbacks(using=DATABASE_ALIAS, execute=True):
+            self.assertEqual(increment_profile_usage(submission.uid), 2)
+        self.assertEqual(cached_profile(submission.uid)["usage_count"], 2)
         submission.refresh_from_db(using=DATABASE_ALIAS)
         self.assertEqual(submission.usage_count, 2)
         gender = PrescreenerAnswer.objects.using(DATABASE_ALIAS).get(
@@ -197,6 +208,38 @@ class PrescreenerVaultFlowTests(TestCase):
 
         invalidate_vault_cache()
         self.assertEqual(cached_profile(attempt.prescreener_uid)["usage_count"], 1)
+
+    def test_repeated_writes_throttle_only_expensive_filter_option_rotation(self):
+        profile_before = _namespace_version()
+        summary_before = _summary_namespace_version()
+        options_before = _options_namespace_version()
+
+        invalidate_vault_cache()
+        profile_after_first = _namespace_version()
+        summary_after_first = _summary_namespace_version()
+        options_after_first = _options_namespace_version()
+        invalidate_vault_cache()
+
+        self.assertGreater(profile_after_first, profile_before)
+        self.assertGreater(summary_after_first, summary_before)
+        self.assertGreater(options_after_first, options_before)
+        self.assertGreater(_namespace_version(), profile_after_first)
+        self.assertGreater(_summary_namespace_version(), summary_after_first)
+        self.assertEqual(_options_namespace_version(), options_after_first)
+
+    def test_single_uid_invalidation_does_not_rotate_unrelated_profile_cache(self):
+        with (
+            patch("prescreener_vault.cache.safe_cache_delete") as delete_profile,
+            patch("prescreener_vault.cache.safe_cache_increment") as increment_generation,
+        ):
+            invalidate_vault_cache(
+                "UID0000000000000001",
+                summary=False,
+                options=False,
+            )
+
+        delete_profile.assert_called_once()
+        increment_generation.assert_not_called()
 
     def test_admin_can_filter_and_expand_prescreened_data_page(self):
         attempt = self._attempt()

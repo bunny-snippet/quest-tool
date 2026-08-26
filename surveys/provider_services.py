@@ -9,11 +9,17 @@ from vendors.models import ClientIntegration
 
 from .models import Survey, SyncRun
 from .project_cache import invalidate_project_cache
+from .report_cache import invalidate_report_metadata_cache
 from .providers import ProviderError, get_provider
 
 
 logger = logging.getLogger(__name__)
 INVENTORY_WRITE_BATCH_SIZE = 250
+PROJECT_FILTER_FIELDS = frozenset({
+    "client", "company_name", "country", "country_code", "buyer_id",
+    "survey_type", "cpi",
+})
+REPORT_METADATA_FIELDS = frozenset({"client", "buyer_id", "country", "country_code"})
 
 
 def _preserve_provider_local_state(integration, survey, normalized):
@@ -84,14 +90,29 @@ def test_provider_connection(integration: ClientIntegration) -> dict:
     return result
 
 
-def _survey_changed(survey: Survey, normalized) -> bool:
+def _survey_changed_fields(survey: Survey, normalized, values=None) -> set[str]:
+    """Return synchronized fields whose persisted value actually changed."""
+
+    changed = set()
+    for field, value in (values or normalized.values).items():
+        if field == "last_seen_at":
+            continue
+        model_field = Survey._meta.get_field(field)
+        current_value = getattr(survey, model_field.attname)
+        expected_value = (
+            getattr(value, "pk", value)
+            if model_field.is_relation
+            else value
+        )
+        if current_value != expected_value:
+            changed.add(field)
     if survey.raw_data != normalized.raw_data:
-        return True
-    return any(
-        getattr(survey, field) != value
-        for field, value in normalized.values.items()
-        if field != "last_seen_at"
-    )
+        # Provider adapters normally include raw_data in ``values``. Keep the
+        # independent comparison used by the old save path so a custom adapter
+        # cannot accidentally leave the newest provider payload in memory only.
+        normalized.values["raw_data"] = normalized.raw_data
+        changed.add("raw_data")
+    return changed
 
 
 def sync_client_integration(integration: ClientIntegration, *, refresh_details=False) -> SyncRun:
@@ -102,6 +123,9 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
     now = timezone.now()
     run = SyncRun.objects.create(integration=integration)
     touched = []
+    project_filter_fields_changed = False
+    project_count_fields_changed = False
+    report_metadata_fields_changed = False
     try:
         inventory = provider.inventory()
         run.fetched_full = len(inventory)
@@ -139,6 +163,8 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
         normalized_items = list(normalized_rows.items())
         for offset in range(0, len(normalized_items), INVENTORY_WRITE_BATCH_SIZE):
             batch = normalized_items[offset:offset + INVENTORY_WRITE_BATCH_SIZE]
+            changed_surveys = []
+            changed_update_fields = set()
             unchanged_surveys = []
             # Short transactions prevent a 3k+ survey inventory response from
             # holding row locks for the entire provider sync.
@@ -160,7 +186,28 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                         existing_surveys[source_key] = survey
                         run.created += 1
                         touched.append(survey)
-                    elif _survey_changed(survey, normalized):
+                        project_filter_fields_changed = True
+                        project_count_fields_changed = True
+                        report_metadata_fields_changed = True
+                    else:
+                        # Include local ownership/identity fields as well as the
+                        # provider payload. Client integrations can be reassigned
+                        # through the management API; leaving ``Survey.client``
+                        # on its prior owner would put inventory in the wrong
+                        # authorization and supplier-allocation scope.
+                        changed_fields = _survey_changed_fields(
+                            survey,
+                            normalized,
+                            values,
+                        )
+                        if not changed_fields:
+                            survey.last_seen_at = now
+                            survey.updated_at = now
+                            unchanged_surveys.append(survey)
+                            run.unchanged += 1
+                            continue
+                        if "raw_data" in changed_fields:
+                            values["raw_data"] = normalized.raw_data
                         source_changed = (
                             survey.source_modified_at != normalized.modified_at
                             or survey.raw_data != normalized.raw_data
@@ -169,14 +216,35 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                             setattr(survey, field, value)
                         if source_changed:
                             survey.detail_synced_at = None
-                        survey.save()
+                            changed_fields.add("detail_synced_at")
+                        # bulk_update does not apply auto_now. Preserve the old
+                        # save() timestamp contract explicitly while collapsing
+                        # hundreds of one-row UPDATEs into bounded statements.
+                        survey.updated_at = now
+                        changed_fields.update({"last_seen_at", "updated_at"})
+                        changed_surveys.append(survey)
+                        changed_update_fields.update(changed_fields)
                         run.updated += 1
                         touched.append(survey)
-                    else:
-                        survey.last_seen_at = now
-                        survey.updated_at = now
-                        unchanged_surveys.append(survey)
-                        run.unchanged += 1
+                        # Any changed list field can alter a cached filtered
+                        # total (status, text search, dates, CPI, and so on).
+                        # One generation bump per completed sync preserves
+                        # correctness without returning to per-row churn.
+                        project_count_fields_changed = True
+                        project_filter_fields_changed = (
+                            project_filter_fields_changed
+                            or bool(changed_fields & PROJECT_FILTER_FIELDS)
+                        )
+                        report_metadata_fields_changed = (
+                            report_metadata_fields_changed
+                            or bool(changed_fields & REPORT_METADATA_FIELDS)
+                        )
+                if changed_surveys:
+                    Survey.objects.bulk_update(
+                        changed_surveys,
+                        sorted(changed_update_fields),
+                        batch_size=INVENTORY_WRITE_BATCH_SIZE,
+                    )
                 if unchanged_surveys:
                     Survey.objects.bulk_update(
                         unchanged_surveys,
@@ -201,6 +269,9 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                 status=Survey.Status.LIVE,
                 source_key__in=getattr(provider, "rejected_source_keys", set()),
             ).update(status=Survey.Status.CLOSED, updated_at=now)
+        if run.closed:
+            project_count_fields_changed = True
+            report_metadata_fields_changed = True
 
         if refresh_details:
             detail_batch = int((integration.config or {}).get("detail_refresh_batch", integration.detail_refresh_batch))
@@ -239,10 +310,17 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                 "detail_failures": run.detail_failures,
             },
         )
-    if run.status in {SyncRun.Status.SUCCESS, SyncRun.Status.PARTIAL} and (
-        run.created or run.updated or run.closed
-    ):
-        invalidate_project_cache()
+    if run.status in {SyncRun.Status.SUCCESS, SyncRun.Status.PARTIAL}:
+        if project_filter_fields_changed or project_count_fields_changed:
+            invalidate_project_cache(
+                filters=project_filter_fields_changed,
+                counts=project_count_fields_changed,
+            )
+        if report_metadata_fields_changed:
+            # Per-row post_save signals are intentionally bypassed by the bulk
+            # update above. One generation bump keeps selectors correct without
+            # invalidating them hundreds of times during one inventory run.
+            invalidate_report_metadata_cache()
     return run
 
 
@@ -288,6 +366,7 @@ def sync_cint_redirect_contracts(
     batch_size=25,
     force=False,
     after_id=0,
+    survey_ids=None,
 ) -> dict:
     """Update one bounded batch of Cint redirects not on the current contract."""
 
@@ -304,6 +383,14 @@ def sync_cint_redirect_contracts(
         integration=integration,
         status=Survey.Status.LIVE,
     )
+    scoped_ids = None
+    if survey_ids is not None:
+        scoped_ids = sorted({
+            int(survey_id)
+            for survey_id in survey_ids
+            if str(survey_id).strip().isdigit() and int(survey_id) > 0
+        })
+        base = base.filter(pk__in=scoped_ids)
     if force:
         # A local fingerprint proves what this application previously sent, not
         # what is currently stored upstream. Force mode deliberately ignores it
@@ -322,8 +409,14 @@ def sync_cint_redirect_contracts(
         )
     cursor = max(0, int(after_id or 0))
     pending = pending_query.filter(pk__gt=cursor).order_by("pk")
-    candidates = list(pending[: max(1, min(int(batch_size), 100))])
-    updated = failures = 0
+    limit = max(1, min(int(batch_size), 100))
+    # Fetch one sentinel row instead of running two exact COUNTs over JSON
+    # predicates. On production's Cint inventory those duplicate scans consumed
+    # 6-20 seconds even when there was no redirect work to perform.
+    window = list(pending[: limit + 1])
+    candidates = window[:limit]
+    has_more = len(window) > limit
+    updated = failures = retryable_failures = 0
     errors = []
     for survey in candidates:
         try:
@@ -335,12 +428,18 @@ def sync_cint_redirect_contracts(
             raw_data = dict(survey.raw_data or {})
             raw_data["_cint_redirect_last_error"] = str(exc)[:500]
             raw_data["_cint_redirect_last_failed_at"] = timezone.now().isoformat()
-            if getattr(exc, "status_code", None) == 404 or "(HTTP 404)" in str(exc):
+            terminal_failure = (
+                getattr(exc, "status_code", None) == 404
+                or "(HTTP 404)" in str(exc)
+            )
+            if terminal_failure:
                 # A fresh Cint webhook replaces provider raw data and clears
                 # this marker, allowing exactly one new retry if the survey is
                 # reactivated or becomes linkable later.
                 raw_data["_cint_redirect_terminal"] = True
                 raw_data["_cint_redirect_terminal_at"] = timezone.now().isoformat()
+            else:
+                retryable_failures += 1
             Survey.objects.filter(pk=survey.pk).update(
                 raw_data=raw_data,
                 updated_at=timezone.now(),
@@ -354,14 +453,25 @@ def sync_cint_redirect_contracts(
     # Continue past individual failures so one bad upstream survey cannot hold
     # every later webhook opportunity behind it. A later callback/maintenance
     # run starts again at zero and retries any still-pending failed records.
-    remaining = pending_query.filter(pk__gt=next_after_id).count()
-    pending_total = pending_query.count()
+    # The task dispatcher only needs to know whether another bounded batch is
+    # required. Avoid the two global JSON COUNT scans while keeping the legacy
+    # numeric fields as honest lower bounds: retryable failures in this window
+    # remain pending, and the sentinel proves at least one later row exists.
+    # Do not label the value exact: concurrent webhooks can add pending rows
+    # after the sentinel read, and avoiding a post-update COUNT is the purpose
+    # of this hot-path optimization.
+    remaining = retryable_failures + int(has_more)
     return {
         "processed": len(candidates),
         "updated": updated,
         "failures": failures,
         "remaining": remaining,
-        "pending_total": pending_total,
+        "pending_total": None,
+        "pending_lower_bound": remaining,
+        "counts_exact": False,
+        "counts_lower_bound": True,
+        "has_more": has_more,
+        "scoped_survey_count": len(scoped_ids) if scoped_ids is not None else None,
         "force": bool(force),
         "next_after_id": next_after_id,
         "errors": errors,

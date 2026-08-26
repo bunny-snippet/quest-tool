@@ -133,6 +133,42 @@ class PureSpectrumProviderTests(TestCase):
         )
 
     @patch.dict("os.environ", {"PURESPECTRUM_TEST_ACCESS_TOKEN": "private-token"}, clear=False)
+    def test_sync_moves_existing_inventory_when_integration_client_is_reassigned(self):
+        payload = {
+            "surveyId": "PS-OWNER",
+            "entryLink": "https://survey.test/?rid=%5BRID%5D",
+            "_respondentLocalization": "en_US",
+        }
+        provider = PureSpectrumProvider(self.integration, session=RecordingSession())
+        normalized = provider.normalize_inventory_item(payload, timezone.now())
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_id=normalized.numeric_source_id,
+            source_key=normalized.source_key,
+            **normalized.values,
+        )
+        new_client = Client.objects.create(
+            code="purespectrum-new-owner",
+            name="PureSpectrum New Owner",
+            provider_code="purespectrum",
+        )
+        self.integration.client = new_client
+        self.integration.save(update_fields=["client", "updated_at"])
+
+        with patch.object(provider, "inventory", return_value=[payload]), patch(
+            "surveys.provider_services.get_provider", return_value=provider
+        ), patch(
+            "surveys.provider_services.invalidate_project_cache"
+        ) as invalidate_projects:
+            run = sync_client_integration(self.integration, refresh_details=False)
+
+        survey.refresh_from_db()
+        self.assertEqual(run.updated, 1)
+        self.assertEqual(survey.client_id, new_client.pk)
+        invalidate_projects.assert_called_once_with(filters=True, counts=True)
+
+    @patch.dict("os.environ", {"PURESPECTRUM_TEST_ACCESS_TOKEN": "private-token"}, clear=False)
     def test_pre_screener_details_and_rid_replacement(self):
         survey = Survey.objects.create(
             client=self.client_record,

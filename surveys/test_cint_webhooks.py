@@ -5,6 +5,7 @@ from datetime import timedelta
 from io import StringIO
 import json
 import time
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from cryptography.hazmat.primitives import hashes, serialization
@@ -19,6 +20,11 @@ from vendors.models import Client, ClientIntegration
 
 from .cint_webhooks import subscription_payload
 from .models import CintWebhookDelivery, Survey
+from .tasks import (
+    _recover_cint_delivery_backlog,
+    process_cint_opportunities_delivery_task,
+    sync_cint_redirects_task,
+)
 
 
 @override_settings(
@@ -187,6 +193,171 @@ class CintOpportunitiesWebhookTests(TestCase):
         self.assertEqual(delivery.status, CintWebhookDelivery.Status.PROCESSED)
         self.assertIsInstance(delivery.payload, dict)
         self.assertTrue(Survey.objects.filter(integration=self.integration).exists())
+
+    @override_settings(CINT_OPPORTUNITIES_QUEUE_REDIRECTS=True)
+    def test_redirect_queue_is_scoped_to_surveys_missing_current_contract(self):
+        provider = SimpleNamespace(
+            supplier_code="6528",
+            redirect_contract_fingerprint=lambda: "contract-v1",
+        )
+        with patch("surveys.cint_webhooks.get_provider", return_value=provider), patch(
+            "surveys.tasks.sync_cint_redirects_task.delay"
+        ) as delay:
+            response = self.signed_post(self.opportunity())
+
+        self.assertEqual(response.status_code, 200, response.content)
+        survey = Survey.objects.get(integration=self.integration)
+        delay.assert_called_once_with(
+            self.integration.pk,
+            batch_size=10,
+            survey_ids=[survey.pk],
+        )
+
+    @override_settings(CINT_OPPORTUNITIES_QUEUE_REDIRECTS=True)
+    def test_same_content_callback_heals_a_missing_redirect_queue(self):
+        with override_settings(CINT_OPPORTUNITIES_QUEUE_REDIRECTS=False):
+            self.signed_post(self.opportunity(), timestamp=int(time.time()) - 1)
+        provider = SimpleNamespace(
+            supplier_code="6528",
+            redirect_contract_fingerprint=lambda: "contract-v1",
+        )
+        with patch("surveys.cint_webhooks.get_provider", return_value=provider), patch(
+            "surveys.tasks.sync_cint_redirects_task.delay"
+        ) as delay:
+            response = self.signed_post(self.opportunity(), timestamp=int(time.time()))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["skipped"], 1)
+        survey = Survey.objects.get(integration=self.integration)
+        delay.assert_called_once_with(
+            self.integration.pk,
+            batch_size=10,
+            survey_ids=[survey.pk],
+        )
+
+    @override_settings(CINT_OPPORTUNITIES_QUEUE_REDIRECTS=True)
+    def test_same_content_callback_does_not_requeue_a_verified_contract(self):
+        with override_settings(CINT_OPPORTUNITIES_QUEUE_REDIRECTS=False):
+            self.signed_post(self.opportunity(), timestamp=int(time.time()) - 1)
+        survey = Survey.objects.get(integration=self.integration)
+        survey.entry_link = "https://samplicio.us/s/default.aspx?SID=ready&PID="
+        survey.raw_data = {
+            **survey.raw_data,
+            "_cint_redirect_contract": "contract-v1",
+            "_cint_redirect_supplier_code": "6528",
+            "_cint_redirect_verified_at": timezone.now().isoformat(),
+        }
+        survey.save(update_fields=["entry_link", "raw_data", "updated_at"])
+        provider = SimpleNamespace(
+            supplier_code="6528",
+            redirect_contract_fingerprint=lambda: "contract-v1",
+        )
+        with patch("surveys.cint_webhooks.get_provider", return_value=provider), patch(
+            "surveys.tasks.sync_cint_redirects_task.delay"
+        ) as delay:
+            response = self.signed_post(self.opportunity(), timestamp=int(time.time()))
+
+        self.assertEqual(response.status_code, 200, response.content)
+        self.assertEqual(response.json()["skipped"], 1)
+        delay.assert_not_called()
+
+    def test_targeted_redirect_task_retries_when_integration_lease_is_busy(self):
+        with patch("surveys.tasks.SyncLease.acquire", return_value=False), patch.object(
+            sync_cint_redirects_task,
+            "retry",
+            side_effect=RuntimeError("retry scheduled"),
+        ) as retry:
+            with self.assertRaisesMessage(RuntimeError, "retry scheduled"):
+                sync_cint_redirects_task.run(
+                    self.integration.pk,
+                    survey_ids=[123],
+                )
+
+        retry.assert_called_once()
+        self.assertEqual(retry.call_args.kwargs["countdown"], 2)
+
+    def test_backlog_recovery_is_oldest_first_and_bounded(self):
+        deliveries = [
+            CintWebhookDelivery.objects.create(
+                integration=self.integration,
+                event_key=str(index) * 64,
+                payload_sha256=str(index + 3) * 64,
+                payload=[self.opportunity(survey_id=82199770 + index)],
+                item_count=1,
+            )
+            for index in range(3)
+        ]
+        now = timezone.now()
+        for index, delivery in enumerate(deliveries):
+            CintWebhookDelivery.objects.filter(pk=delivery.pk).update(
+                received_at=now - timedelta(minutes=3 - index)
+            )
+
+        with patch("surveys.cint_webhooks.process_delivery") as process:
+            result = _recover_cint_delivery_backlog(
+                self.integration.pk,
+                limit=2,
+            )
+
+        self.assertEqual(
+            [call.args[0] for call in process.call_args_list],
+            [deliveries[0].pk, deliveries[1].pk],
+        )
+        self.assertEqual(result["processed"], [deliveries[0].pk, deliveries[1].pk])
+        self.assertEqual(
+            CintWebhookDelivery.objects.get(pk=deliveries[2].pk).status,
+            CintWebhookDelivery.Status.RECEIVED,
+        )
+
+    def test_backlog_transient_failure_stays_recoverable_and_uses_normal_task_retry(self):
+        delivery = CintWebhookDelivery.objects.create(
+            integration=self.integration,
+            event_key="d" * 64,
+            payload_sha256="e" * 64,
+            payload=[self.opportunity()],
+            item_count=1,
+        )
+
+        with patch(
+            "surveys.cint_webhooks.process_delivery",
+            side_effect=RuntimeError("temporary database failure"),
+        ), patch(
+            "surveys.tasks.process_cint_opportunities_delivery_task.delay"
+        ) as requeue:
+            result = _recover_cint_delivery_backlog(
+                self.integration.pk,
+                limit=1,
+            )
+
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.status, CintWebhookDelivery.Status.RECEIVED)
+        self.assertIn("temporary database failure", delivery.error)
+        self.assertEqual(result["failed"], [delivery.pk])
+        requeue.assert_called_once_with(delivery.pk)
+
+    def test_backlog_query_failure_cannot_fail_processed_live_delivery(self):
+        delivery = CintWebhookDelivery.objects.create(
+            integration=self.integration,
+            event_key="a" * 64,
+            payload_sha256="b" * 64,
+            payload=[self.opportunity()],
+            item_count=1,
+            status=CintWebhookDelivery.Status.PROCESSED,
+        )
+        with patch("surveys.tasks.SyncLease.acquire", return_value=True), patch(
+            "surveys.tasks.SyncLease.release"
+        ) as release, patch(
+            "surveys.cint_webhooks.process_delivery", return_value=delivery
+        ), patch(
+            "surveys.tasks._recover_cint_delivery_backlog",
+            side_effect=RuntimeError("recovery unavailable"),
+        ):
+            result = process_cint_opportunities_delivery_task.run(delivery.pk)
+
+        delivery.refresh_from_db()
+        self.assertEqual(delivery.status, CintWebhookDelivery.Status.PROCESSED)
+        self.assertEqual(result["recovery"], {"processed": [], "failed": []})
+        release.assert_called_once()
 
     def test_standard_profile_questions_have_readable_webhook_fallbacks(self):
         response = self.signed_post(self.opportunity(

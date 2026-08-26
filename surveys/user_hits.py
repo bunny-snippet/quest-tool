@@ -5,18 +5,46 @@ from __future__ import annotations
 from datetime import datetime, time, timedelta, timezone as datetime_timezone
 
 from django.contrib.auth import get_user_model
-from django.db.models import Count, Q
+from django.db import connections
+from django.db.models import Count, DateField, Func, Q
 from django.db.models.functions import TruncDate
 from django.utils import timezone
 from django.utils.dateparse import parse_date, parse_time
 
-from accounts.access import activity_visible_user_ids
+from accounts.access import activity_visible_user_ids, is_super_admin_account
 from accounts.models import EmployeeProfile
 
 from .models import SurveyAttempt
 
 
 DEVICE_KEYS = ("desktop", "mobile", "tablet", "unclassified")
+AGGREGATE_KEYS = (
+    "hits_total", "hits_desktop", "hits_mobile", "hits_tablet",
+    "completes_total", "completes_desktop", "completes_mobile",
+    "completes_tablet", "survey_terminations",
+)
+
+
+class _MySQLISTDate(Func):
+    """Truncate a UTC timestamp to its IST date without timezone tables.
+
+    MySQL returns ``NULL`` from ``CONVERT_TZ`` when a named zone such as
+    ``UTC`` has not been loaded into its timezone tables. Both offsets are
+    therefore literal numeric offsets; this works on every supported MySQL
+    installation and is correct for IST, which has no daylight-saving shift.
+    """
+
+    output_field = DateField()
+    template = "DATE(CONVERT_TZ(%(expressions)s, '+00:00', '+05:30'))"
+
+
+def _local_date_expression(queryset):
+    if connections[queryset.db].vendor == "mysql":
+        return _MySQLISTDate("initiated_at")
+    return TruncDate(
+        "initiated_at",
+        tzinfo=datetime_timezone(timedelta(hours=5, minutes=30)),
+    )
 
 
 def _visible_user_ids(user) -> set[int]:
@@ -128,6 +156,20 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
     return metadata
 
 
+def _user_metadata(user, visible_ids: set[int]) -> dict[int, dict]:
+    """Reuse hierarchy metadata across the HTML filter page and API request."""
+
+    # Import lazily because report_cache itself lazily imports this module for
+    # traffic and termination-filter metadata.
+    from .report_cache import cached_user_metadata
+
+    return cached_user_metadata(
+        "user-hits-users-v1",
+        user,
+        lambda: _build_user_metadata(visible_ids),
+    )
+
+
 def _legacy_identifier_user_map(metadata: dict[int, dict]) -> dict[str, int]:
     """Map historical attempt snapshots back to their platform users.
 
@@ -147,8 +189,10 @@ def _legacy_identifier_user_map(metadata: dict[int, dict]) -> dict[str, int]:
 
 
 def user_hit_filter_options(user) -> dict:
-    metadata = _build_user_metadata(_visible_user_ids(user))
-    visible_users = list(metadata.values())
+    visible_ids = _visible_user_ids(user)
+    metadata = _user_metadata(user, visible_ids)
+    # The option-only value fields must not mutate shared cached metadata.
+    visible_users = [dict(item) for item in metadata.values()]
     visible_users.sort(key=lambda item: (item["user_name"].casefold(), item["user_id"]))
 
     def option_value(item, level):
@@ -179,9 +223,18 @@ def user_hit_filter_options(user) -> dict:
     }
 
 
-def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
+def _aggregate_user_hit_payload(user, params) -> dict:
+    """Build a compact, page-neutral user-hit payload.
+
+    Result caching intentionally ignores ``page`` and ``page_size``.  Keeping
+    user metadata once and aggregate scalars per user/day avoids materializing
+    the full public row schema for every matching day before the caller knows
+    which page it needs.
+    """
+
     visible_ids = _visible_user_ids(user)
-    metadata = _build_user_metadata(visible_ids)
+    complete_visible_ids = set(visible_ids)
+    metadata = _user_metadata(user, visible_ids)
 
     selected_user_values = _csv_values(params.get("user", ""))
     if any(not value.isdigit() for value in selected_user_values):
@@ -263,18 +316,42 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
         if user_id in metadata
     }
     legacy_user_map = _legacy_identifier_user_map(visible_metadata)
-    attempts = SurveyAttempt.objects.filter(
-        Q(platform_user_id__in=visible_ids)
-        | Q(platform_user_id__isnull=True, user_id__in=tuple(legacy_user_map))
-    )
+    if is_super_admin_account(user) and visible_ids == complete_visible_ids:
+        # A super-admin already owns the complete activity scope. Avoid a large
+        # ``IN (...) OR legacy_user_id IN (...)`` predicate which prevents the
+        # optimizer from choosing the cleanest aggregate plan. Once user,
+        # hierarchy or search filters narrow that scope, use the indexed paths
+        # below instead of grouping the entire attempt table and discarding
+        # unrelated groups in Python.
+        attempt_querysets = [SurveyAttempt.objects.all()]
+    else:
+        # Current FK-backed activity and the tiny legacy snapshot population
+        # use different indexes. Two narrow aggregates are cheaper and more
+        # predictable than one cross-column OR, and the groups are merged below.
+        attempt_querysets = [
+            SurveyAttempt.objects.filter(platform_user_id__in=visible_ids)
+        ]
+        if legacy_user_map:
+            attempt_querysets.append(
+                SurveyAttempt.objects.filter(
+                    platform_user_id__isnull=True,
+                    user_id__in=tuple(legacy_user_map),
+                )
+            )
     if lower:
-        attempts = attempts.filter(initiated_at__gte=lower)
+        attempt_querysets = [
+            queryset.filter(initiated_at__gte=lower)
+            for queryset in attempt_querysets
+        ]
     if upper:
-        attempts = attempts.filter(initiated_at__lte=upper)
+        attempt_querysets = [
+            queryset.filter(initiated_at__lte=upper)
+            for queryset in attempt_querysets
+        ]
 
     # Group inside MySQL instead of transferring and looping over every hit in
-    # Python.  A fixed IST offset avoids MySQL timezone-table dependencies.
-    ist_timezone = datetime_timezone(timedelta(hours=5, minutes=30))
+    # Python. The MySQL expression uses numeric offsets at both ends so a host
+    # without named timezone tables still returns the correct IST date.
     completed = Q(status=SurveyAttempt.Status.COMPLETED)
     tablet = Q(entry_device__icontains="tablet") | Q(entry_device__iexact="tab") | Q(entry_device__iexact="t")
     mobile = ~tablet & (
@@ -287,55 +364,110 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
         | Q(entry_device__icontains="laptop")
         | Q(entry_device__iexact="d")
     )
-    grouped = attempts.annotate(
-        local_date=TruncDate("initiated_at", tzinfo=ist_timezone)
-    ).values("platform_user_id", "user_id", "local_date").annotate(
-        hits_total=Count("id"),
-        hits_desktop=Count("id", filter=desktop),
-        hits_mobile=Count("id", filter=mobile),
-        hits_tablet=Count("id", filter=tablet),
-        completes_total=Count("id", filter=completed),
-        completes_desktop=Count("id", filter=completed & desktop),
-        completes_mobile=Count("id", filter=completed & mobile),
-        completes_tablet=Count("id", filter=completed & tablet),
-        survey_terminations=Count(
-            "id",
-            filter=Q(status=SurveyAttempt.Status.TERMINATED) & ~Q(status_source="local_prescreener"),
-        ),
-    )
-
     # A user's current FK rows and historical snapshot-only rows are separate
     # SQL groups. Merge them into the same user/date bucket before presenting
     # the report.
     merged = {}
-    for aggregate in grouped.iterator(chunk_size=2000):
-        report_user_id = aggregate["platform_user_id"]
-        if report_user_id is None:
-            report_user_id = legacy_user_map.get(str(aggregate["user_id"] or "").strip())
-        local_date = aggregate["local_date"]
-        if report_user_id not in visible_ids or not local_date:
-            continue
-        bucket = merged.setdefault(
-            (report_user_id, local_date),
-            {
-                key: 0
-                for key in (
-                    "hits_total", "hits_desktop", "hits_mobile", "hits_tablet",
-                    "completes_total", "completes_desktop", "completes_mobile",
-                    "completes_tablet", "survey_terminations",
-                )
-            },
+    for attempts in attempt_querysets:
+        grouped = attempts.annotate(
+            local_date=_local_date_expression(attempts)
+        ).values("platform_user_id", "user_id", "local_date").annotate(
+            hits_total=Count("id"),
+            hits_desktop=Count("id", filter=desktop),
+            hits_mobile=Count("id", filter=mobile),
+            hits_tablet=Count("id", filter=tablet),
+            completes_total=Count("id", filter=completed),
+            completes_desktop=Count("id", filter=completed & desktop),
+            completes_mobile=Count("id", filter=completed & mobile),
+            completes_tablet=Count("id", filter=completed & tablet),
+            survey_terminations=Count(
+                "id",
+                filter=Q(status=SurveyAttempt.Status.TERMINATED)
+                & ~Q(status_source="local_prescreener"),
+            ),
         )
-        for key in bucket:
-            bucket[key] += aggregate[key]
+        for aggregate in grouped.iterator(chunk_size=2000):
+            report_user_id = aggregate["platform_user_id"]
+            if report_user_id is None:
+                report_user_id = legacy_user_map.get(
+                    str(aggregate["user_id"] or "").strip()
+                )
+            local_date = aggregate["local_date"]
+            if report_user_id not in visible_ids or not local_date:
+                continue
+            bucket = merged.setdefault(
+                (report_user_id, local_date),
+                {key: 0 for key in AGGREGATE_KEYS},
+            )
+            for key in bucket:
+                bucket[key] += aggregate[key]
+
+    compact_rows = []
+    for (report_user_id, local_date), aggregate in merged.items():
+        if report_user_id not in visible_metadata:
+            continue
+        compact_rows.append({
+            "user_id": report_user_id,
+            "date": local_date.isoformat(),
+            **aggregate,
+        })
+    compact_rows.sort(key=lambda row: (
+        visible_metadata[row["user_id"]]["user_name"].casefold(),
+        row["user_id"],
+    ))
+    compact_rows.sort(key=lambda row: row["date"], reverse=True)
+
+    summary = {
+        "hits": {"total": 0, **_empty_counts()},
+        "completes": {"total": 0, **_empty_counts()},
+        "active_users": len({row["user_id"] for row in compact_rows}),
+        "days": len({row["date"] for row in compact_rows}),
+        "conversion_rate": 0,
+        "incidence_rate": 0,
+    }
+    survey_terminations = 0
+    for row in compact_rows:
+        hits_classified = row["hits_desktop"] + row["hits_mobile"] + row["hits_tablet"]
+        completes_classified = (
+            row["completes_desktop"] + row["completes_mobile"] + row["completes_tablet"]
+        )
+        summary["hits"]["total"] += row["hits_total"]
+        summary["hits"]["desktop"] += row["hits_desktop"]
+        summary["hits"]["mobile"] += row["hits_mobile"]
+        summary["hits"]["tablet"] += row["hits_tablet"]
+        summary["hits"]["unclassified"] += max(0, row["hits_total"] - hits_classified)
+        summary["completes"]["total"] += row["completes_total"]
+        summary["completes"]["desktop"] += row["completes_desktop"]
+        summary["completes"]["mobile"] += row["completes_mobile"]
+        summary["completes"]["tablet"] += row["completes_tablet"]
+        summary["completes"]["unclassified"] += max(
+            0, row["completes_total"] - completes_classified
+        )
+        survey_terminations += row["survey_terminations"]
+    if summary["hits"]["total"]:
+        summary["conversion_rate"] = round(summary["completes"]["total"] / summary["hits"]["total"] * 100, 1)
+    ir_denominator = summary["completes"]["total"] + survey_terminations
+    if ir_denominator:
+        summary["incidence_rate"] = round(summary["completes"]["total"] / ir_denominator * 100, 2)
+    return {
+        "rows": compact_rows,
+        "metadata": visible_metadata,
+        "summary": summary,
+    }
+
+
+def expand_user_hit_rows(compact_rows, metadata: dict[int, dict]) -> list[dict]:
+    """Expand only the compact user/day aggregates selected for a page."""
 
     rows = []
-    for (report_user_id, local_date), aggregate in merged.items():
-        user_meta = metadata.get(report_user_id)
+    for aggregate in compact_rows:
+        user_meta = metadata.get(aggregate["user_id"])
         if not user_meta:
             continue
         hits_classified = (
-            aggregate["hits_desktop"] + aggregate["hits_mobile"] + aggregate["hits_tablet"]
+            aggregate["hits_desktop"]
+            + aggregate["hits_mobile"]
+            + aggregate["hits_tablet"]
         )
         completes_classified = (
             aggregate["completes_desktop"]
@@ -344,9 +476,10 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
         )
         rows.append({
             **{field: user_meta[field] for field in (
-                "user_id", "user_name", "username", "user_email", "branch", "sub_branch", "shift"
+                "user_id", "user_name", "username", "user_email",
+                "branch", "sub_branch", "shift",
             )},
-            "date": local_date.isoformat(),
+            "date": aggregate["date"],
             "hits": {
                 "total": aggregate["hits_total"],
                 "desktop": aggregate["hits_desktop"],
@@ -361,27 +494,21 @@ def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
                 "tablet": aggregate["completes_tablet"],
                 "unclassified": max(0, aggregate["completes_total"] - completes_classified),
             },
-            "_survey_terminations": aggregate["survey_terminations"],
         })
-    rows.sort(key=lambda row: (row["user_name"].casefold(), row["user_id"]))
-    rows.sort(key=lambda row: row["date"], reverse=True)
+    return rows
 
-    summary = {
-        "hits": {"total": 0, **_empty_counts()},
-        "completes": {"total": 0, **_empty_counts()},
-        "active_users": len({row["user_id"] for row in rows}),
-        "days": len({row["date"] for row in rows}),
-        "conversion_rate": 0,
-        "incidence_rate": 0,
-    }
-    for row in rows:
-        for metric in ("hits", "completes"):
-            for key in ("total", *DEVICE_KEYS):
-                summary[metric][key] += row[metric][key]
-    if summary["hits"]["total"]:
-        summary["conversion_rate"] = round(summary["completes"]["total"] / summary["hits"]["total"] * 100, 1)
-    survey_terminations = sum(row.pop("_survey_terminations", 0) for row in rows)
-    ir_denominator = summary["completes"]["total"] + survey_terminations
-    if ir_denominator:
-        summary["incidence_rate"] = round(summary["completes"]["total"] / ir_denominator * 100, 2)
-    return rows, summary
+
+def aggregate_user_hit_payload(user, params) -> dict:
+    """Return compact aggregates for page-first API response construction."""
+
+    return _aggregate_user_hit_payload(user, params)
+
+
+def aggregate_user_hits(user, params) -> tuple[list[dict], dict]:
+    """Compatibility wrapper returning the original fully expanded contract."""
+
+    payload = _aggregate_user_hit_payload(user, params)
+    return (
+        expand_user_hit_rows(payload["rows"], payload["metadata"]),
+        payload["summary"],
+    )

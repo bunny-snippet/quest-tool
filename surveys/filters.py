@@ -88,7 +88,10 @@ class SurveyAttemptFilter(django_filters.FilterSet):
                 | Q(platform_user__employee_profile__company_name__in=labels)
             )
             query = label_query if query is None else query | label_query
-        return queryset.filter(query).distinct() if query is not None else queryset
+        # Every traversed relation is FK/OneToOne, so a matching attempt cannot
+        # be duplicated. Avoid DISTINCT because it forces wide report counts
+        # and aggregates through a temporary de-duplication step in MySQL.
+        return queryset.filter(query) if query is not None else queryset
 
     def filter_sub_branch(self, queryset, _name, value):
         unit = "platform_user__employee_profile__organization_unit"
@@ -106,7 +109,7 @@ class SurveyAttemptFilter(django_filters.FilterSet):
                 | Q(platform_user__employee_profile__department__in=labels)
             )
             query = label_query if query is None else query | label_query
-        return queryset.filter(query).distinct() if query is not None else queryset
+        return queryset.filter(query) if query is not None else queryset
 
     def filter_shift(self, queryset, _name, value):
         unit = "platform_user__employee_profile__organization_unit"
@@ -117,7 +120,7 @@ class SurveyAttemptFilter(django_filters.FilterSet):
         if labels:
             label_query = Q(**{f"{unit}__name__in": labels, f"{unit}__unit_type": "shift"})
             query = label_query if query is None else query | label_query
-        return queryset.filter(query).distinct() if query is not None else queryset
+        return queryset.filter(query) if query is not None else queryset
 
     class Meta:
         model = SurveyAttempt

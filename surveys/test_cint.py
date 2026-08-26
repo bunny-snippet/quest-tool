@@ -615,6 +615,69 @@ class CintProviderTests(TestCase):
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_redirect_batch_can_target_exact_webhook_survey_ids(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+        first = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199770",
+        )
+        second = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="82199771",
+        )
+
+        with patch.object(provider, "update_supplier_link_redirects") as update:
+            with patch("surveys.provider_services.get_provider", return_value=provider):
+                result = sync_cint_redirect_contracts(
+                    self.integration,
+                    batch_size=25,
+                    survey_ids=[second.pk],
+                )
+
+        self.assertEqual(result["processed"], 1)
+        self.assertEqual(result["remaining"], 0)
+        self.assertIsNone(result["pending_total"])
+        self.assertEqual(result["pending_lower_bound"], 0)
+        self.assertFalse(result["counts_exact"])
+        self.assertFalse(result["has_more"])
+        self.assertEqual(result["scoped_survey_count"], 1)
+        update.assert_called_once_with(second)
+        self.assertNotEqual(first.pk, second.pk)
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
+    def test_redirect_batch_uses_sentinel_instead_of_exact_pending_counts(self):
+        provider = CintProvider(self.integration, session=RecordingSession())
+        surveys = [
+            Survey.objects.create(
+                client=self.client_record,
+                integration=self.integration,
+                source_key=str(82199770 + index),
+            )
+            for index in range(2)
+        ]
+
+        with patch.object(provider, "update_supplier_link_redirects") as update:
+            with patch("surveys.provider_services.get_provider", return_value=provider):
+                first = sync_cint_redirect_contracts(
+                    self.integration,
+                    batch_size=1,
+                    survey_ids=[survey.pk for survey in surveys],
+                )
+
+        self.assertEqual(first["processed"], 1)
+        self.assertEqual(first["remaining"], 1)
+        self.assertIsNone(first["pending_total"])
+        self.assertEqual(first["pending_lower_bound"], 1)
+        self.assertTrue(first["has_more"])
+        self.assertFalse(first["counts_exact"])
+        self.assertTrue(first["counts_lower_bound"])
+        update.assert_called_once_with(surveys[0])
+
+    @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
+    @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)
     def test_redirect_404_is_terminal_until_a_fresh_webhook_update(self):
         provider = CintProvider(self.integration, session=RecordingSession())
         survey = Survey.objects.create(

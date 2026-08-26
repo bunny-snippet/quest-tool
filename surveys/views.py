@@ -30,7 +30,6 @@ from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from django.views.decorators.http import require_http_methods
-from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import filters, permissions, status, viewsets
@@ -65,6 +64,7 @@ from vendors.verisoul import (
     effective_verisoul_policy,
     verisoul_sdk_url,
 )
+from config.filter_backends import SparseDjangoFilterBackend
 
 from .filters import SurveyAttemptFilter, SurveyFilter
 from .dashboard import (
@@ -159,7 +159,7 @@ from .survey_flow import (
     status_identifiers_from_request,
 )
 from .tasks import sync_innovatemr_surveys_task
-from .user_hits import aggregate_user_hits, user_hit_filter_options
+from .user_hits import aggregate_user_hit_payload, expand_user_hit_rows, user_hit_filter_options
 
 
 logger = logging.getLogger(__name__)
@@ -391,26 +391,40 @@ def dashboard_page(request):
 def projects_page(request):
     codes = effective_permission_codes(request.user)
     visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
+    scoped_vendor_id = vendor_scope_user_id(request.user)
     is_client_scoped_panel = bool(
-        vendor_scope_user_id(request.user) or organization_client_ids_for_user(request.user) is not None
+        scoped_vendor_id or organization_client_ids_for_user(request.user) is not None
     )
     project_columns = _project_columns_for_user(request.user)
     project_filters = _component_access(codes, PROJECT_FILTER_PERMISSIONS)
     can_sort_cpi = project_filters["cpi"]
-    if can_sort_cpi:
-        visible_surveys = annotate_survey_pricing_for_user(
+    # Supplier-visible CPI can include client and per-project cuts. Calculating
+    # exact slider endpoints used to run those correlated expressions across
+    # the whole inventory before the page could render. A supplier cut cannot
+    # increase source CPI, so the inexpensive source-CPI maximum is a safe
+    # slider ceiling; the API still applies the exact visible-price expression
+    # for every CPI filter and sort.
+    load_exact_visible_cpi_bounds = can_sort_cpi and not scoped_vendor_id
+    cpi_surveys = visible_surveys
+    cpi_field = "cpi"
+    if load_exact_visible_cpi_bounds:
+        cpi_surveys = annotate_survey_pricing_for_user(
             visible_surveys, request.user
         )
+        cpi_field = "visible_cpi"
     metadata = project_filter_metadata(
         visible_surveys,
         user_id=request.user.pk,
         client_scoped=is_client_scoped_panel,
         include_cpi=can_sort_cpi,
-        cpi_field="visible_cpi",
+        cpi_field=cpi_field,
+        cpi_queryset=cpi_surveys,
     )
     cpi_min, cpi_max = 0, 100
     if can_sort_cpi:
-        cpi_min = metadata["cpi_min"] or 0
+        # A supplier cut can lower the visible minimum below the raw source
+        # minimum, so retain zero as the safe lower control bound for vendors.
+        cpi_min = 0 if scoped_vendor_id else (metadata["cpi_min"] or 0)
         cpi_max = metadata["cpi_max"] or 100
         if cpi_max <= cpi_min:
             cpi_max = cpi_min + 1
@@ -479,6 +493,7 @@ def studies_page(request):
 @function_permission_required("user_hits.view")
 def user_hits_page(request):
     codes = effective_permission_codes(request.user)
+    hit_columns = _permitted_columns(codes, USER_HIT_COLUMN_PERMISSIONS)
     filter_options = cached_user_metadata(
         "user-hit-filters",
         request.user,
@@ -487,8 +502,8 @@ def user_hits_page(request):
     return render(request, "surveys/user_hits.html", {
         "active_page": "user-hits",
         "hit_filters": _component_access(codes, USER_HIT_FILTER_PERMISSIONS),
-        "hit_columns": _permitted_columns(codes, USER_HIT_COLUMN_PERMISSIONS),
-        "hit_column_count": max(1, len(_permitted_columns(codes, USER_HIT_COLUMN_PERMISSIONS))),
+        "hit_columns": hit_columns,
+        "hit_column_count": max(1, len(hit_columns)),
         "hit_cards": _permitted_columns(codes, USER_HIT_CARD_PERMISSIONS),
         "can_change_hit_page_size": "user_hits.control.page_size" in codes,
         "can_paginate_hits": "user_hits.control.pagination" in codes,
@@ -522,7 +537,22 @@ def prescreener_data_page(request):
         vault_error = "The pre-screener vault is not enabled on this environment."
     else:
         try:
-            base = PrescreenerSubmission.objects.using("prescreener_vault").all()
+            vault_fields = {"uid", "submitted_at"}
+            if "market" in columns:
+                vault_fields.update({
+                    "country", "country_code", "language", "language_code",
+                })
+            if "profile" in columns:
+                vault_fields.update({
+                    "respondent_age", "respondent_age_group", "respondent_gender",
+                    "respondent_ethnicity", "respondent_postal_code",
+                })
+            if "usage_count" in columns:
+                vault_fields.add("usage_count")
+            base = (
+                PrescreenerSubmission.objects.using("prescreener_vault")
+                .only(*sorted(vault_fields))
+            )
             options = vault_filter_options()
             if "answers" in columns:
                 base = base.prefetch_related("question_answers")
@@ -577,11 +607,6 @@ def prescreener_data_export(request):
         if value and not filters_access[name]:
             raise PermissionDenied(f"Your account cannot use the {name.replace('_', ' ')} filter.")
 
-    queryset = apply_submission_filters(
-        PrescreenerSubmission.objects.using("prescreener_vault").all(), selected
-    )
-    queryset = queryset.prefetch_related("question_answers").order_by("-submitted_at")
-
     submission_specs = {
         "uid": (["UID"], [22]),
         "market": (["Country", "Country code", "Language", "Language code"], [20, 13, 17, 14]),
@@ -596,27 +621,50 @@ def prescreener_data_export(request):
         name for name in PRESCREENER_DATA_COLUMN_PERMISSIONS
         if name in permitted and name in submission_specs
     ]
+    base_queryset = apply_submission_filters(
+        PrescreenerSubmission.objects.using("prescreener_vault").all(), selected
+    ).order_by("-submitted_at")
+    submission_fields = {"uid", "submitted_at"}
+    if "market" in submission_columns:
+        submission_fields.update({
+            "country", "country_code", "language", "language_code",
+        })
+    if "profile" in submission_columns:
+        submission_fields.update({
+            "respondent_age", "respondent_age_group", "respondent_gender",
+            "respondent_ethnicity", "respondent_postal_code",
+        })
+    if "usage_count" in submission_columns:
+        submission_fields.add("usage_count")
+    submission_queryset = base_queryset.only(*sorted(submission_fields))
+    answer_queryset = base_queryset.only("uid").prefetch_related("question_answers")
 
     def submission_rows():
-        for submission in queryset.iterator(chunk_size=500):
-            values_by_column = {
-                "uid": [submission.uid],
-                "market": [
+        for submission in submission_queryset.iterator(chunk_size=500):
+            values_by_column = {}
+            if "uid" in submission_columns:
+                values_by_column["uid"] = [submission.uid]
+            if "market" in submission_columns:
+                values_by_column["market"] = [
                     submission.country, submission.country_code,
                     submission.language, submission.language_code,
-                ],
-                "profile": [
+                ]
+            if "profile" in submission_columns:
+                values_by_column["profile"] = [
                     submission.respondent_age, submission.respondent_age_group,
                     submission.respondent_gender, submission.respondent_ethnicity,
                     submission.respondent_postal_code,
-                ],
-                "captured": [_excel_datetime(submission.submitted_at)],
-                "usage_count": [submission.usage_count],
-            }
+                ]
+            if "captured" in submission_columns:
+                values_by_column["captured"] = [
+                    _excel_datetime(submission.submitted_at)
+                ]
+            if "usage_count" in submission_columns:
+                values_by_column["usage_count"] = [submission.usage_count]
             yield [value for name in submission_columns for value in values_by_column[name]]
 
     def answer_rows():
-        for submission in queryset.iterator(chunk_size=250):
+        for submission in answer_queryset.iterator(chunk_size=250):
             for answer in submission.question_answers.all():
                 yield ([submission.uid] if "uid" in permitted else []) + [
                     answer.position, answer.question_id,
@@ -767,6 +815,61 @@ def _term_report_base_queryset(user):
     return _scope_attempt_queryset_to_user(queryset, user)
 
 
+def _project_term_report_queryset(
+    queryset,
+    *,
+    columns,
+    include_provider_outcome=False,
+    include_status_source=False,
+):
+    """Select only fields consumed by the Term Report table/export."""
+
+    columns = set(columns)
+    fields = {
+        "id", "survey_id", "platform_user_id", "status",
+        "initiated_at", "callback_at",
+        "survey__id",
+    }
+    relations = {"survey"}
+
+    if columns & {"rid", "actions"} or include_provider_outcome:
+        fields.add("rid")
+    if "survey" in columns:
+        fields.update({"survey__local_id", "survey__source_key"})
+    if "client" in columns:
+        relations.update({
+            "survey__client", "survey__integration", "survey__integration__client",
+        })
+        fields.update({
+            "survey__client_id", "survey__client__id", "survey__client__name",
+            "survey__integration_id", "survey__integration__id",
+            "survey__integration__provider_code", "survey__integration__client_id",
+            "survey__integration__client__id", "survey__integration__client__name",
+            "survey__company_name",
+        })
+    if "respondent" in columns:
+        relations.add("platform_user")
+        fields.update({
+            "platform_user__id", "platform_user__username",
+            "platform_user__first_name", "platform_user__last_name",
+            "platform_user__email", "initiation_ip", "callback_ip",
+        })
+    if "ended" in columns:
+        fields.update({"last_callback_at", "loi_seconds"})
+    if include_provider_outcome:
+        relations.add("survey__integration")
+        fields.update({
+            "upstream_transaction_data", "exit_client_data", "is_verified",
+            "survey__integration_id", "survey__integration__id",
+            "survey__integration__provider_code", "survey__integration__config",
+            "survey__integration__field_mapping",
+        })
+    if include_status_source:
+        fields.add("status_source")
+
+    return queryset.select_related(None).select_related(*sorted(relations)).only(*sorted(fields))
+
+
 def _term_report_datetime(value, label):
     if not value:
         return None
@@ -805,7 +908,8 @@ def _filtered_term_report_queryset(request, filters_access):
         for name in ("branch", "sub_branch", "shift", "user", "status", "country", "client", "buyer_id")
         if selected[name]
     }
-    queryset = SurveyAttemptFilter(filter_data, queryset=queryset).qs
+    if filter_data:
+        queryset = SurveyAttemptFilter(filter_data, queryset=queryset).qs
     lower = _term_report_datetime(selected["date_from"], "From date and time")
     upper = _term_report_datetime(selected["date_to"], "To date and time")
     if lower and upper and lower > upper:
@@ -869,11 +973,18 @@ def termination_reasons_page(request):
         ),
         neutral_parameters=("page", "detail", "rid", "format", "ordering"),
     )
+    include_table_outcome = bool(
+        table_details["provider_status"] or table_details["reason"]
+    )
+    queryset = _project_term_report_queryset(
+        queryset,
+        columns=columns,
+        include_provider_outcome=include_table_outcome,
+    )
     paginator = Paginator(queryset.order_by("-callback_at", "-initiated_at"), 20)
-    paginator.__dict__["count"] = int(summary["total"])
     page_obj = paginator.get_page(request.GET.get("page", 1))
     for row in page_obj.object_list:
-        row.reason_outcome = provider_outcome(row)
+        row.reason_outcome = provider_outcome(row) if include_table_outcome else {}
         row.reason_status_label = UNSUCCESSFUL_STATUS_LABELS.get(row.status, row.get_status_display())
 
     if detail_rid:
@@ -1016,38 +1127,74 @@ def termination_reasons_export(request):
             headers.append(header)
             widths.append(width)
 
+    include_provider_outcome = bool(
+        table_details["provider_status"] or table_details["reason"]
+    )
+    queryset = _project_term_report_queryset(
+        queryset,
+        columns=ordered_columns,
+        include_provider_outcome=include_provider_outcome,
+        include_status_source=TERM_REASON_STATUS_SOURCE_EXPORT_PERMISSION in codes,
+    )
+
     def rows():
         for attempt in queryset.iterator(chunk_size=500):
-            outcome = provider_outcome(attempt)
-            survey = attempt.survey
-            client = survey.client or (survey.integration.client if survey.integration_id else None)
-            provider = survey.integration.provider_code if survey.integration_id else "innovatemr"
-            respondent = ""
-            email = ""
-            if attempt.platform_user_id:
-                respondent = attempt.platform_user.get_full_name() or attempt.platform_user.username
-                email = attempt.platform_user.email
-            ended_at = attempt.callback_at or attempt.last_callback_at or attempt.initiated_at
-            values_by_column = {
-                "rid": [attempt.rid],
-                "survey": [survey.local_id, survey.source_key],
-                "client": [client.name if client else survey.company_name, provider],
-                "respondent": [
+            outcome = provider_outcome(attempt) if include_provider_outcome else {}
+            values_by_column = {}
+            if "rid" in ordered_columns:
+                values_by_column["rid"] = [attempt.rid]
+            if "survey" in ordered_columns:
+                values_by_column["survey"] = [attempt.survey.local_id, attempt.survey.source_key]
+            if "client" in ordered_columns:
+                survey = attempt.survey
+                client = survey.client or (
+                    survey.integration.client if survey.integration_id else None
+                )
+                provider = survey.integration.provider_code if survey.integration_id else "innovatemr"
+                values_by_column["client"] = [
+                    client.name if client else survey.company_name,
+                    provider,
+                ]
+            if "respondent" in ordered_columns:
+                respondent = ""
+                email = ""
+                if attempt.platform_user_id:
+                    respondent = (
+                        attempt.platform_user.get_full_name()
+                        or attempt.platform_user.username
+                    )
+                    email = attempt.platform_user.email
+                values_by_column["respondent"] = [
                     respondent, email, attempt.initiation_ip or "", attempt.callback_ip or "",
-                ],
-                "status": [UNSUCCESSFUL_STATUS_LABELS.get(attempt.status, attempt.get_status_display())],
-                "ended": [
+                ]
+            if "status" in ordered_columns:
+                values_by_column["status"] = [
+                    UNSUCCESSFUL_STATUS_LABELS.get(
+                        attempt.status, attempt.get_status_display()
+                    )
+                ]
+            if "ended" in ordered_columns:
+                ended_at = (
+                    attempt.callback_at or attempt.last_callback_at or attempt.initiated_at
+                )
+                values_by_column["ended"] = [
                     _excel_datetime(attempt.initiated_at),
                     _excel_datetime(ended_at),
-                    round(attempt.loi_seconds / 60, 2) if attempt.loi_seconds is not None else "",
-                ],
-            }
-            status_detail_values = {
-                "provider_status": outcome.get("status") or "Not supplied",
-                "reason": outcome.get("reason") or "",
-                "category": outcome.get("category") or "",
-                "status_source": attempt.status_source,
-            }
+                    round(attempt.loi_seconds / 60, 2)
+                    if attempt.loi_seconds is not None else "",
+                ]
+            status_detail_values = {}
+            if table_details["provider_status"]:
+                status_detail_values["provider_status"] = (
+                    outcome.get("status") or "Not supplied"
+                )
+            if table_details["reason"]:
+                status_detail_values.update({
+                    "reason": outcome.get("reason") or "",
+                    "category": outcome.get("category") or "",
+                })
+            if TERM_REASON_STATUS_SOURCE_EXPORT_PERMISSION in codes:
+                status_detail_values["status_source"] = attempt.status_source
             values = []
             for field_type, name in export_fields:
                 if field_type == "column":
@@ -1104,6 +1251,151 @@ def _qualifying_option_values(question):
     return allowed
 
 
+def _is_postal_targeting_question(key, text):
+    """Recognize provider ZIP/postal/PIN qualifications across naming variants."""
+
+    normalized = re.sub(
+        r"[^a-z0-9]+",
+        " ",
+        f"{key or ''} {text or ''}".lower(),
+    ).strip()
+    return bool(
+        re.search(
+            r"\b(?:zip\s*codes?|postal\s*codes?|post\s*codes?|pin\s*codes?|pincodes?)\b",
+            normalized,
+        )
+    )
+
+
+def _innovatemr_postal_targeting_values(question):
+    """Return the actual InnovateMR ZIP values, never its sequence OptionIds.
+
+    InnovateMR models a numeric-open-ended ZIP qualification as a very large
+    option list. ``OptionId`` is only a row identifier (1, 2, 3, ...), while
+    ``OptionText`` is the ZIP/PIN/postal value the respondent must submit.
+    """
+
+    values = []
+    seen = set()
+    for option in question.options or []:
+        if isinstance(option, dict):
+            value = option.get("OptionText")
+            if value in (None, ""):
+                value = (
+                    option.get("OptionCode")
+                    or option.get("OptionValue")
+                    or option.get("Value")
+                )
+        else:
+            value = option
+        value = clean_rfg_display_text(str(value or "")).strip()
+        normalized = value.casefold()
+        if value and normalized not in seen:
+            seen.add(normalized)
+            values.append(value)
+    return values
+
+
+def _normalized_postal_targeting_value(value):
+    """Normalize harmless respondent formatting for postal target matching."""
+
+    return re.sub(r"[\s-]+", "", str(value or "")).casefold()
+
+
+def _postal_targeting_note(values):
+    """Build a useful, bounded hint for provider-required postal values."""
+
+    if not values:
+        return ""
+    preview_limit = 12
+    preview = ", ".join(values[:preview_limit])
+    if len(values) <= preview_limit:
+        return f"Required ZIP/postal codes: {preview}"
+    return (
+        f"Required ZIP/postal codes: {len(values):,} provider-approved codes "
+        f"(examples: {preview})"
+    )
+
+
+PRESCREENER_MAX_AGE = 99
+
+
+def _age_range_from_label(value):
+    """Decode closed and open-ended provider age labels into a safe range."""
+
+    label = clean_rfg_display_text(str(value or "")).strip().lower()
+    if not label:
+        return None
+    label = label.replace("&", " and ")
+    open_match = re.search(
+        r"(?<!\d)(\d{1,3})\s*(?:years?|yrs?)?\s*(?:\+|plus\b|"
+        r"(?:(?:and|or)\s+)?(?:older|over|above|more|up)\b)",
+        label,
+    )
+    if not open_match:
+        open_match = re.search(
+            r"\b(?:over|above|older\s+than)\s*(\d{1,3})\b",
+            label,
+        )
+    if open_match:
+        start = int(open_match.group(1))
+        return (
+            {"ageStart": start, "ageEnd": PRESCREENER_MAX_AGE}
+            if 0 <= start <= PRESCREENER_MAX_AGE else None
+        )
+    closed_match = re.search(
+        r"(?<!\d)(\d{1,3})\s*(?:-|\u2013|\u2014|to)\s*(\d{1,3})(?!\d)",
+        label,
+        re.IGNORECASE,
+    )
+    if closed_match:
+        start, end = int(closed_match.group(1)), int(closed_match.group(2))
+        end = min(end, PRESCREENER_MAX_AGE)
+        return {"ageStart": start, "ageEnd": end} if 0 <= start <= end else None
+    exact_match = re.fullmatch(r"\s*(\d{1,3})\s*(?:years?|yrs?)?\s*", label)
+    if exact_match:
+        age = int(exact_match.group(1))
+        return (
+            {"ageStart": age, "ageEnd": age}
+            if 0 <= age <= PRESCREENER_MAX_AGE else None
+        )
+    return None
+
+
+def _age_range_from_payload(item):
+    """Normalize one provider option/range without widening closed ranges."""
+
+    if not isinstance(item, dict):
+        return _age_range_from_label(item)
+    for key in (
+        "OptionText", "Translation", "Label", "label", "Range", "range",
+        "DisplayText", "display_text", "Name", "name",
+    ):
+        parsed = _age_range_from_label(item.get(key))
+        if parsed:
+            return parsed
+
+    def integer(*keys):
+        for key in keys:
+            value = item.get(key)
+            if value not in (None, ""):
+                try:
+                    return int(value)
+                except (TypeError, ValueError):
+                    return None
+        return None
+
+    start = integer("min", "ageStart", "start", "from")
+    end = integer("max", "ageEnd", "end", "to")
+    if start is None:
+        return None
+    # A missing upper bound is the provider-neutral representation of `N+`.
+    if end is None:
+        end = PRESCREENER_MAX_AGE
+    end = min(end, PRESCREENER_MAX_AGE)
+    return {"ageStart": start, "ageEnd": end} if 0 <= start <= end else None
+
+
 def _rfg_profile_dimension(question):
     """Return the mandatory profile dimension represented by an RFG row."""
 
@@ -1157,10 +1449,10 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
     """Prepare provider targeting rows as safe, responsive form controls and hints."""
 
     prepared = []
-    provider_code = (
+    provider_code = str(
         survey.integration.provider_code
         if survey.integration_id else "innovatemr"
-    )
+    ).lower()
     question_rows = list(survey.targeting_questions.all())
     if provider_code == "cint" and not question_rows:
         # Some open Cint opportunities genuinely have no qualifications. We
@@ -1231,15 +1523,20 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             normalized_key == "AGE"
             or ("your age" in normalized_text and not is_dob_question)
         )
-        is_postal_question = (
-            normalized_key in {"ZIP", "ZIP_CODE", "ZIPCODES", "POSTAL_CODE"}
-            or "zipcode" in normalized_text
-            or "zip code" in normalized_text
-            or "postal code" in normalized_text
+        is_postal_question = _is_postal_targeting_question(
+            normalized_key,
+            normalized_text,
         )
         options = []
         age_ranges = []
         allowed_values = _qualifying_option_values(question)
+        postal_targeting_values = []
+        if provider_code == "innovatemr" and is_postal_question:
+            postal_targeting_values = _innovatemr_postal_targeting_values(question)
+            if postal_targeting_values:
+                # Innovate's ZIP OptionIds are sequence numbers. Validate the
+                # respondent against the corresponding OptionText values.
+                allowed_values = set(postal_targeting_values)
         dimension = _rfg_profile_dimension(question) if provider_code == "rfg" else ""
         alias_allowed_sets = [
             _rfg_alias_allowed_values(alias, dimension)
@@ -1252,7 +1549,15 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                 if allowed_values is None
                 else set(allowed_values).intersection(alias_allowed)
             )
-        for option in question.options:
+        # InnovateMR ZIP qualifications can contain tens of thousands of
+        # values. They are validated from ``postal_targeting_values`` above;
+        # do not build a duplicate choice structure for an open text input.
+        rendered_option_rows = (
+            []
+            if provider_code == "innovatemr" and is_postal_question
+            else question.options or []
+        )
+        for option in rendered_option_rows:
             # Legacy BioBrain rows stored bare OptionIds. Treat them as safe
             # fallback choices until the localized qualification refresh below
             # replaces them with `{OptionId, OptionText}` objects.
@@ -1260,58 +1565,44 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                 option = {"OptionId": option, "OptionText": str(option)}
             option_id = option.get("OptionId")
             if option.get("ageStart") is not None:
-                label = f"{option.get('ageStart')}–{option.get('ageEnd')}"
-                age_ranges.append(option)
+                label = clean_rfg_display_text(
+                    option.get("OptionText")
+                    or f"{option.get('ageStart')}–{option.get('ageEnd')}"
+                )
             else:
                 label = clean_rfg_display_text(
                     option.get("OptionText") or str(option_id or "Option")
                 )
             value = str(option_id if option_id is not None else label)
+            option_is_qualified = not allowed_values or value in allowed_values
+            if (is_dob_question or is_age_question) and option_is_qualified:
+                normalized_range = _age_range_from_payload(option)
+                if normalized_range:
+                    age_ranges.append(normalized_range)
             if qualifying_options_only and allowed_values and value not in allowed_values:
                 continue
             options.append({"value": value, "label": label})
         if is_dob_question or is_age_question:
             for item in (question.raw_data or {}).get("targeting_age_ranges") or []:
-                if not isinstance(item, dict):
-                    continue
-                try:
-                    age_ranges.append({
-                        "ageStart": int(item["min"]),
-                        "ageEnd": int(item["max"]),
-                    })
-                except (KeyError, TypeError, ValueError):
-                    continue
+                normalized_range = _age_range_from_payload(item)
+                if normalized_range:
+                    age_ranges.append(normalized_range)
             for alias in profile_aliases.get(question.pk, []):
                 for item in (alias.raw_data or {}).get("targeting_age_ranges") or []:
-                    if not isinstance(item, dict):
-                        continue
-                    try:
-                        age_ranges.append({
-                            "ageStart": int(item.get("min", item.get("ageStart"))),
-                            "ageEnd": int(item.get("max", item.get("ageEnd"))),
-                        })
-                    except (TypeError, ValueError):
-                        continue
+                    normalized_range = _age_range_from_payload(item)
+                    if normalized_range:
+                        age_ranges.append(normalized_range)
         if (is_dob_question or is_age_question) and not age_ranges and allowed_values:
             # Compatibility for Cint targeting stored before explicit age
             # ranges were normalized. Prefer the provider's visible labels so
             # grouped precodes such as "18-24" are not mistaken for ages 1/2.
             for option in options:
-                label = str(option["label"]).strip()
-                single_age = re.fullmatch(r"\d{1,3}", label)
-                age_span = re.fullmatch(
-                    r"(\d{1,3})\s*(?:-|\u2013|to)\s*(\d{1,3})",
-                    label,
-                    re.IGNORECASE,
-                )
-                if single_age:
-                    start = end = int(label)
-                elif age_span:
-                    start, end = (int(age_span.group(1)), int(age_span.group(2)))
-                else:
+                if allowed_values and option["value"] not in allowed_values:
                     continue
-                if 0 <= start <= end <= 125:
-                    age_ranges.append({"ageStart": start, "ageEnd": end})
+                label = str(option["label"]).strip()
+                normalized_range = _age_range_from_label(label)
+                if normalized_range:
+                    age_ranges.append(normalized_range)
         if age_ranges:
             merged_age_ranges = []
             for item in sorted(age_ranges, key=lambda row: int(row["ageStart"])):
@@ -1361,6 +1652,11 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             option["selected"] = option["value"] in selected_values
         min_value = min((int(item["ageStart"]) for item in age_ranges), default=None)
         max_value = max((int(item["ageEnd"]) for item in age_ranges), default=None)
+        if is_age_question:
+            max_value = min(
+                max_value if max_value is not None else PRESCREENER_MAX_AGE,
+                PRESCREENER_MAX_AGE,
+            )
         age_range_labels = [
             f"{int(item['ageStart'])}\u2013{int(item['ageEnd'])}"
             for item in age_ranges
@@ -1369,7 +1665,12 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             option["label"] for option in options
             if not allowed_values or option["value"] in allowed_values
         ]
-        if allowed_values and qualifying_options_only and not qualifying_labels:
+        if (
+            allowed_values
+            and qualifying_options_only
+            and not qualifying_labels
+            and not postal_targeting_values
+        ):
             qualifying_labels = sorted(allowed_values)
         if qualifying_labels:
             answer_word = "answer" if len(qualifying_labels) == 1 else "answers"
@@ -1406,11 +1707,15 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             "placeholder": (
                 "Enter your age" if is_age_question
                 else "Enter your ZIP / postal code" if is_postal_question
-                else "Enter a number"
+                else "Type your answer"
             ),
             "is_dob_question": is_dob_question,
             "is_postal_question": is_postal_question,
-            "allowed_values": sorted(allowed_values or []),
+            "allowed_values": (
+                postal_targeting_values
+                if postal_targeting_values
+                else sorted(allowed_values or [])
+            ),
             "qualifying_options_only": bool(
                 qualifying_options_only and allowed_values
             ),
@@ -1421,6 +1726,8 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                 or (
                     f"Qualifying age: {', '.join(age_range_labels)}"
                     if (is_age_question or is_dob_question) and age_range_labels
+                    else _postal_targeting_note(postal_targeting_values)
+                    if postal_targeting_values
                     else "Only answers accepted by this survey are shown."
                     if provider_code == "rfg" and qualifying_options_only and allowed_values
                     else "Enter a ZIP/postal code accepted by this survey."
@@ -1531,12 +1838,24 @@ def _collect_prescreener_answers(request, survey):
             # provider's accepted range, not the respondent's age.
             upstream_values = [str(numeric_value)]
         elif prepared.get("is_postal_question") and prepared.get("allowed_values"):
-            accepted = {str(value).casefold() for value in prepared["allowed_values"]}
-            if values[0].casefold() not in accepted:
+            accepted = {}
+            for value in prepared["allowed_values"]:
+                accepted.setdefault(
+                    _normalized_postal_targeting_value(value),
+                    str(value),
+                )
+            canonical_value = accepted.get(
+                _normalized_postal_targeting_value(values[0])
+            )
+            if canonical_value is None:
                 errors.append(
                     f"Enter a ZIP/postal code accepted by this survey for: {prepared['display_text']}"
                 )
                 continue
+            # Preserve the provider's exact value/casing/spacing in the vault
+            # and outbound query even when the respondent varies letter case.
+            values = [canonical_value]
+            upstream_values = [canonical_value]
 
         platform_only = bool((question.raw_data or {}).get("platform_only"))
         if platform_only:
@@ -3194,7 +3513,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     project_count_cache_enabled = True
     lookup_field = "local_id"
     filterset_class = SurveyFilter
-    filter_backends = [DjangoFilterBackend, SurveySearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, SurveySearchFilter, filters.OrderingFilter]
     search_fields = ["local_id", "=source_key", "=source_id", "name", "company_name", "buyer_id", "survey_type", "country", "country_code", "job_category"]
     ordering_fields = ["source_modified_at", "source_created_at", "cpi", "sample_size", "completes", "created_at"]
     ordering = ["-source_modified_at", "-created_at"]
@@ -3528,7 +3847,7 @@ class SyncTriggerView(APIView):
 class SyncRunViewSet(viewsets.ReadOnlyModelViewSet):
     queryset = SyncRun.objects.all()
     serializer_class = SyncRunSerializer
-    filter_backends = [DjangoFilterBackend, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.OrderingFilter]
     filterset_fields = ["status"]
     ordering_fields = ["started_at", "finished_at", "created", "updated", "detail_failures"]
     ordering = ["-started_at"]
@@ -3600,7 +3919,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = SurveyAttemptSerializer
     permission_classes = [HasFunctionPermission]
     lookup_field = "rid"
-    filter_backends = [DjangoFilterBackend, SurveyAttemptSearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, SurveyAttemptSearchFilter, filters.OrderingFilter]
     filterset_class = SurveyAttemptFilter
     search_fields = [
         "rid", "pid", "prescreener_uid", "user_id", "survey__local_id", "=survey__source_key", "=survey__source_id", "survey__name", "survey__company_name",
@@ -3685,9 +4004,9 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             "0", "false", "no",
         }
         if not include_summary:
-            # The Traffic page requests rows and its cached KPI aggregate in
-            # parallel. Existing API consumers still receive the original
-            # combined response unless they explicitly opt into this fast path.
+            # Retain the row-only response for existing API consumers. The
+            # Traffic page uses the default combined response so its aggregate
+            # count can also seed pagination below.
             page = self.paginate_queryset(queryset)
             if page is not None:
                 return self.get_paginated_response(
@@ -3705,9 +4024,9 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             request,
             lambda: self._filtered_summary(queryset),
         )
-        # SurveyPagination seeds Django's cached count from this value, so the
-        # aggregate's COUNT is not immediately repeated by the paginator.
-        self.report_cached_count = total_count
+        # Pagination membership stays authoritative even while KPI aggregates
+        # use a short stale-while-revalidate cache. Reusing the cached summary
+        # count could hide a newly created next page or expose a phantom one.
         page = self.paginate_queryset(queryset)
         if page is not None:
             serializer = self.get_serializer(page, many=True)
@@ -3992,7 +4311,8 @@ class UserHitsAPIView(APIView):
         codes = effective_permission_codes(request.user)
 
         def load_user_hits():
-            rows, summary = aggregate_user_hits(request.user, request.query_params)
+            payload = aggregate_user_hit_payload(request.user, request.query_params)
+            summary = payload["summary"]
             if USER_HIT_CARD_PERMISSIONS["total_hits"] not in codes:
                 summary["hits"]["total"] = None
             if USER_HIT_CARD_PERMISSIONS["completes"] not in codes:
@@ -4006,11 +4326,11 @@ class UserHitsAPIView(APIView):
                     summary["completes"][device] = None
             if USER_HIT_CARD_PERMISSIONS["ir"] not in codes:
                 summary["incidence_rate"] = None
-            return rows, summary
+            return payload
 
         try:
-            rows, summary = cached_report_payload(
-                "user-hits-v3",
+            payload = cached_report_payload(
+                "user-hits-v4",
                 request,
                 load_user_hits,
             )
@@ -4035,15 +4355,16 @@ class UserHitsAPIView(APIView):
             for column in permitted_columns
             for field in fields_by_column.get(column, ())
         }
+        paginator = SurveyPagination()
+        compact_page = paginator.paginate_queryset(payload["rows"], request, view=self)
+        page_rows = expand_user_hit_rows(compact_page, payload["metadata"])
         projected_rows = [
             {field: value for field, value in row.items() if field in visible_fields}
-            for row in rows
+            for row in page_rows
         ]
 
-        paginator = SurveyPagination()
-        page = paginator.paginate_queryset(projected_rows, request, view=self)
-        response = paginator.get_paginated_response(page)
-        response.data["summary"] = summary
+        response = paginator.get_paginated_response(projected_rows)
+        response.data["summary"] = payload["summary"]
         return response
 
 
@@ -4184,26 +4505,133 @@ def _attempt_excel_rows(queryset, requesting_user=None):
     headers = [header for column in ordered_columns for header in specs[column][0]]
     widths = [width for column in ordered_columns for width in specs[column][1]]
 
+    selected_fields = {"id"}
+    selected_relations = set()
+    if set(ordered_columns) & {"project_id", "survey_id", "country", "cpi"}:
+        selected_relations.add("survey")
+        selected_fields.update({"survey_id", "survey__id"})
+    if "project_id" in ordered_columns:
+        selected_fields.add("survey__local_id")
+        if can_view_client_name:
+            selected_relations.update({"client", "survey__client"})
+            selected_fields.update({
+                "client_id", "client__id", "client__name",
+                "survey__client_id", "survey__client__id", "survey__client__name",
+                "survey__company_name",
+            })
+    if "survey_id" in ordered_columns:
+        selected_fields.update({"survey__source_id", "survey__source_key"})
+    if "pid" in ordered_columns:
+        selected_fields.add("pid")
+    if "respondent_id" in ordered_columns:
+        selected_fields.add("rid")
+    if "status" in ordered_columns:
+        selected_fields.add("status")
+        if can_view_provider_status:
+            selected_relations.update({"survey", "survey__integration"})
+            selected_fields.update({
+                "rid", "survey_id", "survey__id", "survey__integration_id",
+                "survey__integration__id", "survey__integration__provider_code",
+                "survey__integration__config", "survey__integration__field_mapping",
+                "upstream_transaction_data", "exit_client_data", "is_verified",
+            })
+        if can_view_status_source:
+            selected_fields.add("status_source")
+    if "country" in ordered_columns:
+        selected_fields.update({"survey__country", "survey__country_code"})
+    if "cpi" in ordered_columns:
+        selected_fields.update({
+            "source_cpi_snapshot", "payable_cpi_snapshot",
+            "cpi_cut_percent_snapshot", "survey__cpi",
+        })
+        if commercial_admin:
+            selected_relations.update({
+                "platform_user", "platform_user__employee_profile",
+                "platform_user__employee_profile__role",
+                "platform_user__employee_profile__organization_unit",
+                "platform_user__employee_profile__organization_unit__parent",
+                "platform_user__employee_profile__organization_unit__parent__parent",
+                "vendor", "vendor__employee_profile",
+            })
+            selected_fields.update({
+                "platform_user_id", "platform_user__id", "platform_user__username",
+                "platform_user__first_name", "platform_user__last_name",
+                "platform_user__employee_profile__id",
+                "platform_user__employee_profile__user_id",
+                "platform_user__employee_profile__account_type",
+                "platform_user__employee_profile__role_id",
+                "platform_user__employee_profile__role__id",
+                "platform_user__employee_profile__role__cpi_visibility_percent",
+                "platform_user__employee_profile__organization_unit_id",
+                "platform_user__employee_profile__organization_unit__id",
+                "platform_user__employee_profile__organization_unit__name",
+                "platform_user__employee_profile__organization_unit__unit_type",
+                "platform_user__employee_profile__organization_unit__parent_id",
+                "platform_user__employee_profile__organization_unit__parent__id",
+                "platform_user__employee_profile__organization_unit__parent__name",
+                "platform_user__employee_profile__organization_unit__parent__unit_type",
+                "platform_user__employee_profile__organization_unit__parent__parent_id",
+                "platform_user__employee_profile__organization_unit__parent__parent__id",
+                "platform_user__employee_profile__organization_unit__parent__parent__name",
+                "platform_user__employee_profile__organization_unit__parent__parent__unit_type",
+                "vendor_id", "vendor__id", "vendor__username",
+                "vendor__first_name", "vendor__last_name",
+                "vendor__employee_profile__id", "vendor__employee_profile__user_id",
+                "vendor__employee_profile__account_type",
+            })
+    if "user" in ordered_columns:
+        selected_relations.add("platform_user")
+        selected_fields.update({
+            "platform_user_id", "platform_user__id", "platform_user__username",
+            "platform_user__first_name", "platform_user__last_name",
+        })
+    if "device" in ordered_columns:
+        selected_fields.update({
+            "entry_device", "entry_os", "entry_browser", "entry_user_agent",
+        })
+    if "ip" in ordered_columns:
+        selected_fields.update({"initiation_ip", "callback_ip"})
+    if "loi" in ordered_columns:
+        selected_fields.add("loi_seconds")
+    if "start" in ordered_columns:
+        selected_fields.update({
+            "initiated_at", "submitted_at", "redirected_at", "created_at",
+        })
+    if "end" in ordered_columns:
+        selected_fields.update({"callback_at", "last_callback_at"})
+
+    queryset = queryset.select_related(None)
+    if selected_relations:
+        queryset = queryset.select_related(*sorted(selected_relations))
+    queryset = queryset.only(*sorted(selected_fields))
+
     def rows():
         for attempt in queryset.iterator(chunk_size=1000):
-            survey = attempt.survey
-            user = attempt.platform_user
-            client = attempt.client or survey.client
-            status_label = (
-                "Initiated"
-                if attempt.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED}
-                else attempt.get_status_display()
-            )
-            outcome = provider_outcome(attempt) if can_view_provider_status else {}
-            values_by_column = {
-                "project_id": (
-                    [survey.local_id]
-                    + ([client.name if client else survey.company_name] if can_view_client_name else [])
-                ),
-                "survey_id": [survey.source_identifier],
-                "pid": [attempt.pid],
-                "respondent_id": [attempt.rid],
-                "status": (
+            values_by_column = {}
+            if "project_id" in ordered_columns:
+                values = [attempt.survey.local_id]
+                if can_view_client_name:
+                    client = attempt.client or attempt.survey.client
+                    values.append(
+                        client.name if client else attempt.survey.company_name
+                    )
+                values_by_column["project_id"] = values
+            if "survey_id" in ordered_columns:
+                values_by_column["survey_id"] = [attempt.survey.source_identifier]
+            if "pid" in ordered_columns:
+                values_by_column["pid"] = [attempt.pid]
+            if "respondent_id" in ordered_columns:
+                values_by_column["respondent_id"] = [attempt.rid]
+            if "status" in ordered_columns:
+                status_label = (
+                    "Initiated"
+                    if attempt.status in {
+                        SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED,
+                    }
+                    else attempt.get_status_display()
+                )
+                outcome = provider_outcome(attempt) if can_view_provider_status else {}
+                values_by_column["status"] = (
                     [status_label]
                     + ([
                         outcome.get("status") or "",
@@ -4211,29 +4639,45 @@ def _attempt_excel_rows(queryset, requesting_user=None):
                         outcome.get("category") or "",
                     ] if can_view_provider_status else [])
                     + ([attempt.status_source] if can_view_status_source else [])
-                ),
-                "country": [survey.country or survey.country_code],
-                "cpi": [
+                )
+            if "country" in ordered_columns:
+                values_by_column["country"] = [
+                    attempt.survey.country or attempt.survey.country_code
+                ]
+            if "cpi" in ordered_columns:
+                values_by_column["cpi"] = [
                     viewer_attempt_cpi(attempt, requesting_user, current=True),
                     viewer_attempt_cpi(attempt, requesting_user),
                     *(
                         [supplier_cpi_for_admin(attempt), supplier_label_for_admin(attempt)]
                         if commercial_admin else []
                     ),
-                ],
-                "user": [(user.get_full_name() or user.username) if user else "Deleted user"],
-                "device": [
+                ]
+            if "user" in ordered_columns:
+                user = attempt.platform_user
+                values_by_column["user"] = [
+                    (user.get_full_name() or user.username) if user else "Deleted user"
+                ]
+            if "device" in ordered_columns:
+                values_by_column["device"] = [
                     attempt.entry_device, attempt.entry_os, attempt.entry_browser,
                     attempt.entry_user_agent,
-                ],
-                "ip": [attempt.initiation_ip, attempt.callback_ip],
-                "loi": [round((attempt.loi_seconds or 0) / 60, 2)],
-                "start": [
-                    _excel_datetime(attempt.initiated_at), _excel_datetime(attempt.submitted_at),
-                    _excel_datetime(attempt.redirected_at), _excel_datetime(attempt.created_at),
-                ],
-                "end": [_excel_datetime(attempt.callback_at or attempt.last_callback_at)],
-            }
+                ]
+            if "ip" in ordered_columns:
+                values_by_column["ip"] = [attempt.initiation_ip, attempt.callback_ip]
+            if "loi" in ordered_columns:
+                values_by_column["loi"] = [round((attempt.loi_seconds or 0) / 60, 2)]
+            if "start" in ordered_columns:
+                values_by_column["start"] = [
+                    _excel_datetime(attempt.initiated_at),
+                    _excel_datetime(attempt.submitted_at),
+                    _excel_datetime(attempt.redirected_at),
+                    _excel_datetime(attempt.created_at),
+                ]
+            if "end" in ordered_columns:
+                values_by_column["end"] = [
+                    _excel_datetime(attempt.callback_at or attempt.last_callback_at)
+                ]
             yield [value for column in ordered_columns for value in values_by_column[column]]
 
     return headers, rows(), widths

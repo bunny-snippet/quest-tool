@@ -4,6 +4,8 @@ from django.conf import settings
 from django.db.models import Count, Q
 
 from config.cache_utils import (
+    safe_cache_add,
+    safe_cache_delete,
     safe_cache_get,
     safe_cache_get_or_set,
     safe_cache_increment,
@@ -15,6 +17,9 @@ from .models import PrescreenerSubmission
 
 
 _VERSION_KEY = "prescreener-vault:version"
+_SUMMARY_VERSION_KEY = "prescreener-vault:summary-version"
+_OPTIONS_VERSION_KEY = "prescreener-vault:options-version"
+_OPTIONS_INVALIDATION_THROTTLE_KEY = "prescreener-vault:options-invalidation"
 
 
 def _namespace_version() -> int:
@@ -23,10 +28,63 @@ def _namespace_version() -> int:
     return int(safe_cache_get(_VERSION_KEY, 1) or 1)
 
 
-def invalidate_vault_cache() -> None:
-    """Logically invalidate all cached vault reads in one constant-time write."""
+def _summary_namespace_version() -> int:
+    return int(safe_cache_get(_SUMMARY_VERSION_KEY, 1) or 1)
 
-    safe_cache_increment(_VERSION_KEY)
+
+def _options_namespace_version() -> int:
+    return int(safe_cache_get(_OPTIONS_VERSION_KEY, 1) or 1)
+
+
+def _profile_cache_key(uid: str) -> str:
+    return stable_cache_key(
+        f"prescreener-vault:v{_namespace_version()}:profile",
+        str(uid or "").strip(),
+    )
+
+
+def invalidate_vault_cache(
+    uid: str | None = None,
+    *,
+    summary: bool = True,
+    options: bool = True,
+) -> None:
+    """Invalidate exact profile/summary reads and bound option refresh churn.
+
+    Profile and summary data remain immediately fresh after every write. The
+    four DISTINCT selector queries are different: their values change slowly,
+    while profile captures and reuses can arrive several times per second. At
+    most one write per short window rotates the options generation, and the
+    options TTL is capped to that same window so a newly seen dimension still
+    appears promptly without forcing every page request back to MySQL.
+    """
+
+    normalized_uid = str(uid or "").strip()
+    if normalized_uid:
+        # Normal traffic always knows the affected UID. Delete only its bounded
+        # snapshot instead of making every unrelated profile miss Redis.
+        safe_cache_delete(_profile_cache_key(normalized_uid))
+    else:
+        # Bulk repair/purge commands intentionally invalidate the full profile
+        # namespace because they can touch an unbounded set of UIDs.
+        safe_cache_increment(_VERSION_KEY)
+    if summary:
+        safe_cache_increment(_SUMMARY_VERSION_KEY)
+    if not options:
+        return
+    throttle_seconds = max(
+        1,
+        int(getattr(settings, "VAULT_CACHE_OPTIONS_INVALIDATION_SECONDS", 120)),
+    )
+    owns_throttle = safe_cache_add(
+        _OPTIONS_INVALIDATION_THROTTLE_KEY,
+        "1",
+        timeout=throttle_seconds,
+    )
+    if owns_throttle is not False:
+        # ``None`` means Redis is unavailable. Increment fail-open so the
+        # existing correctness behavior is retained when cache service returns.
+        safe_cache_increment(_OPTIONS_VERSION_KEY)
 
 
 def apply_submission_filters(queryset, selected: dict[str, str]):
@@ -34,7 +92,13 @@ def apply_submission_filters(queryset, selected: dict[str, str]):
 
     if selected.get("search"):
         value = selected["search"]
-        queryset = queryset.filter(uid__icontains=value)
+        # Every stored UID is exactly 19 characters. A full UID search can use
+        # the primary-key index; shorter exploratory searches retain the
+        # existing contains behavior.
+        if len(value) == PrescreenerSubmission._meta.get_field("uid").max_length:
+            queryset = queryset.filter(uid__iexact=value)
+        else:
+            queryset = queryset.filter(uid__icontains=value)
     if selected.get("country"):
         queryset = queryset.filter(country_code__iexact=selected["country"])
     if selected.get("language"):
@@ -49,7 +113,7 @@ def apply_submission_filters(queryset, selected: dict[str, str]):
 def vault_filter_options() -> dict:
     """Return cached distinct country/language/age/gender selector values."""
 
-    version = _namespace_version()
+    version = _options_namespace_version()
     key = f"prescreener-vault:v{version}:filter-options"
 
     def load():
@@ -81,17 +145,21 @@ def vault_filter_options() -> dict:
             ),
         }
 
+    configured_timeout = getattr(settings, "VAULT_CACHE_OPTIONS_TTL_SECONDS", 600)
+    invalidation_window = getattr(
+        settings, "VAULT_CACHE_OPTIONS_INVALIDATION_SECONDS", 120
+    )
     return safe_cache_get_or_set(
         key,
         load,
-        timeout=getattr(settings, "VAULT_CACHE_OPTIONS_TTL_SECONDS", 600),
+        timeout=max(1, min(int(configured_timeout), int(invalidation_window))),
     )
 
 
 def vault_filtered_summary(selected: dict[str, str]) -> dict:
     """Return cached filter-aware vault totals."""
 
-    version = _namespace_version()
+    version = _summary_namespace_version()
     normalized = {key: str(value or "").strip().lower() for key, value in selected.items()}
     key = stable_cache_key(f"prescreener-vault:v{version}:summary", normalized)
 
@@ -119,8 +187,7 @@ def cached_profile(uid: str) -> dict | None:
     normalized_uid = str(uid or "").strip()
     if not normalized_uid:
         return None
-    version = _namespace_version()
-    key = stable_cache_key(f"prescreener-vault:v{version}:profile", normalized_uid)
+    key = _profile_cache_key(normalized_uid)
 
     def load():
         row = (

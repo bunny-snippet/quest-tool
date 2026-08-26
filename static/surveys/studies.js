@@ -34,8 +34,10 @@
   if (!elements.rows) return;
   document.querySelector('.studies-table').style.minWidth = `${Math.max(980, columnCount * 96)}px`;
 
+  const responsiveLayout = window.matchMedia('(max-width: 900px)');
   const state = {
     page: 1, pages: 1, pageSize: Number(elements.pageSize?.value || 10), timer: null, controller: null,
+    results: [], renderState: 'idle', errorMessage: '',
     projectId: byId('studyProjectScope') ? (new URLSearchParams(window.location.search).get('internal_id') || '') : '',
   };
   const istDateFormatter = new Intl.DateTimeFormat('en-IN', {
@@ -57,12 +59,11 @@
     unknown: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M9.8 9a2.4 2.4 0 1 1 3.5 2.2c-.9.5-1.3 1-1.3 2M12 17h.01"/></svg>',
   };
 
+  const htmlEscapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
   function escapeHtml(value) {
-    const node = document.createElement('div');
-    node.textContent = value == null ? '' : String(value);
-    return node.innerHTML;
+    return (value == null ? '' : String(value)).replace(/[&<>"']/g, (character) => htmlEscapes[character]);
   }
-  const escapeAttr = (value) => escapeHtml(value).replaceAll('"', '&quot;').replaceAll("'", '&#39;');
+  const escapeAttr = escapeHtml;
 
   const selectedValues = (container) => container ? [...container.querySelectorAll('input:checked')].map((input) => input.value) : [];
 
@@ -353,43 +354,66 @@
     return `<article class="survey-card study-card"><div class="study-card-head">${head}</div>${survey}${displayedMetrics ? `<div class="study-card-grid">${displayedMetrics}</div>` : ''}${columns.has('ip') ? `<div class="study-card-network">${ipPair(attempt)}</div>` : ''}${times}</article>`;
   }
 
+  function renderAttempts() {
+    const mobile = responsiveLayout.matches;
+    const active = mobile ? elements.cards : elements.rows;
+    const inactive = mobile ? elements.rows : elements.cards;
+    inactive.innerHTML = '';
+
+    if (state.renderState === 'loading') {
+      active.innerHTML = mobile
+        ? '<div class="table-loader"><i></i><span>Fetching respondent activity…</span></div>'
+        : `<tr><td colspan="${columnCount}"><div class="table-loader"><i></i><span>Fetching respondent activity…</span></div></td></tr>`;
+      return;
+    }
+    if (state.renderState === 'error') {
+      const error = `<div class="error-state"><strong>Could not load traffic reports</strong><span>${escapeHtml(state.errorMessage)}</span><button type="button" id="retryStudies">Try again</button></div>`;
+      active.innerHTML = mobile ? error : `<tr><td colspan="${columnCount}">${error}</td></tr>`;
+      byId('retryStudies')?.addEventListener('click', loadAttempts);
+      return;
+    }
+    if (state.renderState !== 'ready') return;
+    if (state.results.length) {
+      active.innerHTML = state.results.map(mobile ? cardTemplate : rowTemplate).join('');
+      return;
+    }
+    active.innerHTML = mobile
+      ? '<div class="empty-state"><span>◎</span><strong>No traffic records found</strong><small>Try clearing the filters.</small></div>'
+      : `<tr><td colspan="${columnCount}"><div class="empty-state"><span>◎</span><strong>No traffic records found</strong><small>Try clearing the filters or start a survey attempt.</small></div></td></tr>`;
+  }
+
   async function loadAttempts() {
     state.controller?.abort();
     const controller = new AbortController();
     state.controller = controller;
-    elements.rows.innerHTML = `<tr><td colspan="${columnCount}"><div class="table-loader"><i></i><span>Fetching respondent activity…</span></div></td></tr>`;
-    const summaryRequest = fetch(`/api/v1/survey-attempts/summary/?${filterParams(false)}`, {
-      signal: controller.signal,
-    }).then(async (response) => {
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail || `Summary request failed (${response.status})`);
-      return data.summary || {};
-    }).catch((error) => {
-      if (error.name !== 'AbortError') console.warn('Traffic summary could not be refreshed:', error);
-      return null;
-    });
+    state.renderState = 'loading';
+    state.errorMessage = '';
+    renderAttempts();
     try {
-      const rowParameters = new URLSearchParams(filterParams());
-      rowParameters.set('include_summary', 'false');
-      const response = await fetch(`/api/v1/survey-attempts/?${rowParameters}`, { signal: controller.signal });
+      // One response carries both the page and cached KPI summary. The server
+      // still performs an authoritative live count so newly added rows cannot
+      // be hidden by a slightly older aggregate cache entry.
+      const response = await fetch(`/api/v1/survey-attempts/?${filterParams()}`, { signal: controller.signal });
       const data = await response.json(); if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
       const results = data.results || []; const count = Number(data.count || 0);
       state.pages = Math.max(1, Math.ceil(count / state.pageSize));
       if (state.page > state.pages) { state.page = state.pages; return loadAttempts(); }
       elements.summary.innerHTML = count ? `<strong>${count.toLocaleString('en-IN')}</strong> filtered respondent ${count === 1 ? 'journey' : 'journeys'}` : 'No attempts match these filters';
-      elements.rows.innerHTML = results.length ? results.map(rowTemplate).join('') : `<tr><td colspan="${columnCount}"><div class="empty-state"><span>◎</span><strong>No traffic records found</strong><small>Try clearing the filters or start a survey attempt.</small></div></td></tr>`;
-      elements.cards.innerHTML = results.length ? results.map(cardTemplate).join('') : '<div class="empty-state"><span>◎</span><strong>No traffic records found</strong><small>Try clearing the filters.</small></div>';
+      state.results = results;
+      state.renderState = 'ready';
+      renderAttempts();
       if (elements.pageInput) { elements.pageInput.value = state.page; elements.pageInput.max = state.pages; }
       if (elements.totalPages) elements.totalPages.textContent = `of ${state.pages.toLocaleString('en-IN')}`;
       elements.pageStatus.textContent = `Page ${state.page.toLocaleString('en-IN')} of ${state.pages.toLocaleString('en-IN')}`;
       if (elements.first && elements.prev) elements.first.disabled = elements.prev.disabled = state.page <= 1;
       if (elements.next && elements.last) elements.next.disabled = elements.last.disabled = state.page >= state.pages;
-      const summary = await summaryRequest;
-      if (summary && state.controller === controller) updateOverview(summary);
+      if (state.controller === controller) updateOverview(data.summary || {});
     } catch (error) {
       if (error.name === 'AbortError') return;
-      elements.rows.innerHTML = `<tr><td colspan="${columnCount}"><div class="error-state"><strong>Could not load traffic reports</strong><span>${escapeHtml(error.message)}</span><button type="button" id="retryStudies">Try again</button></div></td></tr>`;
-      byId('retryStudies')?.addEventListener('click', loadAttempts); elements.cards.innerHTML = '';
+      state.results = [];
+      state.renderState = 'error';
+      state.errorMessage = error.message;
+      renderAttempts();
     }
   }
 
@@ -427,5 +451,7 @@
   elements.export?.addEventListener('click', () => { elements.export.classList.add('exporting'); window.location.assign(`/api/v1/survey-attempts/export/?${filterParams(false)}`); setTimeout(() => elements.export.classList.remove('exporting'), 1000); });
   document.addEventListener('click', (event) => { if (!event.target.closest('.studies-filters .multi-select')) closeMultiSelects(); });
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMultiSelects(); });
+  if (responsiveLayout.addEventListener) responsiveLayout.addEventListener('change', renderAttempts);
+  else responsiveLayout.addListener(renderAttempts);
   loadAttempts();
 })();

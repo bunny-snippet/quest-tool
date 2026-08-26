@@ -20,6 +20,7 @@ from vendors.models import ClientIntegration
 
 from .models import CintWebhookDelivery, Survey, SurveyQuota, TargetingQuestion
 from .project_cache import invalidate_project_cache
+from .providers import get_provider
 
 
 logger = logging.getLogger(__name__)
@@ -45,6 +46,10 @@ LOCAL_STATE_KEYS = (
     "_cint_redirect_method",
     "_cint_redirect_verified_at",
 )
+PROJECT_FILTER_VALUE_FIELDS = frozenset({
+    "client", "company_name", "country", "country_code", "buyer_id",
+    "survey_type", "cpi",
+})
 
 
 class CintWebhookError(Exception):
@@ -435,6 +440,7 @@ def upsert_opportunity(
             integration=integration,
             source_key=source_key,
         ).first()
+    redirect_terminal = False
     if existing:
         previous_received_at = parse_datetime(str(
             (existing.raw_data or {}).get("_cint_webhook_received_at") or ""
@@ -561,6 +567,22 @@ def upsert_opportunity(
         "last_seen_at": seen_at,
         "raw_data": raw_data,
     }
+    def persisted_value_changed(field):
+        if field not in values:
+            return False
+        model_field = Survey._meta.get_field(field)
+        current_value = getattr(existing, model_field.attname)
+        expected_value = (
+            getattr(values[field], "pk", values[field])
+            if model_field.is_relation
+            else values[field]
+        )
+        return current_value != expected_value
+
+    project_filter_changed = existing is None or any(
+        persisted_value_changed(field)
+        for field in PROJECT_FILTER_VALUE_FIELDS
+    )
     with transaction.atomic():
         previous_qualifications = (
             (existing.raw_data or {}).get("survey_qualifications")
@@ -625,6 +647,12 @@ def upsert_opportunity(
             SurveyQuota.objects.bulk_create(_quota_rows(survey, payload))
         survey._has_targeting = bool(payload.get("survey_qualifications"))
         survey._has_quotas = bool(payload.get("survey_quotas"))
+        survey._cint_project_filter_changed = project_filter_changed
+        # A fresh provider event deliberately clears a prior terminal redirect
+        # marker. Preserve that fact outside persisted raw_data so this one
+        # delivery can request the promised retry even when an older contract
+        # fingerprint is otherwise still present.
+        survey._cint_redirect_retry_released = redirect_terminal
     return action, survey
 
 
@@ -642,6 +670,24 @@ def process_delivery(delivery_id):
     )
     counters = {"created": 0, "updated": 0, "closed": 0, "skipped": 0, "errors": 0}
     errors = []
+    project_filter_changed = False
+    redirect_survey_ids = set()
+    queue_redirects = getattr(settings, "CINT_OPPORTUNITIES_QUEUE_REDIRECTS", False)
+    redirect_fingerprint = None
+    redirect_supplier_code = ""
+    if queue_redirects:
+        try:
+            redirect_provider = get_provider(delivery.integration)
+            redirect_fingerprint = redirect_provider.redirect_contract_fingerprint()
+            redirect_supplier_code = str(redirect_provider.supplier_code or "")
+        except Exception:
+            # Preserve the previous fail-open queue behavior when redirect
+            # configuration itself is incomplete; the redirect task owns the
+            # durable error/audit path for that configuration.
+            logger.exception(
+                "Could not evaluate Cint redirect contract integration=%s",
+                delivery.integration_id,
+            )
     # Delivery receipt time, not worker start time, establishes update order.
     seen_at = delivery.received_at
     payloads = extract_opportunities(delivery.payload)
@@ -676,6 +722,25 @@ def process_delivery(delivery_id):
             counters[action] += 1
             if survey is not None:
                 existing_surveys[source_key] = survey
+                project_filter_changed = (
+                    project_filter_changed
+                    or bool(getattr(survey, "_cint_project_filter_changed", False))
+                )
+                if queue_redirects and action in {"created", "updated", "skipped"}:
+                    raw_data = survey.raw_data or {}
+                    redirect_is_current = bool(
+                        redirect_fingerprint
+                        and survey.entry_link
+                        and raw_data.get("_cint_redirect_verified_at")
+                        and raw_data.get("_cint_redirect_contract") == redirect_fingerprint
+                        and str(raw_data.get("_cint_redirect_supplier_code") or "")
+                        == redirect_supplier_code
+                    )
+                    if (
+                        not redirect_is_current
+                        or getattr(survey, "_cint_redirect_retry_released", False)
+                    ):
+                        redirect_survey_ids.add(survey.pk)
         except Exception as exc:  # preserve the rest of a Cint batch
             counters["errors"] += 1
             errors.append(f"{payload.get('survey_id', 'unknown')}: {exc}")
@@ -699,7 +764,7 @@ def process_delivery(delivery_id):
     # Row data is never cached, so feed updates remain immediately visible.
     # Keep pagination counts relatively fresh when membership changes, while
     # rebuilding expensive country/client/buyer/CPI filter metadata less often.
-    if counters["created"] or counters["closed"]:
+    if counters["created"] or counters["closed"] or project_filter_changed:
         invalidate_project_cache(
             throttle_seconds=getattr(
                 settings,
@@ -709,7 +774,7 @@ def process_delivery(delivery_id):
             filters=False,
             counts=True,
         )
-    if counters["created"] or counters["updated"] or counters["closed"]:
+    if project_filter_changed:
         invalidate_project_cache(
             throttle_seconds=getattr(
                 settings,
@@ -719,13 +784,15 @@ def process_delivery(delivery_id):
             filters=True,
             counts=False,
         )
-    if getattr(settings, "CINT_OPPORTUNITIES_QUEUE_REDIRECTS", False) and (
-        counters["created"] or counters["updated"]
-    ):
+    if queue_redirects and redirect_survey_ids:
         from .tasks import sync_cint_redirects_task
 
         try:
-            sync_cint_redirects_task.delay(delivery.integration_id, batch_size=10)
+            sync_cint_redirects_task.delay(
+                delivery.integration_id,
+                batch_size=10,
+                survey_ids=sorted(redirect_survey_ids),
+            )
         except Exception:
             # Inventory ingestion is already durable. A transient broker issue
             # must not turn the delivery into FAILED after its replay payload

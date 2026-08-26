@@ -82,10 +82,10 @@ def safe_cache_add(
     key: str,
     value: Any,
     *,
-    timeout: int,
+    timeout: int | None,
     alias: str = "default",
 ) -> bool | None:
-    """Atomically add a short-lived coordination key.
+    """Atomically add a coordination key, optionally without expiry.
 
     ``False`` means another process already owns the key. ``None`` means the
     cache is unavailable, allowing callers to fail open instead of making a
@@ -93,7 +93,8 @@ def safe_cache_add(
     """
 
     try:
-        return bool(_cache(alias).add(key, value, timeout=max(1, int(timeout))))
+        normalized_timeout = None if timeout is None else max(1, int(timeout))
+        return bool(_cache(alias).add(key, value, timeout=normalized_timeout))
     except Exception:
         logger.warning(
             "Cache add failed for key namespace=%s",
@@ -103,11 +104,88 @@ def safe_cache_add(
         return None
 
 
+def safe_cache_generation(key: str, *, alias: str = "default") -> int:
+    """Return a persistent, non-repeating cache namespace generation.
+
+    A literal fallback such as ``1`` is unsafe for authorization-derived keys:
+    evicting only the generation key could make an older payload stored in a
+    separate cache database reachable again. Missing generations are therefore
+    initialized atomically from a random 63-bit seed. During a cache outage the
+    per-call random value intentionally prevents reuse of cached authorization
+    payloads while callers continue to fail open to the database.
+    """
+
+    missing = object()
+    cached = safe_cache_get(key, missing, alias=alias)
+    if cached is not missing:
+        try:
+            return int(cached)
+        except (TypeError, ValueError):
+            pass
+
+    seed = secrets.randbits(63) or 1
+    created = safe_cache_add(key, seed, timeout=None, alias=alias)
+    if created:
+        return seed
+    if created is False:
+        winner = safe_cache_get(key, missing, alias=alias)
+        if winner is not missing:
+            try:
+                return int(winner)
+            except (TypeError, ValueError):
+                pass
+    return seed
+
+
 def safe_cache_delete(key: str, *, alias: str = "default") -> bool:
     try:
         return bool(_cache(alias).delete(key))
     except Exception:
         logger.warning("Cache delete failed for key namespace=%s", key.split(":", 1)[0], exc_info=True)
+        return False
+
+
+def safe_cache_compare_delete(
+    key: str,
+    expected_value: Any,
+    *,
+    alias: str = "default",
+) -> bool:
+    """Delete a coordination key only while it still contains our token.
+
+    Production uses Django's built-in Redis backend, where a tiny Lua script
+    makes the comparison and deletion atomic. Other cache backends retain a
+    best-effort compare/delete fallback for local development and tests.
+    """
+
+    try:
+        backend = _cache(alias)
+        redis_cache = getattr(backend, "_cache", None)
+        get_client = getattr(redis_cache, "get_client", None)
+        if callable(get_client):
+            storage_key = backend.make_and_validate_key(key)
+            client = get_client(storage_key, write=True)
+            deleted = client.eval(
+                """
+                if redis.call('get', KEYS[1]) == ARGV[1] then
+                    return redis.call('del', KEYS[1])
+                end
+                return 0
+                """,
+                1,
+                storage_key,
+                expected_value,
+            )
+            return bool(deleted)
+        if backend.get(key, object()) != expected_value:
+            return False
+        return bool(backend.delete(key))
+    except Exception:
+        logger.warning(
+            "Cache compare-delete failed for key namespace=%s",
+            key.split(":", 1)[0],
+            exc_info=True,
+        )
         return False
 
 

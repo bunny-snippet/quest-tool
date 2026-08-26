@@ -154,15 +154,35 @@ def sync_client_integration_task(integration_id):
 
 
 @shared_task(
+    bind=True,
     name="surveys.sync_cint_redirects",
+    max_retries=15,
     soft_time_limit=240,
     time_limit=270,
 )
-def sync_cint_redirects_task(integration_id, batch_size=25, force=False, after_id=0):
+def sync_cint_redirects_task(
+    self,
+    integration_id,
+    batch_size=25,
+    force=False,
+    after_id=0,
+    survey_ids=None,
+):
     """Configure new/backfill Cint survey callbacks in serialized batches."""
 
     lease_name = f"cint-redirects-{integration_id}"
     if not SyncLease.acquire(lease_name, seconds=300):
+        if survey_ids:
+            # A webhook-targeted batch must not disappear simply because a
+            # larger redirect batch owns the integration lease. Retry the same
+            # durable survey IDs with a bounded backoff; the survey's missing
+            # contract fields remain the source of truth, and later webhook
+            # deliveries can enqueue them again after retries are exhausted.
+            retries = max(0, int(getattr(self.request, "retries", 0) or 0))
+            raise self.retry(
+                exc=RuntimeError("redirect batch already running"),
+                countdown=min(30, 2 ** min(retries + 1, 5)),
+            )
         return {"status": "skipped", "reason": "redirect batch already running"}
     continue_batching = False
     result = {"next_after_id": max(0, int(after_id or 0))}
@@ -177,8 +197,9 @@ def sync_cint_redirects_task(integration_id, batch_size=25, force=False, after_i
             batch_size=batch_size,
             force=force,
             after_id=after_id,
+            survey_ids=survey_ids,
         )
-        continue_batching = result["remaining"] > 0
+        continue_batching = bool(result.get("has_more", result["remaining"] > 0))
         result["status"] = "success" if not result["failures"] else "partial"
         return result
     finally:
@@ -190,6 +211,7 @@ def sync_cint_redirects_task(integration_id, batch_size=25, force=False, after_i
                     "batch_size": batch_size,
                     "force": force,
                     "after_id": result.get("next_after_id", 0),
+                    "survey_ids": survey_ids,
                 },
                 countdown=1,
             )
@@ -214,24 +236,108 @@ def process_cint_opportunities_delivery_task(delivery_id):
     if not SyncLease.acquire(lease_name, seconds=700):
         raise RuntimeError("A previous Cint webhook delivery is still processing.")
     try:
-        delivery = process_delivery(delivery_id)
-    except Exception as exc:
-        CintWebhookDelivery.objects.filter(pk=delivery_id).update(
-            status=CintWebhookDelivery.Status.FAILED,
-            error=str(exc)[:10000],
-        )
-        raise
+        try:
+            delivery = process_delivery(delivery_id)
+        except Exception as exc:
+            CintWebhookDelivery.objects.filter(pk=delivery_id).update(
+                status=CintWebhookDelivery.Status.FAILED,
+                error=str(exc)[:10000],
+            )
+            raise
+        recovery = {"processed": [], "failed": []}
+        try:
+            recovery = _recover_cint_delivery_backlog(
+                delivery.integration_id,
+                exclude_ids={delivery.pk},
+            )
+        except Exception:
+            # Backlog maintenance is strictly best-effort. It must never
+            # relabel a successfully processed live callback as FAILED or
+            # delay its retry.
+            logger.exception(
+                "Cint webhook backlog recovery query failed integration=%s",
+                delivery.integration_id,
+            )
+        return {
+            "delivery_id": delivery.pk,
+            "status": delivery.status,
+            "created": delivery.created_count,
+            "updated": delivery.updated_count,
+            "closed": delivery.closed_count,
+            "skipped": delivery.skipped_count,
+            "errors": delivery.error_count,
+            "recovery": recovery,
+        }
     finally:
         SyncLease.release(lease_name)
-    return {
-        "delivery_id": delivery.pk,
-        "status": delivery.status,
-        "created": delivery.created_count,
-        "updated": delivery.updated_count,
-        "closed": delivery.closed_count,
-        "skipped": delivery.skipped_count,
-        "errors": delivery.error_count,
-    }
+
+
+def _recover_cint_delivery_backlog(integration_id, *, exclude_ids=(), limit=None):
+    """Process a tiny oldest-first recovery slice after a live delivery.
+
+    The live delivery is always handled first so current inventory stays fresh.
+    A bounded tail then makes receipts orphaned by worker restarts or exhausted
+    lease retries eventually progress without releasing an 8k-task storm. No
+    recursive task is scheduled; the next genuine webhook advances the backlog.
+    """
+
+    from .cint_webhooks import process_delivery
+
+    batch_size = max(0, min(
+        int(
+            limit
+            if limit is not None
+            else getattr(settings, "CINT_OPPORTUNITIES_RECOVERY_BATCH", 1)
+        ),
+        10,
+    ))
+    if not batch_size:
+        return {"processed": [], "failed": []}
+    stale_before = timezone.now() - timedelta(minutes=15)
+    candidates = list(
+        CintWebhookDelivery.objects.filter(integration_id=integration_id)
+        .filter(
+            Q(status=CintWebhookDelivery.Status.RECEIVED)
+            | Q(
+                status=CintWebhookDelivery.Status.PROCESSING,
+                received_at__lte=stale_before,
+            )
+        )
+        .exclude(pk__in=set(exclude_ids))
+        .only("id", "integration_id", "received_at", "status")
+        .order_by("received_at", "pk")[:batch_size]
+    )
+    processed = []
+    failed = []
+    for candidate in candidates:
+        try:
+            process_delivery(candidate.pk)
+            processed.append(candidate.pk)
+        except Exception as exc:
+            # Recovery runs inside the current integration lease, outside the
+            # failed delivery's normal Celery retry envelope. Put transient
+            # failures back into RECEIVED and enqueue the ordinary task so its
+            # bounded autoretries remain authoritative. If the broker is down,
+            # the next live callback will select this retained receipt again.
+            CintWebhookDelivery.objects.filter(pk=candidate.pk).update(
+                status=CintWebhookDelivery.Status.RECEIVED,
+                error=str(exc)[:10000],
+            )
+            failed.append(candidate.pk)
+            logger.exception(
+                "Cint webhook backlog recovery failed integration=%s delivery=%s",
+                integration_id,
+                candidate.pk,
+            )
+            try:
+                process_cint_opportunities_delivery_task.delay(candidate.pk)
+            except Exception:
+                logger.exception(
+                    "Could not requeue Cint backlog delivery integration=%s delivery=%s",
+                    integration_id,
+                    candidate.pk,
+                )
+    return {"processed": processed, "failed": failed}
 
 
 @shared_task(name="surveys.sync_innovatemr_surveys")

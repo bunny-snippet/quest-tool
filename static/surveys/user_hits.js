@@ -21,14 +21,19 @@
   if (!elements.rows) return;
   document.querySelector('.user-hits-table').style.minWidth = `${Math.max(520, columnCount * 145)}px`;
 
-  const state = { page: 1, pages: 1, pageSize: 20, timer: null, controller: null };
+  const responsiveLayout = window.matchMedia('(max-width: 900px)');
+  const state = {
+    page: 1, pages: 1, pageSize: 20, timer: null, controller: null,
+    results: [], renderState: 'idle', errorMessage: '',
+  };
   const icons = {
     desktop: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"/><path d="M8 21h8m-4-4v4"/></svg>',
     mobile: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M10 18h4"/></svg>',
     tablet: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><circle cx="12" cy="18" r=".7"/></svg>',
   };
 
-  function escapeHtml(value) { const node = document.createElement('div'); node.textContent = value == null ? '' : String(value); return node.innerHTML; }
+  const htmlEscapes = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+  function escapeHtml(value) { return (value == null ? '' : String(value)).replace(/[&<>"']/g, (character) => htmlEscapes[character]); }
   const number = (value) => Number(value || 0).toLocaleString('en-IN');
   const selectedValues = (container) => [...container.querySelectorAll('input:checked')].map((input) => input.value);
 
@@ -158,6 +163,34 @@
     return `<article class="survey-card user-hit-card"><div class="user-hit-card-head">${columns.has('user') ? userCell(row) : '<div></div>'}${columns.has('date') ? `<time>${formatDate(row.date)}</time>` : ''}</div>${location}${metrics ? `<div class="hit-card-metrics">${metrics}</div>` : ''}</article>`;
   }
 
+  function renderHits() {
+    const mobile = responsiveLayout.matches;
+    const active = mobile ? elements.cards : elements.rows;
+    const inactive = mobile ? elements.rows : elements.cards;
+    inactive.innerHTML = '';
+
+    if (state.renderState === 'loading') {
+      active.innerHTML = mobile
+        ? '<div class="table-loader"><i></i><span>Building device-wise totals…</span></div>'
+        : `<tr><td colspan="${columnCount}"><div class="table-loader"><i></i><span>Building device-wise totals…</span></div></td></tr>`;
+      return;
+    }
+    if (state.renderState === 'error') {
+      const error = `<div class="error-state"><strong>Could not load user hits</strong><span>${escapeHtml(state.errorMessage)}</span><button type="button" id="retryUserHits">Try again</button></div>`;
+      active.innerHTML = mobile ? error : `<tr><td colspan="${columnCount}">${error}</td></tr>`;
+      byId('retryUserHits')?.addEventListener('click', loadHits);
+      return;
+    }
+    if (state.renderState !== 'ready') return;
+    if (state.results.length) {
+      active.innerHTML = state.results.map(mobile ? cardTemplate : rowTemplate).join('');
+      return;
+    }
+    active.innerHTML = mobile
+      ? '<div class="empty-state"><span>◎</span><strong>No user hits found</strong><small>Try clearing the filters.</small></div>'
+      : `<tr><td colspan="${columnCount}"><div class="empty-state"><span>◎</span><strong>No user hits found</strong><small>Try clearing filters or start a new survey journey.</small></div></td></tr>`;
+  }
+
   function updateOverview(summary) {
     if (elements.totalHits) elements.totalHits.textContent = number(summary.hits.total);
     if (elements.totalCompletes) elements.totalCompletes.textContent = number(summary.completes.total);
@@ -172,7 +205,9 @@
 
   async function loadHits() {
     state.controller?.abort(); state.controller = new AbortController();
-    elements.rows.innerHTML = `<tr><td colspan="${columnCount}"><div class="table-loader"><i></i><span>Building device-wise totals…</span></div></td></tr>`;
+    state.renderState = 'loading';
+    state.errorMessage = '';
+    renderHits();
     try {
       const response = await fetch(`/api/v1/user-hits/?${filterParams()}`, { signal: state.controller.signal });
       const data = await response.json(); if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
@@ -180,8 +215,9 @@
       if (state.page > state.pages) { state.page = state.pages; return loadHits(); }
       updateOverview(data.summary || { hits: {}, completes: {} });
       elements.summary.innerHTML = count ? `<strong>${count.toLocaleString('en-IN')}</strong> user-day ${count === 1 ? 'record' : 'records'} match these filters` : 'No user activity matches these filters';
-      elements.rows.innerHTML = results.length ? results.map(rowTemplate).join('') : `<tr><td colspan="${columnCount}"><div class="empty-state"><span>◎</span><strong>No user hits found</strong><small>Try clearing filters or start a new survey journey.</small></div></td></tr>`;
-      elements.cards.innerHTML = results.length ? results.map(cardTemplate).join('') : '<div class="empty-state"><span>◎</span><strong>No user hits found</strong><small>Try clearing the filters.</small></div>';
+      state.results = results;
+      state.renderState = 'ready';
+      renderHits();
       if (elements.pageInput) { elements.pageInput.value = state.page; elements.pageInput.max = state.pages; }
       if (elements.totalPages) elements.totalPages.textContent = `of ${state.pages.toLocaleString('en-IN')}`;
       elements.pageStatus.textContent = `Page ${state.page.toLocaleString('en-IN')} of ${state.pages.toLocaleString('en-IN')}`;
@@ -189,8 +225,10 @@
       if (elements.next && elements.last) elements.next.disabled = elements.last.disabled = state.page >= state.pages;
     } catch (error) {
       if (error.name === 'AbortError') return;
-      elements.rows.innerHTML = `<tr><td colspan="${columnCount}"><div class="error-state"><strong>Could not load user hits</strong><span>${escapeHtml(error.message)}</span><button type="button" id="retryUserHits">Try again</button></div></td></tr>`;
-      byId('retryUserHits')?.addEventListener('click', loadHits); elements.cards.innerHTML = '';
+      state.results = [];
+      state.renderState = 'error';
+      state.errorMessage = error.message;
+      renderHits();
     }
   }
 
@@ -214,5 +252,7 @@
   elements.pageInput?.addEventListener('change', () => go(elements.pageInput.value));
   document.addEventListener('click', (event) => { if (!event.target.closest('.user-hits-filters .multi-select')) closeMultiSelects(); });
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMultiSelects(); });
+  if (responsiveLayout.addEventListener) responsiveLayout.addEventListener('change', renderHits);
+  else responsiveLayout.addListener(renderHits);
   loadHits();
 })();

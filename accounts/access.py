@@ -12,6 +12,7 @@ from django.core.exceptions import PermissionDenied
 from rest_framework.permissions import BasePermission
 
 from config.cache_utils import (
+    safe_cache_generation,
     safe_cache_get,
     safe_cache_increment,
     safe_cache_set,
@@ -40,17 +41,38 @@ EXTERNAL_VENDOR_FORBIDDEN_CODES = frozenset({
 })
 
 _PERMISSION_CACHE_GENERATION_KEY = "accounts:permissions:generation"
+_ACTIVITY_VISIBILITY_CACHE_GENERATION_KEY = "accounts:activity-visibility:generation"
 _PERMISSION_CACHE_MISSING = object()
 
 
 def invalidate_effective_permission_cache() -> None:
     """Invalidate cached role/user permission snapshots across web workers."""
 
-    safe_cache_increment(_PERMISSION_CACHE_GENERATION_KEY)
+    safe_cache_increment(
+        _PERMISSION_CACHE_GENERATION_KEY,
+        default=safe_cache_generation(_PERMISSION_CACHE_GENERATION_KEY),
+    )
 
 
-def _permission_cache_generation() -> int:
-    return int(safe_cache_get(_PERMISSION_CACHE_GENERATION_KEY, 1) or 1)
+def invalidate_activity_visibility_cache() -> None:
+    """Invalidate shared hierarchy-scoped activity visibility snapshots."""
+
+    safe_cache_increment(
+        _ACTIVITY_VISIBILITY_CACHE_GENERATION_KEY,
+        default=safe_cache_generation(_ACTIVITY_VISIBILITY_CACHE_GENERATION_KEY),
+    )
+
+
+def permission_cache_generation() -> int:
+    """Return the shared version for effective function permissions."""
+
+    return safe_cache_generation(_PERMISSION_CACHE_GENERATION_KEY)
+
+
+def activity_visibility_cache_generation() -> int:
+    """Return the shared version for hierarchy-scoped activity visibility."""
+
+    return safe_cache_generation(_ACTIVITY_VISIBILITY_CACHE_GENERATION_KEY)
 
 
 def is_super_admin_account(user) -> bool:
@@ -124,7 +146,7 @@ def effective_permission_codes(user) -> set[str]:
         return frozenset(codes)
 
     def load():
-        generation = _permission_cache_generation()
+        generation = permission_cache_generation()
         key = stable_cache_key(
             "accounts:effective-permissions",
             {
@@ -244,10 +266,30 @@ def activity_visible_user_ids(user) -> set[int]:
     """
     if not user or not user.is_authenticated:
         return set()
-    cached = request_cached(
-        ("activity-visible-users", user.pk),
-        lambda: frozenset(_activity_visible_user_ids_uncached(user)),
-    )
+    def load():
+        generation = activity_visibility_cache_generation()
+        key = stable_cache_key(
+            "accounts:activity-visible-users",
+            {
+                "generation": generation,
+                "user_id": user.pk,
+                "active": bool(user.is_active),
+                "superuser": bool(user.is_superuser),
+            },
+        )
+        cached_ids = safe_cache_get(key, _PERMISSION_CACHE_MISSING)
+        if cached_ids is not _PERMISSION_CACHE_MISSING:
+            return frozenset(cached_ids)
+        visible_ids = frozenset(_activity_visible_user_ids_uncached(user))
+        safe_cache_set(
+            key,
+            tuple(sorted(visible_ids)),
+            timeout=settings.PERMISSION_CACHE_TTL_SECONDS,
+            jitter_seconds=min(30, settings.PERMISSION_CACHE_TTL_SECONDS // 5),
+        )
+        return visible_ids
+
+    cached = request_cached(("activity-visible-users", user.pk), load)
     return set(cached)
 
 

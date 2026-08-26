@@ -5,6 +5,7 @@ import random
 import re
 import time
 from datetime import date, datetime
+from functools import partial
 
 from django.conf import settings
 from django.db import OperationalError, close_old_connections, connections, transaction
@@ -399,7 +400,15 @@ def capture_prescreener_submission(
                         pk=existing.pk, source_client_code=""
                     ).update(source_client_code=source_client_code)
                     existing.source_client_code = source_client_code
-                    transaction.on_commit(invalidate_vault_cache, using=DATABASE_ALIAS)
+                    transaction.on_commit(
+                        partial(
+                            invalidate_vault_cache,
+                            uid,
+                            summary=False,
+                            options=False,
+                        ),
+                        using=DATABASE_ALIAS,
+                    )
                 if existing.raw_answers != raw_answers:
                     if not allow_draft_replace:
                         raise PrescreenerVaultError(
@@ -426,7 +435,10 @@ def capture_prescreener_submission(
                         "raw_answers", "answer_count", "submitted_at",
                     ])
                     _write_answer_rows(existing, snapshots, survey)
-                    transaction.on_commit(invalidate_vault_cache, using=DATABASE_ALIAS)
+                    transaction.on_commit(
+                        partial(invalidate_vault_cache, uid),
+                        using=DATABASE_ALIAS,
+                    )
                     return existing, False
                 return existing, False
             rid_owner = PrescreenerSubmission.objects.using(DATABASE_ALIAS).filter(rid=attempt.rid).first()
@@ -452,7 +464,10 @@ def capture_prescreener_submission(
                 submitted_at=submitted_at,
             )
             _write_answer_rows(submission, snapshots, survey)
-            transaction.on_commit(invalidate_vault_cache, using=DATABASE_ALIAS)
+            transaction.on_commit(
+                partial(invalidate_vault_cache, uid),
+                using=DATABASE_ALIAS,
+            )
             return submission, True
 
     try:
@@ -498,5 +513,13 @@ def increment_profile_usage(uid: str) -> int:
                 "usage_count", flat=True
             ).get(uid=uid)
         )
-        transaction.on_commit(invalidate_vault_cache, using=DATABASE_ALIAS)
+        transaction.on_commit(
+            partial(
+                invalidate_vault_cache,
+                uid,
+                summary=False,
+                options=False,
+            ),
+            using=DATABASE_ALIAS,
+        )
         return usage_count

@@ -1,13 +1,18 @@
 """Non-authoritative Projects caches isolated from respondent/profile data."""
 
+import secrets
+import time
+
 from django.conf import settings
 from django.db.models import Max, Min
 
 from config.cache_utils import (
     safe_cache_add,
+    safe_cache_compare_delete,
+    safe_cache_generation,
     safe_cache_get,
-    safe_cache_get_or_set,
     safe_cache_increment,
+    safe_cache_set,
     stable_cache_key,
 )
 
@@ -16,10 +21,69 @@ CACHE_ALIAS = "projects"
 _FILTER_VERSION_KEY = "projects:filters-version"
 _COUNT_VERSION_KEY = "projects:count-version"
 _INVALIDATION_THROTTLE_KEY = "projects:invalidate-throttle"
+_MISSING = object()
+_SINGLEFLIGHT_LOCK_SECONDS = 30
+
+
+def _singleflight_get_or_set(key, factory, *, timeout, jitter_seconds):
+    """Build one cold Projects cache key without multiplying its SQL queries.
+
+    Inventory versions intentionally make old values unreachable immediately.
+    When several web workers encounter the new version together, exactly one
+    worker rebuilds it while peers wait for that authoritative result. Cache
+    outages still fail open, preserving MySQL as the source of truth.
+    """
+
+    cached = safe_cache_get(key, _MISSING, alias=CACHE_ALIAS)
+    if cached is not _MISSING:
+        return cached
+
+    lock_key = f"{key}:build-lock"
+    lock_token = secrets.randbits(63) or 1
+    owns_lock = safe_cache_add(
+        lock_key,
+        lock_token,
+        timeout=_SINGLEFLIGHT_LOCK_SECONDS,
+        alias=CACHE_ALIAS,
+    )
+    if owns_lock is not False:
+        try:
+            value = factory()
+            safe_cache_set(
+                key,
+                value,
+                timeout=timeout,
+                jitter_seconds=jitter_seconds,
+                alias=CACHE_ALIAS,
+            )
+            return value
+        finally:
+            if owns_lock:
+                # A slow builder can outlive its lease. Compare-and-delete
+                # prevents it from removing a replacement owner's lock.
+                safe_cache_compare_delete(
+                    lock_key,
+                    lock_token,
+                    alias=CACHE_ALIAS,
+                )
+
+    # The indexed rebuild should normally complete well inside this bound. A
+    # bounded wait avoids a cache miss stampede without leaving a request stuck
+    # behind a failed worker indefinitely.
+    deadline = time.monotonic() + _SINGLEFLIGHT_LOCK_SECONDS
+    while time.monotonic() < deadline:
+        time.sleep(0.05)
+        cached = safe_cache_get(key, _MISSING, alias=CACHE_ALIAS)
+        if cached is not _MISSING:
+            return cached
+
+    # The lock owner may have died or Redis may have dropped the value. Falling
+    # back to the database keeps this cache strictly non-authoritative.
+    return factory()
 
 
 def _version(key: str) -> int:
-    return int(safe_cache_get(key, 1, alias=CACHE_ALIAS) or 1)
+    return safe_cache_generation(key, alias=CACHE_ALIAS)
 
 
 def invalidate_project_cache(
@@ -54,9 +118,17 @@ def invalidate_project_cache(
             return False
 
     if filters:
-        safe_cache_increment(_FILTER_VERSION_KEY, alias=CACHE_ALIAS)
+        safe_cache_increment(
+            _FILTER_VERSION_KEY,
+            default=_version(_FILTER_VERSION_KEY),
+            alias=CACHE_ALIAS,
+        )
     if counts:
-        safe_cache_increment(_COUNT_VERSION_KEY, alias=CACHE_ALIAS)
+        safe_cache_increment(
+            _COUNT_VERSION_KEY,
+            default=_version(_COUNT_VERSION_KEY),
+            alias=CACHE_ALIAS,
+        )
     return True
 
 
@@ -67,6 +139,7 @@ def project_filter_metadata(
     client_scoped: bool,
     include_cpi: bool,
     cpi_field: str = "cpi",
+    cpi_queryset=None,
 ) -> dict:
     key = stable_cache_key(
         f"projects:v{_version(_FILTER_VERSION_KEY)}:filters",
@@ -104,8 +177,9 @@ def project_filter_metadata(
             .distinct()
             .order_by("survey_type")
         )
+        cpi_source = cpi_queryset if cpi_queryset is not None else queryset
         cpi_bounds = (
-            queryset.aggregate(
+            cpi_source.aggregate(
                 minimum=Min(cpi_field),
                 maximum=Max(cpi_field),
             )
@@ -129,12 +203,11 @@ def project_filter_metadata(
             "cpi_max": cpi_bounds["maximum"],
         }
 
-    return safe_cache_get_or_set(
+    return _singleflight_get_or_set(
         key,
         load,
         timeout=settings.PROJECT_CACHE_FILTERS_TTL_SECONDS,
         jitter_seconds=settings.PROJECT_CACHE_TTL_JITTER_SECONDS,
-        alias=CACHE_ALIAS,
     )
 
 
@@ -178,10 +251,9 @@ def project_filtered_count(request, queryset) -> int:
             count_queryset = count_queryset.values("pk")
         return count_queryset.count()
 
-    return int(safe_cache_get_or_set(
+    return int(_singleflight_get_or_set(
         key,
         load_count,
         timeout=settings.PROJECT_CACHE_COUNT_TTL_SECONDS,
         jitter_seconds=settings.PROJECT_CACHE_TTL_JITTER_SECONDS,
-        alias=CACHE_ALIAS,
     ))

@@ -7,15 +7,23 @@ TTL because country/client/hierarchy choices change far less often.
 """
 
 from collections.abc import Callable, Iterable
+import hashlib
 import time
 from typing import Any
 
 from django.conf import settings
 
-from accounts.access import activity_visible_user_ids, effective_permission_codes
+from accounts.access import (
+    activity_visible_user_ids,
+    activity_visibility_cache_generation,
+    effective_permission_codes,
+    permission_cache_generation,
+)
+from accounts.request_cache import request_cached
 from config.cache_utils import (
     safe_cache_add,
     safe_cache_delete,
+    safe_cache_generation,
     safe_cache_get,
     safe_cache_increment,
     safe_cache_set,
@@ -31,16 +39,16 @@ REPORT_METADATA_GENERATION_KEY = "reports:metadata:generation"
 def report_metadata_generation() -> int:
     """Return the global version for filter/hierarchy selector payloads."""
 
-    return int(safe_cache_get(
-        REPORT_METADATA_GENERATION_KEY, 1, alias=CACHE_ALIAS
-    ) or 1)
+    return safe_cache_generation(REPORT_METADATA_GENERATION_KEY, alias=CACHE_ALIAS)
 
 
 def invalidate_report_metadata_cache() -> int:
     """Expire selector payloads after their underlying dimensions change."""
 
     return safe_cache_increment(
-        REPORT_METADATA_GENERATION_KEY, default=1, alias=CACHE_ALIAS
+        REPORT_METADATA_GENERATION_KEY,
+        default=report_metadata_generation(),
+        alias=CACHE_ALIAS,
     )
 
 
@@ -110,14 +118,39 @@ def _parameter_lists(request, neutral_parameters: Iterable[str]) -> list:
 
 
 def report_viewer_scope(user) -> dict:
-    """Build a bounded, permission-safe viewer fingerprint for cache keys."""
+    """Build a constant-size, permission-safe viewer fingerprint for cache keys.
 
-    return {
-        "user_id": user.pk,
-        "superuser": bool(user.is_superuser),
-        "permissions": sorted(effective_permission_codes(user)),
-        "visible_users": sorted(activity_visible_user_ids(user)),
-    }
+    The generation values are incremented synchronously whenever role grants or
+    hierarchy visibility changes. This avoids enumerating and hashing every
+    visible user on each report cache hit while still making old scoped payloads
+    unreachable immediately after an access change.
+    """
+
+    def fingerprint(values) -> str:
+        digest = hashlib.sha256()
+        for value in sorted(values, key=str):
+            encoded = str(value).encode("utf-8")
+            digest.update(len(encoded).to_bytes(4, "big"))
+            digest.update(encoded)
+        return digest.hexdigest()[:32]
+
+    def build():
+        # The concrete fingerprints bind the cache entry to the same
+        # request-local permission and hierarchy snapshots used to build the
+        # queryset/payload. Generations alone are insufficient if a revocation
+        # commits between queryset construction and cache-key construction.
+        permission_snapshot = effective_permission_codes(user)
+        visibility_snapshot = activity_visible_user_ids(user)
+        return {
+            "user_id": user.pk,
+            "superuser": bool(user.is_superuser),
+            "permission_generation": permission_cache_generation(),
+            "visibility_generation": activity_visibility_cache_generation(),
+            "permission_fingerprint": fingerprint(permission_snapshot),
+            "visibility_fingerprint": fingerprint(visibility_snapshot),
+        }
+
+    return request_cached(("report-viewer-scope", user.pk), build)
 
 
 def cached_report_payload(
@@ -126,7 +159,9 @@ def cached_report_payload(
     factory: Callable[[], Any],
     *,
     timeout: int | None = None,
-    neutral_parameters: Iterable[str] = ("page", "page_size", "format", "ordering"),
+    neutral_parameters: Iterable[str] = (
+        "page", "page_size", "format", "ordering", "include_summary",
+    ),
     extra_scope: Any = None,
 ) -> Any:
     """Cache a filtered aggregate/payload without exposing query values in keys."""
@@ -152,6 +187,7 @@ def cached_user_metadata(
     factory: Callable[[], Any],
     *,
     extra_scope: Any = None,
+    timeout: int | None = None,
 ) -> Any:
     """Cache hierarchy/filter selector metadata for one effective viewer scope."""
 
@@ -166,7 +202,7 @@ def cached_user_metadata(
     return _cached_with_stale_revalidation(
         key,
         factory,
-        timeout=settings.REPORT_CACHE_METADATA_TTL_SECONDS,
+        timeout=timeout or settings.REPORT_CACHE_METADATA_TTL_SECONDS,
     )
 
 
@@ -196,10 +232,22 @@ def cached_integration_metadata(
 def traffic_filter_metadata(user, visible_attempts, visible_surveys) -> dict:
     """Return cached Traffic filter choices without caching attempt rows."""
 
-    def load():
+    def load_hierarchy():
         from .user_hits import user_hit_filter_options
 
-        hierarchy = user_hit_filter_options(user)
+        return user_hit_filter_options(user)
+
+    def load_survey_dimensions():
+        return {
+            "countries": list(
+                visible_surveys.exclude(country_code="")
+                .values("country_code", "country")
+                .distinct()
+                .order_by("country_code")
+            ),
+        }
+
+    def load_attempt_dimensions():
         supplier_rows = list(
             visible_attempts.filter(vendor__isnull=False)
             .values(
@@ -223,14 +271,7 @@ def traffic_filter_metadata(user, visible_attempts, visible_surveys) -> dict:
                 "email": row["vendor__email"] or "",
             })
         return {
-            **hierarchy,
             "suppliers": suppliers,
-            "countries": list(
-                visible_surveys.exclude(country_code="")
-                .values("country_code", "country")
-                .distinct()
-                .order_by("country_code")
-            ),
             "clients": list(
                 visible_attempts.filter(survey__client__isnull=False)
                 .values("survey__client_id", "survey__client__name")
@@ -245,20 +286,37 @@ def traffic_filter_metadata(user, visible_attempts, visible_surveys) -> dict:
             ),
         }
 
-    # v2 invalidates metadata created before supplier-aware filters and also
-    # refreshes organization labels after this deployment.
-    return cached_user_metadata("traffic-filters-v2", user, load)
+    # Access/hierarchy changes invalidate every scoped key synchronously. Both
+    # inventory- and attempt-derived dimensions use a short bounded TTL: live
+    # survey feeds and respondent starts are too frequent to rotate every
+    # viewer's metadata generation on each row write.
+    return {
+        **cached_user_metadata("report-hierarchy-v1", user, load_hierarchy),
+        **cached_user_metadata(
+            "traffic-survey-dimensions-v1",
+            user,
+            load_survey_dimensions,
+            timeout=settings.REPORT_CACHE_DYNAMIC_METADATA_TTL_SECONDS,
+        ),
+        **cached_user_metadata(
+            "traffic-attempt-dimensions-v1",
+            user,
+            load_attempt_dimensions,
+            timeout=settings.REPORT_CACHE_DYNAMIC_METADATA_TTL_SECONDS,
+        ),
+    }
 
 
 def term_filter_metadata(user, base_queryset) -> dict:
     """Return cached Term Report selector values and hierarchy choices."""
 
-    def load():
+    def load_hierarchy():
         from .user_hits import user_hit_filter_options
 
-        hierarchy = user_hit_filter_options(user)
+        return user_hit_filter_options(user)
+
+    def load_attempt_dimensions():
         return {
-            **hierarchy,
             "countries": list(
                 base_queryset.exclude(survey__country_code="")
                 .values("survey__country_code", "survey__country")
@@ -279,7 +337,15 @@ def term_filter_metadata(user, base_queryset) -> dict:
             ),
         }
 
-    # Keep this namespace versioned whenever the visibility/scoping rules change.
-    # That prevents a short-lived permission leak from a payload cached by older
-    # application code during a rolling deploy.
-    return cached_user_metadata("term-filters-v2", user, load)
+    # Keep namespaces versioned whenever visibility/scoping rules change. The
+    # short attempt-dimension TTL bounds freshness without allowing each live
+    # respondent callback to stampede the selector DISTINCT queries.
+    return {
+        **cached_user_metadata("report-hierarchy-v1", user, load_hierarchy),
+        **cached_user_metadata(
+            "term-attempt-dimensions-v1",
+            user,
+            load_attempt_dimensions,
+            timeout=settings.REPORT_CACHE_DYNAMIC_METADATA_TTL_SECONDS,
+        ),
+    }

@@ -3,16 +3,18 @@
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.db.models.deletion import ProtectedError
-from django.db.models import Count, Prefetch, Q
+from django.db.models import Count, IntegerField, OuterRef, Prefetch, Q, Subquery, Value
+from django.db.models.functions import Coalesce
 from django.shortcuts import render
 from django.utils import timezone
-from django_filters.rest_framework import DjangoFilterBackend
 from drf_spectacular.utils import extend_schema, extend_schema_view
 from rest_framework import filters, status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import PermissionDenied
 from rest_framework.response import Response
 from rest_framework.views import APIView
+
+from config.filter_backends import SparseDjangoFilterBackend
 
 from accounts.access import (
     HasFunctionPermission,
@@ -178,22 +180,29 @@ class OrganizationManagementOptionsView(APIView):
     )
     def get(self, request):
         owner_ids = organization_workspace_owner_ids(request.user)
-        owners = get_user_model().objects.filter(pk__in=owner_ids).select_related("employee_profile").order_by(
-            "first_name", "last_name", "username"
+        owners = list(
+            get_user_model().objects.filter(pk__in=owner_ids)
+            .select_related("employee_profile")
+            .order_by("first_name", "last_name", "username")
         )
         clients = Client.objects.filter(is_active=True).order_by("name")
+        all_client_ids = list(clients.values_list("id", flat=True))
+        allocated_client_ids = {}
+        for vendor_id, client_id in VendorClientAllocation.objects.filter(
+            vendor_id__in=owner_ids,
+            client__is_active=True,
+            is_active=True,
+        ).values_list("vendor_id", "client_id"):
+            allocated_client_ids.setdefault(vendor_id, []).append(client_id)
         eligibility = {}
         visible_client_ids = set()
         for owner in owners:
             profile = getattr(owner, "employee_profile", None)
             if owner.is_superuser:
-                eligible = list(clients.values_list("id", flat=True))
+                eligible = all_client_ids
                 owner_type = "owner"
             else:
-                eligible = list(
-                    VendorClientAllocation.objects.filter(vendor=owner, client__is_active=True, is_active=True)
-                    .values_list("client_id", flat=True)
-                )
+                eligible = allocated_client_ids.get(owner.pk, [])
                 owner_type = getattr(profile, "account_type", "")
             eligibility[str(owner.pk)] = eligible
             visible_client_ids.update(eligible)
@@ -245,7 +254,7 @@ class OrganizationScopedMixin:
 class OrganizationUnitViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
     serializer_class = OrganizationUnitSerializer
     permission_classes = [HasFunctionPermission]
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["workspace_owner", "parent", "unit_type", "is_active"]
     search_fields = ["name", "code", "description", "workspace_owner__username"]
     ordering_fields = ["unit_type", "name", "created_at", "updated_at"]
@@ -302,7 +311,7 @@ class OrganizationUnitViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
 class OrganizationClientAccessViewSet(OrganizationScopedMixin, viewsets.ModelViewSet):
     serializer_class = OrganizationClientAccessSerializer
     permission_classes = [HasFunctionPermission]
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["organization_unit", "organization_unit__workspace_owner", "client", "is_active"]
     search_fields = ["organization_unit__name", "organization_unit__code", "client__name", "client__code"]
     ordering_fields = ["created_at", "updated_at", "organization_unit__name", "client__name"]
@@ -419,7 +428,7 @@ class VendorDirectoryViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = VendorDirectorySerializer
     permission_classes = [HasFunctionPermission]
     required_function_permission = "vendors.tab.policies"
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["employee_profile__account_type", "is_active"]
     search_fields = ["username", "first_name", "last_name", "email"]
     ordering_fields = ["first_name", "last_name", "date_joined"]
@@ -464,7 +473,7 @@ class ClientViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     permission_classes = [HasFunctionPermission]
     view_permission = "clients.view"
     manage_permission = "clients.manage"
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["provider_code", "is_active"]
     search_fields = ["name", "code", "company_name_match"]
     ordering_fields = ["name", "created_at", "updated_at"]
@@ -481,16 +490,26 @@ class ClientViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     destroy=extend_schema(tags=["Suppliers & allocations"], summary="Deactivate client integration metadata"),
 )
 class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
+    integration_survey_counts = (
+        Survey.objects.filter(integration_id=OuterRef("pk"))
+        .order_by()
+        .values("integration_id")
+        .annotate(total=Count("pk"))
+        .values("total")[:1]
+    )
     queryset = ClientIntegration.objects.select_related("client", "created_by").annotate(
-        survey_count_value=Count("surveys")
+        survey_count_value=Coalesce(
+            Subquery(integration_survey_counts, output_field=IntegerField()),
+            Value(0),
+        )
     ).exclude(
         client__is_active=False, provider_code__in=("biobrain", "voqall")
-    )
+    ).order_by("client__name", "name", "pk")
     serializer_class = ClientIntegrationSerializer
     permission_classes = [HasFunctionPermission]
     view_permission = "clients.integration.view"
     manage_permission = "clients.integration.manage"
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ["client", "provider_code", "scheduled_sync_enabled", "is_active"]
     search_fields = ["name", "client__name", "client__code"]
     vendor_scope_filter = "client__vendor_allocations__vendor_id"
@@ -602,7 +621,7 @@ class VendorCommercialProfileViewSet(PermissionByActionMixin, viewsets.ModelView
     permission_classes = [HasFunctionPermission]
     view_permission = "vendors.tab.policies"
     manage_permission = "vendors.action.edit_policy"
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter]
     filterset_fields = ["vendor", "vendor__employee_profile__account_type", "is_active"]
     search_fields = ["vendor__username", "vendor__first_name", "vendor__last_name", "vendor__email"]
     vendor_scope_filter = "vendor_id"
@@ -628,7 +647,7 @@ class VendorAPIKeyViewSet(viewsets.ModelViewSet):
     )
     serializer_class = VendorAPIKeySerializer
     permission_classes = [HasFunctionPermission]
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["vendor", "is_active"]
     search_fields = ["name", "prefix", "vendor__username", "vendor__first_name", "vendor__last_name"]
     ordering_fields = ["created_at", "last_used_at", "expires_at", "name"]
@@ -689,7 +708,7 @@ class VendorClientAllocationViewSet(PermissionByActionMixin, viewsets.ModelViewS
     permission_classes = [HasFunctionPermission]
     view_permission = "vendors.tab.clients"
     manage_permission = "vendors.action.allocate_client"
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["vendor", "client", "vendor__employee_profile__account_type", "is_active"]
     search_fields = ["vendor__username", "vendor__first_name", "vendor__last_name", "client__name", "client__code"]
     ordering_fields = ["created_at", "updated_at", "client__name"]
@@ -716,7 +735,7 @@ class VendorSurveyAllocationViewSet(PermissionByActionMixin, viewsets.ModelViewS
     permission_classes = [HasFunctionPermission]
     view_permission = "vendors.tab.projects"
     manage_permission = "vendors.action.allocate_project"
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["client_allocation", "client_allocation__vendor", "client_allocation__client", "survey", "is_active"]
     search_fields = [
         "client_allocation__vendor__username", "client_allocation__vendor__first_name",
@@ -845,7 +864,7 @@ class AllocationReservationViewSet(VendorScopedQuerysetMixin, viewsets.ReadOnlyM
     serializer_class = AllocationReservationSerializer
     permission_classes = [HasFunctionPermission]
     required_function_permission = ("allocations.view", "allocations.manage")
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [SparseDjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
     filterset_fields = ["status", "client_allocation", "client_allocation__vendor", "survey_allocation"]
     search_fields = ["attempt__rid", "client_allocation__vendor__username", "survey_allocation__survey__local_id"]
     ordering_fields = ["created_at", "expires_at", "finalized_at", "status"]

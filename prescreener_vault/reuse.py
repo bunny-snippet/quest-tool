@@ -2,6 +2,7 @@
 
 from datetime import datetime, time, timedelta
 from decimal import Decimal, ROUND_FLOOR
+from functools import partial
 
 from django.conf import settings
 from django.db import IntegrityError, transaction
@@ -350,7 +351,10 @@ def _reserve_vault_profile(attempt, signature, excluded_uids=None):
         candidate.last_reused_at = now
         candidate.respondent_age = signature["age"]
         candidate.respondent_age_group = signature["age_group"]
-        transaction.on_commit(invalidate_vault_cache, using=DATABASE_ALIAS)
+        transaction.on_commit(
+            partial(invalidate_vault_cache, candidate.uid),
+            using=DATABASE_ALIAS,
+        )
         return candidate, previous_last_reused_at
 
 
@@ -363,7 +367,7 @@ def _undo_vault_reservation(uid, previous_last_reused_at=None):
         usage_count=F("usage_count") - 1,
         last_reused_at=previous_last_reused_at,
     )
-    invalidate_vault_cache()
+    invalidate_vault_cache(uid, summary=False, options=False)
 
 
 def _locked_state(integration, candidate):

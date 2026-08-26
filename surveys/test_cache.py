@@ -9,18 +9,28 @@ from django.test.utils import CaptureQueriesContext
 from rest_framework.request import Request
 from rest_framework.test import APIRequestFactory
 
+from accounts.access import (
+    activity_visibility_cache_generation,
+    activity_visible_user_ids,
+)
 from config.cache_utils import (
     jittered_ttl,
+    safe_cache_compare_delete,
+    safe_cache_generation,
     safe_cache_get_or_set,
     stable_cache_key,
 )
-from surveys.models import Survey
+from surveys.models import Survey, SurveyAttempt
 from surveys.project_cache import (
     invalidate_project_cache,
     project_filter_metadata,
     project_filtered_count,
 )
-from surveys.report_cache import cached_report_payload
+from surveys.report_cache import (
+    cached_report_payload,
+    report_metadata_generation,
+    report_viewer_scope,
+)
 
 
 @override_settings(CACHE_DEFAULT_TTL_SECONDS=100, CACHE_TTL_JITTER_SECONDS=20)
@@ -52,6 +62,23 @@ class CacheUtilityTests(SimpleTestCase):
         self.assertEqual(first, {"value": 1})
         self.assertEqual(second, {"value": 1})
         self.assertEqual(len(calls), 1)
+
+    def test_generation_key_eviction_never_reuses_literal_namespace(self):
+        key = "test:authorization-generation"
+        first = safe_cache_generation(key)
+        cache.delete(key)
+        second = safe_cache_generation(key)
+
+        self.assertNotEqual(first, second)
+        self.assertNotEqual(first, 1)
+        self.assertNotEqual(second, 1)
+
+    def test_compare_delete_never_removes_a_replacement_lock(self):
+        cache.set("test:lock", 222, timeout=30)
+        self.assertFalse(safe_cache_compare_delete("test:lock", 111))
+        self.assertEqual(cache.get("test:lock"), 222)
+        self.assertTrue(safe_cache_compare_delete("test:lock", 222))
+        self.assertIsNone(cache.get("test:lock"))
 
     @patch("config.cache_utils._cache")
     def test_cache_outage_falls_back_to_factory(self, cache_lookup):
@@ -246,3 +273,108 @@ class ReportCacheTests(TestCase):
         ca = cached_report_payload("test-summary", self.request("country=CA"), load)
 
         self.assertEqual((us, ca), (1, 2))
+
+    def test_include_summary_does_not_split_identical_aggregate_keys(self):
+        calls = []
+
+        def load():
+            calls.append(True)
+            return {"total": 7}
+
+        rows_request = self.request("country=US&include_summary=false")
+        summary_request = self.request("country=US")
+
+        self.assertEqual(
+            cached_report_payload("same-traffic-summary", rows_request, load),
+            {"total": 7},
+        )
+        self.assertEqual(
+            cached_report_payload("same-traffic-summary", summary_request, load),
+            {"total": 7},
+        )
+        self.assertEqual(len(calls), 1)
+
+    def test_live_inventory_and_attempt_writes_do_not_rotate_filter_generation(self):
+        generation = report_metadata_generation()
+        survey = Survey.objects.create(
+            source_id=880011,
+            country="United States",
+            country_code="US",
+        )
+        SurveyAttempt.objects.create(
+            rid="Ca1Ch2Ur3N",
+            survey=survey,
+            platform_user=self.user,
+            user_id=str(self.user.pk),
+        )
+
+        self.assertEqual(report_metadata_generation(), generation)
+
+    def test_viewer_scope_fingerprint_changes_even_when_generation_is_unchanged(self):
+        with patch(
+            "surveys.report_cache.permission_cache_generation",
+            return_value=7,
+        ), patch(
+            "surveys.report_cache.activity_visibility_cache_generation",
+            return_value=9,
+        ), patch(
+            "surveys.report_cache.effective_permission_codes",
+            side_effect=[{"attempts.view"}, {"attempts.view", "studies.card.revenue"}],
+        ), patch(
+            "surveys.report_cache.activity_visible_user_ids",
+            return_value={self.user.pk},
+        ):
+            before = report_viewer_scope(self.user)
+            after = report_viewer_scope(self.user)
+
+        self.assertEqual(before["permission_generation"], after["permission_generation"])
+        self.assertNotEqual(
+            before["permission_fingerprint"],
+            after["permission_fingerprint"],
+        )
+
+
+class ActivityVisibilityCacheTests(TestCase):
+    def setUp(self):
+        cache.clear()
+        self.owner = get_user_model().objects.create_superuser(
+            username="visibility-cache-owner",
+            password="test-password",
+        )
+        self.employee = get_user_model().objects.create_user(
+            username="visibility-cache-employee",
+        )
+
+    def test_shared_snapshot_avoids_repeat_user_scan_and_invalidates_on_profile_change(self):
+        with CaptureQueriesContext(connection) as cold_queries:
+            first = activity_visible_user_ids(self.owner)
+        with CaptureQueriesContext(connection) as warm_queries:
+            second = activity_visible_user_ids(self.owner)
+
+        self.assertEqual(first, second)
+        self.assertIn(self.employee.pk, first)
+        self.assertTrue(cold_queries.captured_queries)
+        self.assertEqual(len(warm_queries), 0)
+
+        added = get_user_model().objects.create_user(
+            username="visibility-cache-added",
+        )
+        with CaptureQueriesContext(connection) as refreshed_queries:
+            refreshed = activity_visible_user_ids(self.owner)
+
+        self.assertIn(added.pk, refreshed)
+        self.assertTrue(refreshed_queries.captured_queries)
+
+    def test_visibility_generation_rotates_again_after_atomic_commit(self):
+        profile = self.employee.employee_profile
+        initial = activity_visibility_cache_generation()
+
+        with self.captureOnCommitCallbacks(execute=True) as callbacks:
+            profile.department = "New department"
+            profile.save(update_fields=["department", "updated_at"])
+            inside_transaction = activity_visibility_cache_generation()
+
+        committed = activity_visibility_cache_generation()
+        self.assertTrue(callbacks)
+        self.assertGreater(inside_transaction, initial)
+        self.assertGreater(committed, inside_transaction)
