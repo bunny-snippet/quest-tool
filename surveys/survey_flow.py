@@ -78,18 +78,17 @@ def normalize_client_ip(value) -> str | None:
 
 
 def get_request_ip(request) -> str | None:
-    """Return the original client IP, trusting proxy headers only when configured."""
+    """Return the client IP without trusting a user-supplied forwarding chain.
+
+    Quest's edge proxy overwrites ``X-Real-IP``.  Reading the first value from
+    ``X-Forwarded-For`` is unsafe because nginx's usual ``proxy_add`` behavior
+    preserves values supplied by the caller, which can forge callback
+    allowlists and respondent network controls.
+    """
     if settings.TRUST_X_FORWARDED_FOR:
-        forwarded = request.META.get("HTTP_X_FORWARDED_FOR", "")
-        candidates = [
-            request.META.get("HTTP_CF_CONNECTING_IP"),
-            *(part.strip() for part in forwarded.split(",") if part.strip()),
-            request.META.get("HTTP_X_REAL_IP"),
-        ]
-        for candidate in candidates:
-            normalized = normalize_client_ip(candidate)
-            if normalized:
-                return normalized
+        proxy_ip = normalize_client_ip(request.META.get("HTTP_X_REAL_IP"))
+        if proxy_ip:
+            return proxy_ip
     return normalize_client_ip(request.META.get("REMOTE_ADDR"))
 
 
@@ -276,7 +275,13 @@ def attach_project_entry_ip_claim(
     claim.save(update_fields=["first_attempt", "updated_at"])
 
 
-def build_outbound_url(entry_link: str, rid: str, answers: dict) -> str:
+def build_outbound_url(
+    entry_link: str,
+    rid: str,
+    answers: dict,
+    *,
+    allowed_host_suffixes: tuple[str, ...] = (),
+) -> str:
     """Build an InnovateMR entry URL from validated profiling answers.
 
     InnovateMR accepts profiling data as question-key query parameters. Closed
@@ -285,6 +290,21 @@ def build_outbound_url(entry_link: str, rid: str, answers: dict) -> str:
     allocated link, and never let targeting data override routing identifiers.
     """
     parts = urlsplit(entry_link)
+    hostname = (parts.hostname or "").lower()
+    if (
+        parts.scheme != "https"
+        or not hostname
+        or parts.username
+        or parts.password
+        or (
+            allowed_host_suffixes
+            and not any(
+                hostname == suffix or hostname.endswith(f".{suffix}")
+                for suffix in allowed_host_suffixes
+            )
+        )
+    ):
+        raise ValueError("The provider returned an invalid respondent entry link.")
     query = parse_qsl(parts.query, keep_blank_values=True)
     outbound: list[tuple[str, str]] = []
     has_pid = False
@@ -336,6 +356,15 @@ def build_biobrain_outbound_url(
     ``Q{QualificationId}`` so the provider can auto-punch them.
     """
     parts = urlsplit(entry_link)
+    hostname = (parts.hostname or "").lower()
+    if (
+        parts.scheme != "https"
+        or not hostname
+        or parts.username
+        or parts.password
+        or (hostname != "voqall.com" and not hostname.endswith(".voqall.com"))
+    ):
+        raise ValueError("BioBrain returned an invalid respondent entry link.")
     reserved = {"vq_token", "vq_uid", "pid", "trackid"}
     outbound = [
         (key, value)

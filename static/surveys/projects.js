@@ -20,6 +20,7 @@
     detailErrors: { targeting: null, quotas: null },
     timer: null,
     controller: null,
+    detailController: null,
     loading: false,
     lastLoadedAt: 0,
   };
@@ -45,26 +46,6 @@
     if (!canOpenProjectStudies) return `<strong class="id-link project-id-value">${projectId}</strong>`;
     const studyUrl = `/traffic-reports/?internal_id=${encodeURIComponent(survey.local_id)}`;
     return `<span class="id-link project-study-link" role="link" tabindex="0" data-study-url="${escapeHtml(studyUrl)}" title="${escapeHtml(title)}">${projectId}</span>`;
-  }
-  function generatePlatformPid() {
-    const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
-    // Keep new PIDs 3-4 characters longer than the old nine-character maximum
-    // and structurally distinct from the ten-character RID.
-    const length = 12 + Math.floor(Math.random() * 2);
-    const randomValues = new Uint32Array(length);
-    let candidate = '';
-    do {
-      window.crypto.getRandomValues(randomValues);
-      candidate = [...randomValues].map((value) => alphabet[value % alphabet.length]).join('');
-    } while (!/[A-Z]/.test(candidate) || !/[a-z]/.test(candidate) || !/[0-9]/.test(candidate));
-    return candidate;
-  }
-  function entryLinkWithPid(rawLink) {
-    const url = new URL(rawLink, window.location.origin);
-    // Internal tracking PID only. Provider adapters keep their own PID/MID
-    // mappings, so this never changes Cint/RFG respondent parameters.
-    url.searchParams.set('pid', generatePlatformPid());
-    return url.toString();
   }
   const projectDateTimeFormatter = new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
   const sourceDateFormatter = new Intl.DateTimeFormat('en-IN', {
@@ -430,8 +411,8 @@
     if (copy) { await navigator.clipboard.writeText(copy.dataset.copy); toast('Project ID copied'); }
     const copyLink = event.target.closest('[data-copy-link]');
     if (copyLink && copyLink.dataset.copyLink) {
-      await navigator.clipboard.writeText(entryLinkWithPid(copyLink.dataset.copyLink));
-      toast('Entry link copied with PID');
+      await navigator.clipboard.writeText(copyLink.dataset.copyLink);
+      toast('Secure entry link copied');
     }
     const action = event.target.closest('[data-action]');
     if (action) {
@@ -458,6 +439,7 @@
   }
 
   function openDrawer(survey) {
+    state.detailController?.abort();
     state.activeSurvey = survey;
     state.details = { targeting: null, quotas: null };
     state.detailErrors = { targeting: null, quotas: null };
@@ -472,25 +454,32 @@
   }
 
   async function loadDrawerDetails(survey) {
-    for (const type of ['targeting', 'quotas']) {
-      try {
-        const response = await fetch(`/api/v1/surveys/${survey.local_id}/${type}/`);
-        const data = await response.json();
-        if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
-        if (state.activeSurvey?.local_id !== survey.local_id) return;
-        state.details[type] = data;
-      } catch (error) {
-        if (state.activeSurvey?.local_id !== survey.local_id) return;
-        state.detailErrors[type] = error.message;
-      }
-      if (state.activeTab === type) renderActiveDetail();
+    const controller = new AbortController();
+    state.detailController = controller;
+    try {
+      const response = await fetch(`/api/v1/surveys/${survey.local_id}/details/`, {
+        signal: controller.signal,
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail || `Request failed (${response.status})`);
+      if (state.activeSurvey?.local_id !== survey.local_id) return;
+      state.details = { targeting: data.targeting || [], quotas: data.quotas || [] };
+      state.detailErrors = {
+        targeting: data.errors?.targeting || null,
+        quotas: data.errors?.quotas || null,
+      };
+    } catch (error) {
+      if (error.name === 'AbortError' || state.activeSurvey?.local_id !== survey.local_id) return;
+      state.detailErrors = { targeting: error.message, quotas: error.message };
+    } finally {
+      if (state.detailController === controller) state.detailController = null;
     }
+    renderActiveDetail();
   }
 
   function renderActiveDetail() {
     els.drawerContent.classList.remove('content-swap');
-    void els.drawerContent.offsetWidth;
-    els.drawerContent.classList.add('content-swap');
+    requestAnimationFrame(() => els.drawerContent.classList.add('content-swap'));
     const type = state.activeTab;
     if (state.detailErrors[type]) {
       els.drawerContent.innerHTML = `<div class="error-state"><strong>Could not load details</strong><span>${escapeHtml(state.detailErrors[type])}</span></div>`;
@@ -502,6 +491,7 @@
   }
 
   function closeDrawer() {
+    state.detailController?.abort(); state.detailController = null;
     els.drawer.classList.remove('open'); els.backdrop.classList.remove('open'); document.body.classList.remove('drawer-open');
     setTimeout(() => { els.drawer.hidden = els.backdrop.hidden = true; state.activeSurvey = null; }, 220);
   }
@@ -538,10 +528,10 @@
   els.sync?.addEventListener('click', async () => {
     els.sync.disabled = true; els.sync.classList.add('syncing'); els.sync.lastChild.textContent = ' Syncing…';
     try {
-      const response = await fetch('/api/v1/sync/?wait=true', { method: 'POST', headers: { 'X-CSRFToken': document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '' } });
+      const response = await fetch('/api/v1/sync/', { method: 'POST', headers: { 'X-CSRFToken': document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '' } });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || data.error || `Sync failed (${response.status})`);
-      toast(`Sync complete · ${data.created} new, ${data.updated} updated`); state.page = 1; await loadSurveys();
+      toast('Inventory sync queued');
     } catch (error) { toast(error.message, 'error'); }
     finally { els.sync.disabled = false; els.sync.classList.remove('syncing'); els.sync.lastChild.textContent = ' Sync now'; }
   });

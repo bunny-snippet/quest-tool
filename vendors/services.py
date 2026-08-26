@@ -22,6 +22,7 @@ from django.db.models.functions import Coalesce, Round
 from django.utils import timezone
 
 from accounts.models import EmployeeProfile
+from accounts.profile_context import employee_profile_for_user
 from surveys.models import Survey, SurveyAttempt
 
 from .access import vendor_scope_user_id
@@ -197,9 +198,7 @@ def organization_client_policies_for_user(user) -> dict[int, OrganizationClientP
 
     if hasattr(user, "_organization_client_policies_cache"):
         return user._organization_client_policies_cache
-    profile = EmployeeProfile.objects.select_related(
-        "organization_unit__parent__parent"
-    ).filter(user=user).first()
+    profile = employee_profile_for_user(user)
     if not profile or not profile.organization_unit_id:
         user._organization_client_policies_cache = None
         return None
@@ -490,7 +489,7 @@ def annotate_survey_pricing_for_user(queryset, user, *, alias="visible_cpi"):
     hundred = Value(Decimal("100.00"), output_field=cut_field)
     zero_cut = Value(Decimal("0.00"), output_field=cut_field)
 
-    profile = EmployeeProfile.objects.select_related("role").filter(user=user).first()
+    profile = employee_profile_for_user(user)
     role_percent = Decimal("100.00")
     if (
         not getattr(user, "is_superuser", False)

@@ -82,7 +82,10 @@ class FakeProvider:
         return normalized
 
 
-@override_settings(PUBLIC_SUPPLIER_CODE="1000")
+@override_settings(
+    PUBLIC_SUPPLIER_CODE="1000",
+    ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS=True,
+)
 class ResearchForGoodIntegrationTests(TestCase):
     def setUp(self):
         self.client_record = Client.objects.create(code="rfg-client", name="Research For Good", provider_code="rfg")
@@ -227,8 +230,8 @@ class ResearchForGoodIntegrationTests(TestCase):
         listing = api.get("/api/v1/surveys/", {"search": survey.source_key})
         self.assertEqual(listing.status_code, 200)
         start_link = listing.data["results"][0]["start_link"]
-        self.assertIn(f"surveyId={survey.source_key}", start_link)
-        self.assertIn("supplierCode=1000", start_link)
+        self.assertEqual(set(parse_qs(urlsplit(start_link).query)), {"entry"})
+        self.assertNotIn(str(survey.source_key), start_link)
 
         def hydrate(target):
             target.entry_link = "https://survey.saysoforgood.com/live/survey/lazy?init=token"
@@ -241,9 +244,15 @@ class ResearchForGoodIntegrationTests(TestCase):
             ])
 
         get_provider_mock.return_value.refresh_details.side_effect = hydrate
-        response = self.client.get(start_link)
+        gate = self.client.get(start_link)
+        self.assertEqual(gate.status_code, 200)
+        self.assertEqual(SurveyAttempt.objects.filter(survey=survey).count(), 0)
+        get_provider_mock.assert_not_called()
+        response = self.client.post("/survey/start", {
+            "entry": parse_qs(urlsplit(start_link).query)["entry"][0],
+        })
         self.assertEqual(response.status_code, 302)
-        self.assertIn("/survey/start?rid=", response["Location"])
+        self.assertEqual(set(parse_qs(urlsplit(response["Location"]).query)), {"journey"})
         get_provider_mock.assert_called_once_with(self.integration)
         get_provider_mock.return_value.refresh_details.assert_called_once()
         survey.refresh_from_db()
@@ -603,7 +612,7 @@ class ResearchForGoodIntegrationTests(TestCase):
             attempt.upstream_transaction_data["rfg_browser_return"]["result"], "41"
         )
 
-    def test_universal_rfg_callback_keeps_reason_and_redirects_to_platform_pid(self):
+    def test_universal_rfg_browser_callback_cannot_finalize_attempt(self):
         survey = Survey.objects.create(
             client=self.client_record,
             integration=self.integration,
@@ -628,18 +637,11 @@ class ResearchForGoodIntegrationTests(TestCase):
             "integration": "2",
         })
 
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], f"/survey?status=2&pid={attempt.pid}")
+        self.assertEqual(response.status_code, 403)
         attempt.refresh_from_db()
         self.assertEqual(attempt.rid, "Fg7Hi8Jk9L")
-        self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)
-        self.assertEqual(
-            attempt.upstream_transaction_data["rfg_browser_return"]["ruledOutBy"],
-            "Postal code failed provider validation %%3867%%",
-        )
-        outcome = provider_outcome(attempt)
-        self.assertEqual(outcome["status"], "Invalid postal code")
-        self.assertIn("Postal code failed provider validation", outcome["reason"])
+        self.assertEqual(attempt.status, SurveyAttempt.Status.REDIRECTED)
+        self.assertEqual(attempt.upstream_transaction_data, {})
 
     @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
     def test_non_matching_prescreener_finishes_locally_with_reason_page(self):
@@ -896,7 +898,8 @@ class ResearchForGoodIntegrationTests(TestCase):
             "result": "2",
         })
         self.assertEqual(result_page.status_code, 200)
-        self.assertContains(result_page, attempt.rid)
+        self.assertContains(result_page, attempt.pid)
+        self.assertNotContains(result_page, attempt.rid)
         self.assertNotContains(result_page, attempt.prescreener_uid)
         self.assertNotContains(result_page, attempt.provider_profile_uid)
 
@@ -923,7 +926,7 @@ class ResearchForGoodIntegrationTests(TestCase):
         other_attempt.refresh_from_db()
         self.assertEqual(other_attempt.status, SurveyAttempt.Status.REDIRECTED)
 
-    def test_generic_status_resolves_uid_or_rid_and_displays_canonical_rfg_rid(self):
+    def test_generic_status_rejects_rfg_uid_and_rid_browser_callbacks(self):
         survey = Survey.objects.create(
             client=self.client_record,
             integration=self.integration,
@@ -943,19 +946,12 @@ class ResearchForGoodIntegrationTests(TestCase):
             "rid": attempt.prescreener_uid,
         })
 
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], f"/survey?status=2&pid={attempt.pid}")
-        clean_page = self.client.get(response["Location"])
-        self.assertEqual(clean_page.status_code, 200)
-        self.assertContains(clean_page, attempt.rid)
-        self.assertNotContains(clean_page, attempt.pid)
-        self.assertNotContains(clean_page, attempt.prescreener_uid)
+        self.assertEqual(response.status_code, 403)
 
         response = self.client.get("/survey", {
             "status": "2",
             "rid": attempt.rid,
         })
-        self.assertEqual(response.status_code, 302)
-        self.assertEqual(response["Location"], f"/survey?status=2&pid={attempt.pid}")
+        self.assertEqual(response.status_code, 403)
         attempt.refresh_from_db()
-        self.assertEqual(attempt.status, SurveyAttempt.Status.TERMINATED)
+        self.assertEqual(attempt.status, SurveyAttempt.Status.REDIRECTED)

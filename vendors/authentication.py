@@ -1,5 +1,9 @@
 """Authenticate external supplier API requests using stored key hashes."""
 
+from datetime import timedelta
+
+from django.conf import settings
+from django.db.models import Q
 from django.utils import timezone
 from rest_framework.authentication import BaseAuthentication
 from rest_framework.exceptions import AuthenticationFailed
@@ -44,8 +48,23 @@ class VendorAPIKeyAuthentication(BaseAuthentication):
         if not commercial or not commercial.is_active or not commercial.api_access_enabled:
             raise AuthenticationFailed("API delivery is not enabled for this vendor.")
 
-        VendorAPIKey.objects.filter(pk=api_key.pk).update(last_used_at=now)
-        api_key.last_used_at = now
+        # Avoid turning a frequently used supplier key into a hot write-locked
+        # row. The audit timestamp remains current within the configured
+        # interval and authentication itself is still checked on every call.
+        write_interval = timedelta(
+            seconds=settings.VENDOR_API_KEY_LAST_USED_WRITE_INTERVAL_SECONDS
+        )
+        cutoff = now - write_interval
+        if api_key.last_used_at is None or api_key.last_used_at < cutoff:
+            # Keep the predicate in SQL as well as the inexpensive Python gate:
+            # the gate removes the UPDATE statement on normal hot-key traffic,
+            # while the predicate prevents concurrent stale readers from all
+            # writing the same row.
+            updated = VendorAPIKey.objects.filter(pk=api_key.pk).filter(
+                Q(last_used_at__isnull=True) | Q(last_used_at__lt=cutoff)
+            ).update(last_used_at=now)
+            if updated:
+                api_key.last_used_at = now
         return vendor, api_key
 
     def authenticate_header(self, request):

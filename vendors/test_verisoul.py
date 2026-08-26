@@ -216,6 +216,7 @@ class VerisoulPolicyTests(TestCase):
         ):
             authenticate_verisoul_session(session_id="session-mismatch", attempt=self.attempt)
 
+    @override_settings(ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS=True)
     @patch("vendors.verisoul.requests.post")
     def test_public_gate_passes_only_after_backend_authentication(self, post):
         response = Mock(status_code=200)

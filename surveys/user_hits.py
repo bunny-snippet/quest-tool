@@ -51,8 +51,18 @@ def _build_user_metadata(user_ids: set[int]) -> dict[int, dict]:
         )
         .order_by("first_name", "last_name", "username")
     )
-    profiles = {}
-    pending_ids = set(user_ids)
+    # ``users`` already selected each visible profile. Seed the ancestry walk
+    # from those objects instead of selecting the same rows a second time.
+    profiles = {
+        platform_user.pk: platform_user.employee_profile
+        for platform_user in users
+        if hasattr(platform_user, "employee_profile")
+    }
+    pending_ids = {
+        profile.created_by_id
+        for profile in profiles.values()
+        if profile.created_by_id and profile.created_by_id not in profiles
+    }
     while pending_ids:
         batch = list(
             EmployeeProfile.objects.filter(user_id__in=pending_ids)

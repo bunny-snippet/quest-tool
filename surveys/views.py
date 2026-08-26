@@ -6,10 +6,12 @@ of those services inside one guarded request lifecycle.
 """
 
 import csv
+import hmac
 import ipaddress
 import json
 import logging
 import re
+import secrets
 from datetime import date, timedelta
 from decimal import Decimal
 from types import SimpleNamespace
@@ -55,9 +57,8 @@ from vendors.services import (
     scope_surveys_for_user,
 )
 from vendors.access import is_external_vendor_scope, vendor_scope_user_id
-from vendors.credentials import decrypt_secret
 from vendors.models import VerisoulAssessment, VendorAPIKey
-from vendors.security import decode_delivery_token, sign_supplier_callback
+from vendors.security import decode_delivery_token
 from vendors.verisoul import (
     VerisoulError,
     authenticate_verisoul_session,
@@ -73,6 +74,12 @@ from .dashboard import (
     dashboard_range_window,
 )
 from .excel import ExcelSheet, build_excel_response
+from .entry_tokens import (
+    EntryTokenError,
+    decode_entry_token,
+    decode_journey_token,
+    issue_journey_token,
+)
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .identifiers import is_valid_platform_pid
 from .innovatemr_callbacks import verify_callback_request
@@ -109,6 +116,10 @@ from .report_cache import (
     cached_user_metadata,
     term_filter_metadata,
     traffic_filter_metadata,
+)
+from .supplier_callbacks import (
+    build_supplier_result_url,
+    queue_supplier_result_callback,
 )
 from prescreener_vault.services import (
     PrescreenerVaultError,
@@ -340,6 +351,10 @@ def _project_columns_for_user(user):
         columns.remove("entry_link")
     if "actions" in columns and "survey_details.view" not in codes:
         columns.remove("actions")
+    if "actions" in columns and "project_id" not in columns:
+        # Detail routes currently use the project identifier. Do not leak that
+        # route key through an action grant when its display permission is denied.
+        columns.remove("actions")
     return columns
 
 
@@ -375,16 +390,17 @@ def dashboard_page(request):
 @function_permission_required("projects.view")
 def projects_page(request):
     codes = effective_permission_codes(request.user)
-    visible_surveys = annotate_survey_pricing_for_user(
-        scope_surveys_for_user(Survey.objects.all(), request.user),
-        request.user,
-    )
+    visible_surveys = scope_surveys_for_user(Survey.objects.all(), request.user)
     is_client_scoped_panel = bool(
         vendor_scope_user_id(request.user) or organization_client_ids_for_user(request.user) is not None
     )
     project_columns = _project_columns_for_user(request.user)
     project_filters = _component_access(codes, PROJECT_FILTER_PERMISSIONS)
     can_sort_cpi = project_filters["cpi"]
+    if can_sort_cpi:
+        visible_surveys = annotate_survey_pricing_for_user(
+            visible_surveys, request.user
+        )
     metadata = project_filter_metadata(
         visible_surveys,
         user_id=request.user.pk,
@@ -422,6 +438,9 @@ def projects_page(request):
 @function_permission_required("attempts.view")
 def studies_page(request):
     codes = effective_permission_codes(request.user)
+    study_columns = _permitted_columns(codes, STUDY_COLUMN_PERMISSIONS)
+    if "pid" in study_columns and "respondent_id" in study_columns:
+        study_columns.remove("respondent_id")
     user_ids = activity_visible_user_ids(request.user)
     visible_attempts = SurveyAttempt.objects.all()
     if not request.user.is_superuser:
@@ -446,8 +465,8 @@ def studies_page(request):
             (SurveyAttempt.Status.QUALITY_TERMINATED, "Quality terminated"),
         ],
         "study_filters": _component_access(codes, STUDY_FILTER_PERMISSIONS),
-        "study_columns": _permitted_columns(codes, STUDY_COLUMN_PERMISSIONS),
-        "study_column_count": max(1, len(_permitted_columns(codes, STUDY_COLUMN_PERMISSIONS))),
+        "study_columns": study_columns,
+        "study_column_count": max(1, len(study_columns)),
         "can_view_study_client_name": STUDY_CLIENT_NAME_PERMISSION in codes,
         "can_view_study_provider_status": STUDY_PROVIDER_STATUS_PERMISSION in codes,
         "study_cards": _permitted_columns(codes, STUDY_CARD_PERMISSIONS),
@@ -505,9 +524,9 @@ def prescreener_data_page(request):
         try:
             base = PrescreenerSubmission.objects.using("prescreener_vault").all()
             options = vault_filter_options()
-            queryset = apply_submission_filters(
-                base.prefetch_related("question_answers"), selected
-            )
+            if "answers" in columns:
+                base = base.prefetch_related("question_answers")
+            queryset = apply_submission_filters(base, selected)
             summary = vault_filtered_summary(selected)
             paginator = Paginator(queryset.order_by("-submitted_at"), 20)
             # The cached summary already contains the exact filtered total, so
@@ -1414,6 +1433,11 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
     return prepared
 
 
+PRESCREENER_MAX_TEXT_LENGTH = 1000
+PRESCREENER_MAX_LIST_VALUES = 100
+PRESCREENER_MAX_NUMERIC_LENGTH = 32
+
+
 def _collect_prescreener_answers(request, survey):
     """Validate submitted controls and produce vault plus provider answer values."""
 
@@ -1423,8 +1447,37 @@ def _collect_prescreener_answers(request, survey):
         survey, qualifying_options_only=False
     ):
         question = prepared["model"]
-        if prepared["input_kind"] == "date_mask":
-            raw_date = request.POST.get(prepared["field_name"], "").strip()
+        input_kind = prepared["input_kind"]
+        raw_values = request.POST.getlist(prepared["field_name"])
+        values = [str(value).strip() for value in raw_values if str(value).strip()]
+        if not values:
+            errors.append(f"Please answer: {prepared['display_text']}")
+            continue
+
+        # Browsers submit one value for scalar controls. Reject an edited POST
+        # containing repeated scalar keys instead of letting QueryDict choose
+        # one value. Multi-select controls deliberately accept repeated keys,
+        # but normalize duplicates before provider mapping.
+        if input_kind != "checkbox" and len(raw_values) != 1:
+            errors.append(
+                f"Submit exactly one answer for: {prepared['display_text']}"
+            )
+            continue
+        if input_kind == "checkbox":
+            list_limit = max(PRESCREENER_MAX_LIST_VALUES, len(prepared["options"]))
+            if len(raw_values) > list_limit:
+                errors.append(
+                    f"Too many answers were submitted for: {prepared['display_text']}"
+                )
+                continue
+            values = list(dict.fromkeys(values))
+
+        if any(len(value) > PRESCREENER_MAX_TEXT_LENGTH for value in values):
+            errors.append(f"Answer is too long for: {prepared['display_text']}")
+            continue
+
+        if input_kind == "date_mask":
+            raw_date = values[0]
             try:
                 parts = raw_date.split("-")
                 if len(parts) != 3:
@@ -1440,24 +1493,38 @@ def _collect_prescreener_answers(request, survey):
                 )
                 continue
             values = [normalized_date]
-        else:
-            values = [value.strip() for value in request.POST.getlist(prepared["field_name"]) if value.strip()]
-        if not values:
-            errors.append(f"Please answer: {prepared['display_text']}")
-            continue
 
         valid_options = {item["value"] for item in prepared["options"]}
         upstream_values = values.copy()
-        if prepared["input_kind"] in {"radio", "checkbox"}:
+        if input_kind in {"radio", "checkbox"}:
             invalid = [value for value in values if value not in valid_options]
             if invalid:
                 errors.append(f"Invalid answer for: {prepared['display_text']}")
                 continue
-        elif prepared["input_kind"] == "number":
+        elif input_kind == "number":
+            if len(values[0]) > PRESCREENER_MAX_NUMERIC_LENGTH:
+                errors.append(f"Enter a valid number for: {prepared['display_text']}")
+                continue
             try:
                 numeric_value = int(values[0])
             except ValueError:
                 errors.append(f"Enter a valid number for: {prepared['display_text']}")
+                continue
+            min_value = prepared.get("min_value")
+            max_value = prepared.get("max_value")
+            if (
+                (min_value is not None and numeric_value < min_value)
+                or (max_value is not None and numeric_value > max_value)
+            ):
+                if min_value is not None and max_value is not None:
+                    requirement = f"between {min_value} and {max_value}"
+                elif min_value is not None:
+                    requirement = f"of at least {min_value}"
+                else:
+                    requirement = f"of at most {max_value}"
+                errors.append(
+                    f"Enter a number {requirement} for: {prepared['display_text']}"
+                )
                 continue
             # AGE and other numeric-open-ended qualifications must carry the
             # respondent's actual answer. Targeting OptionIds identify the
@@ -1518,10 +1585,10 @@ def _has_exact_query(request, expected_names):
     )
 
 
-def _rfg_result_url(rid, result):
-    """Build the local RFG browser-result URL for an attempt RID."""
+def _rfg_result_url(identifier, result):
+    """Build the local RFG browser-result URL with the public platform PID."""
 
-    return f"{reverse('rfg-result')}?{urlencode({'rid': rid, 'result': result})}"
+    return f"{reverse('rfg-result')}?{urlencode({'pid': identifier, 'result': result})}"
 
 
 def _finish_local_rfg_attempt(attempt, answers, request, *, result, reason):
@@ -1531,6 +1598,9 @@ def _finish_local_rfg_attempt(attempt, answers, request, *, result, reason):
     with transaction.atomic():
         locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
         if locked.status != SurveyAttempt.Status.INITIATED:
+            transaction.on_commit(
+                lambda locked=locked: queue_supplier_result_callback(locked)
+            )
             return locked
         client_data = get_request_client_data(request)
         locked.answers = operational_answer_value(answers)
@@ -1556,6 +1626,7 @@ def _finish_local_rfg_attempt(attempt, answers, request, *, result, reason):
             "status", "status_source", "loi_seconds", "upstream_transaction_data", "updated_at",
         ])
         finalize_attempt_capacity(locked)
+    queue_supplier_result_callback(locked)
     return locked
 
 
@@ -1579,6 +1650,9 @@ def _finish_wrong_target_country_attempt(attempt, request, location):
     with transaction.atomic():
         locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
         if locked.status != SurveyAttempt.Status.INITIATED:
+            transaction.on_commit(
+                lambda locked=locked: queue_supplier_result_callback(locked)
+            )
             return locked
         client_data = {
             **get_request_client_data(request),
@@ -1613,6 +1687,7 @@ def _finish_wrong_target_country_attempt(attempt, request, location):
             "status", "status_source", "loi_seconds", "upstream_transaction_data", "updated_at",
         ])
         finalize_attempt_capacity(locked)
+    queue_supplier_result_callback(locked)
     return locked
 
 
@@ -1623,6 +1698,9 @@ def _finish_duplicate_ip_attempt(attempt, request, prior_attempt=None):
     with transaction.atomic():
         locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
         if locked.status != SurveyAttempt.Status.INITIATED:
+            transaction.on_commit(
+                lambda locked=locked: queue_supplier_result_callback(locked)
+            )
             return locked
         client_data = get_request_client_data(request)
         locked.submitted_at = now
@@ -1651,6 +1729,7 @@ def _finish_duplicate_ip_attempt(attempt, request, prior_attempt=None):
             "status", "status_source", "loi_seconds", "upstream_transaction_data", "updated_at",
         ])
         finalize_attempt_capacity(locked)
+    queue_supplier_result_callback(locked)
     return locked
 
 
@@ -1661,6 +1740,9 @@ def _finish_verisoul_attempt(attempt, request, *, reason, decision="", score=Non
     with transaction.atomic():
         locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
         if locked.status != SurveyAttempt.Status.INITIATED:
+            transaction.on_commit(
+                lambda locked=locked: queue_supplier_result_callback(locked)
+            )
             return locked
         client_data = get_request_client_data(request)
         locked.submitted_at = now
@@ -1691,6 +1773,7 @@ def _finish_verisoul_attempt(attempt, request, *, reason, decision="", score=Non
             "status", "status_source", "loi_seconds", "upstream_transaction_data", "updated_at",
         ])
         finalize_attempt_capacity(locked)
+    queue_supplier_result_callback(locked)
     return locked
 
 
@@ -1704,6 +1787,49 @@ def _recorded_status_url(attempt, status_code):
     return f"{reverse('survey-status')}?{urlencode({'status': str(status_code), 'pid': attempt.pid})}"
 
 
+JOURNEY_SESSION_KEY = "survey_journeys_v1"
+MAX_SESSION_JOURNEYS = 20
+
+
+def _issue_attempt_journey(request, attempt):
+    """Bind an opaque attempt continuation to the current browser session."""
+
+    journeys = dict(request.session.get(JOURNEY_SESSION_KEY) or {})
+    nonce = secrets.token_urlsafe(32)
+    journeys[str(attempt.pk)] = nonce
+    while len(journeys) > MAX_SESSION_JOURNEYS:
+        journeys.pop(next(iter(journeys)))
+    request.session[JOURNEY_SESSION_KEY] = journeys
+    return issue_journey_token(attempt_id=attempt.pk, nonce=nonce)
+
+
+def _journey_attempt_id(request, token):
+    """Return the attempt id only when token integrity and session binding match."""
+
+    try:
+        payload = decode_journey_token(token)
+    except EntryTokenError:
+        return None
+    expected = str(
+        (request.session.get(JOURNEY_SESSION_KEY) or {}).get(
+            str(payload["attempt_id"]), ""
+        )
+    )
+    if not expected or not hmac.compare_digest(expected, payload["nonce"]):
+        return None
+    return payload["attempt_id"]
+
+
+def _attempt_start_url(attempt, tracking_name="pid", *, journey_token=""):
+    """Return an opaque continuation, or an explicitly enabled legacy URL."""
+
+    if journey_token:
+        return f"{reverse('survey-start')}?{urlencode({'journey': journey_token})}"
+    if tracking_name == "rid":
+        return f"{reverse('survey-start')}?{urlencode({'rid': attempt.rid})}"
+    return f"{reverse('survey-start')}?{urlencode({'pid': attempt.pid})}"
+
+
 @require_http_methods(["POST"])
 def survey_security_check(request):
     """Authenticate a Verisoul browser session server-side and return only a route decision."""
@@ -1712,19 +1838,41 @@ def survey_security_check(request):
         payload = json.loads(request.body or b"{}")
     except (TypeError, ValueError):
         return JsonResponse({"detail": "Invalid request."}, status=400)
-    rid = str(payload.get("rid") or "").strip()
+    journey_token = str(payload.get("journey") or "").strip()
+    posted_pid = str(payload.get("pid") or "").strip()
+    posted_rid = str(payload.get("rid") or "").strip()
     session_id = str(payload.get("session_id") or "").strip()
-    if len(rid) != 10 or not rid.isalnum():
+    attempt_filter = None
+    tracking_name = "pid"
+    if journey_token:
+        if posted_pid or posted_rid:
+            return JsonResponse({"detail": "Invalid attempt."}, status=400)
+        attempt_id = _journey_attempt_id(request, journey_token)
+        if attempt_id is not None:
+            attempt_filter = {"pk": attempt_id}
+    elif settings.ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS:
+        if bool(posted_pid) == bool(posted_rid):
+            return JsonResponse({"detail": "Invalid attempt."}, status=400)
+        identifier = posted_pid or posted_rid
+        tracking_name = "pid" if posted_pid else "rid"
+        if identifier.isalnum():
+            attempt_filter = {tracking_name: identifier}
+    if attempt_filter is None or len(session_id) > 512:
         return JsonResponse({"detail": "Invalid attempt."}, status=400)
     attempt = SurveyAttempt.objects.select_related(
         "survey", "survey__client", "survey__integration", "client", "client_allocation",
         "platform_user", "platform_user__employee_profile",
-    ).filter(rid=rid).first()
+    ).filter(**attempt_filter).first()
     if attempt is None or attempt.status != SurveyAttempt.Status.INITIATED:
         return JsonResponse({"detail": "Invalid or finished attempt."}, status=404)
+    continuation_url = _attempt_start_url(
+        attempt,
+        tracking_name,
+        journey_token=journey_token,
+    )
     policy = effective_verisoul_policy(attempt)
     if not policy.enabled:
-        return JsonResponse({"status": "passed", "redirect": f"{reverse('survey-start')}?rid={quote(rid)}"})
+        return JsonResponse({"status": "passed", "redirect": continuation_url})
 
     if not session_id:
         assessment, _ = VerisoulAssessment.objects.get_or_create(
@@ -1751,7 +1899,7 @@ def survey_security_check(request):
             },
         )
         if assessment.status == VerisoulAssessment.Status.PASSED:
-            return JsonResponse({"status": "passed", "redirect": f"{reverse('survey-start')}?rid={quote(rid)}"})
+            return JsonResponse({"status": "passed", "redirect": continuation_url})
         if assessment.status in {VerisoulAssessment.Status.FAILED, VerisoulAssessment.Status.ERROR}:
             return JsonResponse({"status": "blocked", "redirect": _verisoul_status_url(attempt)})
         pending_ttl = timedelta(seconds=max(5, int(settings.VERISOUL_PENDING_TTL_SECONDS)))
@@ -1787,7 +1935,7 @@ def survey_security_check(request):
         "assessed_at", "status", "updated_at",
     ])
     if result.passed:
-        return JsonResponse({"status": "passed", "redirect": f"{reverse('survey-start')}?rid={quote(rid)}"})
+        return JsonResponse({"status": "passed", "redirect": continuation_url})
     _finish_verisoul_attempt(
         attempt, request, reason=result.reason, decision=result.decision,
         score=result.account_score, request_id=result.request_id,
@@ -1825,62 +1973,101 @@ def _mark_attempt_redirected(attempt, answers, outbound_url):
 def survey_start(request):
     """Validate copied links, run the prescreener and redirect one claimed attempt.
 
-    Initial GET creates the immutable RID/UID journey; canonical GET renders its
-    questions; POST writes the vault, applies provider checks and records exactly
-    one outbound redirect. See ``docs/developer-handbook.md`` for the call graph.
+    Initial signed GET is read-only; a CSRF-protected POST creates the immutable
+    journey. Canonical GET renders questions and the final POST writes the vault,
+    applies provider checks and records one outbound redirect.
     """
 
-    if request.method == "GET" and not request.GET.get("rid"):
-        # New copied links include the internal platform PID. The legacy
-        # four-parameter shape remains accepted so already-shared links do not
-        # break during rollout; those attempts receive a server-generated PID.
-        has_pid_parameter = "pid" in request.GET
-        has_delivery_parameter = "delivery" in request.GET
-        required_params = {"surveyId", "supplierCode", "userId", "code"}
-        if has_pid_parameter:
-            required_params.add("pid")
-        if has_delivery_parameter:
-            required_params.add("delivery")
-        if not _has_exact_query(request, required_params):
+    if request.method == "GET" and "entry" in request.GET:
+        if not _has_exact_query(request, {"entry"}):
             return _invalid_survey_link(request)
-
-        survey_id = request.GET.get("surveyId", "").strip()
-        supplier_code = request.GET.get("supplierCode", "").strip()
-        internal_code = request.GET.get("code", "").strip()
-        user_id = request.GET.get("userId", "").strip()
-        platform_pid = request.GET.get("pid", "").strip()
-        delivery_token = request.GET.get("delivery", "").strip()
-        if (
-            not survey_id
-            or len(survey_id) > 160
-            or not user_id.isdigit()
-            or not internal_code.isdigit()
-            or len(internal_code) != 14
-            or (
-                has_pid_parameter
-                and not is_valid_platform_pid(platform_pid)
-            )
-        ):
+        entry_token = request.GET.get("entry", "")
+        try:
+            decode_entry_token(entry_token)
+        except EntryTokenError:
             return _invalid_survey_link(request)
+        return render(request, "surveys/entry_gate.html", {
+            "entry_token": entry_token,
+        })
 
+    signed_entry_post = request.method == "POST" and "entry" in request.POST
+    if signed_entry_post or (
+        request.method == "GET" and "surveyId" in request.GET
+    ):
+        signed_entry = signed_entry_post
+        platform_pid = ""
         delivery_api_key = None
         delivery_survey_id = None
-        if has_delivery_parameter:
-            try:
-                delivery = decode_delivery_token(delivery_token)
-                delivery_api_key = VendorAPIKey.objects.select_related(
-                    "vendor", "vendor__employee_profile", "vendor__vendor_commercial_profile"
-                ).get(pk=int(delivery["api_key_id"]))
-                delivery_survey_id = int(delivery["survey_id"])
-            except (KeyError, TypeError, ValueError, signing.BadSignature, VendorAPIKey.DoesNotExist):
+        survey_id = ""
+        supplier_code = ""
+        internal_code = ""
+
+        if signed_entry:
+            if request.GET or set(request.POST.keys()) - {
+                "entry", "csrfmiddlewaretoken"
+            } or len(request.POST.getlist("entry")) != 1:
                 return _invalid_survey_link(request)
+            try:
+                entry = decode_entry_token(request.POST.get("entry", ""))
+            except EntryTokenError:
+                return _invalid_survey_link(request)
+            user_id = str(entry["user_id"])
+            delivery_survey_id = int(entry["survey_id"])
+            if entry.get("api_key_id") is not None:
+                try:
+                    delivery_api_key = VendorAPIKey.objects.select_related(
+                        "vendor", "vendor__employee_profile", "vendor__vendor_commercial_profile"
+                    ).get(pk=int(entry["api_key_id"]))
+                except VendorAPIKey.DoesNotExist:
+                    return _invalid_survey_link(request)
+        else:
+            # Already-distributed unsigned links remain available only during
+            # the explicit grace period. All newly copied links use the opaque
+            # branch above and all identifiers are allocated on the server.
+            if not settings.ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS:
+                return _invalid_survey_link(request)
+            has_pid_parameter = "pid" in request.GET
+            has_delivery_parameter = "delivery" in request.GET
+            required_params = {"surveyId", "supplierCode", "userId", "code"}
+            if has_pid_parameter:
+                required_params.add("pid")
+            if has_delivery_parameter:
+                required_params.add("delivery")
+            if not _has_exact_query(request, required_params):
+                return _invalid_survey_link(request)
+
+            survey_id = request.GET.get("surveyId", "").strip()
+            supplier_code = request.GET.get("supplierCode", "").strip()
+            internal_code = request.GET.get("code", "").strip()
+            user_id = request.GET.get("userId", "").strip()
+            platform_pid = request.GET.get("pid", "").strip()
+            delivery_token = request.GET.get("delivery", "").strip()
             if (
-                not delivery_api_key.is_active
-                or delivery_api_key.revoked_at
-                or (delivery_api_key.expires_at and delivery_api_key.expires_at <= timezone.now())
-                or str(delivery_api_key.vendor_id) != user_id
+                not survey_id
+                or len(survey_id) > 160
+                or not user_id.isdigit()
+                or not internal_code.isdigit()
+                or len(internal_code) != 14
+                or (has_pid_parameter and not is_valid_platform_pid(platform_pid))
             ):
                 return _invalid_survey_link(request)
+            if has_delivery_parameter:
+                try:
+                    delivery = decode_delivery_token(delivery_token)
+                    delivery_api_key = VendorAPIKey.objects.select_related(
+                        "vendor", "vendor__employee_profile", "vendor__vendor_commercial_profile"
+                    ).get(pk=int(delivery["api_key_id"]))
+                    delivery_survey_id = int(delivery["survey_id"])
+                except (KeyError, TypeError, ValueError, signing.BadSignature, VendorAPIKey.DoesNotExist):
+                    return _invalid_survey_link(request)
+
+        if delivery_api_key and (
+            not delivery_api_key.is_active
+            or delivery_api_key.revoked_at
+            or (delivery_api_key.expires_at and delivery_api_key.expires_at <= timezone.now())
+            or str(delivery_api_key.vendor_id) != user_id
+        ):
+            return _invalid_survey_link(request)
 
         platform_user = get_user_model().objects.filter(pk=int(user_id), is_active=True).first()
         if (
@@ -1895,11 +2082,11 @@ def survey_start(request):
         )
         if delivery_api_key:
             survey_queryset = scope_surveys_for_api_key(survey_queryset, delivery_api_key)
-        survey = survey_queryset.filter(
-            local_id=internal_code,
-            status=Survey.Status.LIVE,
+        survey_lookup = {"pk": delivery_survey_id} if signed_entry else {
+            "local_id": internal_code,
             **({"pk": delivery_survey_id} if delivery_survey_id else {}),
-        ).first()
+        }
+        survey = survey_queryset.filter(status=Survey.Status.LIVE, **survey_lookup).first()
         if survey is None:
             return _invalid_survey_link(request)
         expected_survey_id = (
@@ -1907,7 +2094,7 @@ def survey_start(request):
             if delivery_api_key and delivery_api_key.survey_id_mode == VendorAPIKey.SurveyIdMode.PROJECT_ID
             else str(survey.source_identifier)
         )
-        if survey_id != expected_survey_id:
+        if not signed_entry and survey_id != expected_survey_id:
             return _invalid_survey_link(request)
         provider_code = (
             survey.integration.provider_code if survey.integration_id else ""
@@ -1917,7 +2104,7 @@ def survey_start(request):
         if not survey.entry_link and not supports_lazy_entry_link:
             return _invalid_survey_link(request)
         expected_supplier_code = settings.PUBLIC_SUPPLIER_CODE
-        if supplier_code != expected_supplier_code:
+        if not signed_entry and supplier_code != expected_supplier_code:
             return _invalid_survey_link(request)
 
         if provider_code == "cint":
@@ -2048,18 +2235,59 @@ def survey_start(request):
             return HttpResponseRedirect(_recorded_status_url(attempt, "4"))
         if targeting_warning:
             request.session[f"attempt_warning_{attempt.rid}"] = targeting_warning
-        return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(attempt.rid)}")
+        # Newly-issued links continue through a session-bound opaque token. The
+        # display PID remains visible on the page, but it is never trusted as a
+        # browser-supplied selector for backend work.
+        if signed_entry:
+            journey_token = _issue_attempt_journey(request, attempt)
+            return HttpResponseRedirect(
+                _attempt_start_url(attempt, journey_token=journey_token)
+            )
+        return HttpResponseRedirect(_attempt_start_url(attempt, "rid"))
 
-    if request.method == "GET" and not _has_exact_query(request, {"rid"}):
-        return _invalid_survey_link(request)
+    journey_token = ""
+    attempt_filter = None
+    tracking_name = "pid"
+    if request.method == "GET" and "journey" in request.GET:
+        if not _has_exact_query(request, {"journey"}):
+            return _invalid_survey_link(request)
+        journey_token = request.GET.get("journey", "").strip()
+    elif request.method == "POST" and request.POST.get("journey"):
+        journey_token = request.POST.get("journey", "").strip()
+        if request.POST.get("pid") or request.POST.get("rid"):
+            return _invalid_survey_link(request)
 
-    rid = (request.GET.get("rid", "") if request.method == "GET" else request.POST.get("rid", "")).strip()
-    if len(rid) != 10 or not rid.isalnum():
+    if journey_token:
+        attempt_id = _journey_attempt_id(request, journey_token)
+        if attempt_id is not None:
+            attempt_filter = {"pk": attempt_id}
+    elif settings.ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS:
+        if request.method == "GET":
+            tracking_name = "pid" if request.GET.get("pid") else "rid"
+            if not _has_exact_query(request, {tracking_name}):
+                return _invalid_survey_link(request)
+            tracking_value = request.GET.get(tracking_name, "").strip()
+        else:
+            posted_pid = request.POST.get("pid", "").strip()
+            posted_rid = request.POST.get("rid", "").strip()
+            if bool(posted_pid) == bool(posted_rid):
+                return _invalid_survey_link(request)
+            tracking_name = "pid" if posted_pid else "rid"
+            tracking_value = posted_pid or posted_rid
+        if not tracking_value or not tracking_value.isalnum():
+            return _invalid_survey_link(request)
+        if tracking_name == "rid" and len(tracking_value) != 10:
+            return _invalid_survey_link(request)
+        if tracking_name == "pid" and not is_valid_platform_pid(tracking_value):
+            return _invalid_survey_link(request)
+        attempt_filter = {tracking_name: tracking_value}
+
+    if attempt_filter is None:
         return _invalid_survey_link(request)
     attempt = SurveyAttempt.objects.select_related(
         "survey", "survey__client", "survey__integration", "platform_user",
         "platform_user__employee_profile", "client", "client_allocation",
-    ).filter(rid=rid).first()
+    ).filter(**attempt_filter).first()
     if attempt is None or attempt.platform_user is None or not attempt.platform_user.is_active:
         return _invalid_survey_link(request, status_code=404)
     attempt = backfill_attempt_entry_audit(attempt, request)
@@ -2094,9 +2322,13 @@ def survey_start(request):
             return HttpResponseRedirect(_verisoul_status_url(attempt))
         if not assessment or assessment.status != VerisoulAssessment.Status.PASSED:
             if request.method == "POST":
-                return HttpResponseRedirect(f"{reverse('survey-start')}?rid={quote(attempt.rid)}")
+                return HttpResponseRedirect(_attempt_start_url(
+                    attempt, tracking_name, journey_token=journey_token
+                ))
             return render(request, "surveys/security_check.html", {
                 "attempt": attempt,
+                "journey_token": journey_token,
+                "tracking_name": tracking_name,
                 "verisoul_project_id": settings.VERISOUL_PROJECT_ID,
                 "verisoul_sdk_url": verisoul_sdk_url(),
                 "security_check_url": reverse("survey-security-check"),
@@ -2107,7 +2339,9 @@ def survey_start(request):
         # provider or allocate another cross-database respondent identity.
         if attempt.status != SurveyAttempt.Status.INITIATED:
             return HttpResponseRedirect(
-                f"{reverse('survey-start')}?rid={quote(attempt.rid)}"
+                _attempt_start_url(
+                    attempt, tracking_name, journey_token=journey_token
+                )
             )
         answers, errors = _collect_prescreener_answers(request, attempt.survey)
         if not errors:
@@ -2135,7 +2369,7 @@ def survey_start(request):
                         _finish_local_rfg_attempt(
                             attempt, answers, request, result="7", reason=reason
                         )
-                        return HttpResponseRedirect(_rfg_result_url(attempt.rid, "7"))
+                        return HttpResponseRedirect(_rfg_result_url(attempt.pid, "7"))
 
                 # Select reuse before writing a new vault row. A reused
                 # respondent keeps the original vault RID + UID pair and only
@@ -2178,7 +2412,7 @@ def survey_start(request):
                             reason=str(exc),
                         )
                         return HttpResponseRedirect(
-                            _rfg_result_url(attempt.rid, "5")
+                            _rfg_result_url(attempt.pid, "5")
                         )
                     if is_duplicate:
                         _finish_local_rfg_attempt(
@@ -2188,7 +2422,7 @@ def survey_start(request):
                             result="8",
                             reason="This respondent has already attempted this survey or survey group.",
                         )
-                        return HttpResponseRedirect(_rfg_result_url(attempt.rid, "8"))
+                        return HttpResponseRedirect(_rfg_result_url(attempt.pid, "8"))
                 if not errors:
                     # URL construction may use the vault DB. Keep it outside a
                     # main-DB row lock, then claim the redirect with one short,
@@ -2208,12 +2442,24 @@ def survey_start(request):
                             answers,
                         )
                     else:
+                        generic_provider_code = (
+                            attempt.survey.integration.provider_code
+                            if attempt.survey.integration_id
+                            else getattr(attempt.survey.client, "provider_code", "")
+                        )
                         outbound_url = build_outbound_url(
-                            attempt.survey.entry_link, attempt.rid, answers
+                            attempt.survey.entry_link,
+                            attempt.rid,
+                            answers,
+                            allowed_host_suffixes=("innovatemr.net",)
+                            if generic_provider_code == "innovatemr"
+                            else (),
                         )
                     if not _mark_attempt_redirected(attempt, answers, outbound_url):
                         return HttpResponseRedirect(
-                            f"{reverse('survey-start')}?rid={quote(attempt.rid)}"
+                            _attempt_start_url(
+                                attempt, tracking_name, journey_token=journey_token
+                            )
                         )
                     return HttpResponseRedirect(outbound_url)
             except Exception as exc:
@@ -2239,10 +2485,9 @@ def survey_start(request):
     if attempt.status != SurveyAttempt.Status.INITIATED:
         return render(request, "surveys/status.html", {
             "title": "Survey already initiated",
-            "message": "This RID has already been used to enter the survey.",
+            "message": "This PID has already been used to enter the survey.",
             "tone": "info",
             "status_label": attempt.get_status_display(),
-            "rid": attempt.rid,
             "pid": attempt.pid,
             "ip_address": attempt.callback_ip or attempt.initiation_ip,
             "loi_seconds": attempt.loi_seconds,
@@ -2252,6 +2497,8 @@ def survey_start(request):
     return render(request, "surveys/prescreener.html", {
         "attempt": attempt,
         "survey": attempt.survey,
+        "journey_token": journey_token,
+        "tracking_name": tracking_name,
         "questions": _prescreener_questions(attempt.survey, request.POST if request.method == "POST" else None),
         "errors": errors,
         "warning": request.session.pop(f"attempt_warning_{attempt.rid}", ""),
@@ -2268,6 +2515,44 @@ STATUS_PAGES = {
     "3": {"title": "Quota already filled", "message": "The required quota was filled before your response could be completed.", "tone": "warning"},
     "4": {"title": "Quality check unsuccessful", "message": "This response did not pass the survey's quality checks.", "tone": "danger"},
 }
+
+TERMINAL_ATTEMPT_STATUSES = {
+    SurveyAttempt.Status.COMPLETED,
+    SurveyAttempt.Status.TERMINATED,
+    SurveyAttempt.Status.OVER_QUOTA,
+    SurveyAttempt.Status.QUALITY_TERMINATED,
+}
+PENDING_ATTEMPT_STATUSES = {
+    SurveyAttempt.Status.INITIATED,
+    SurveyAttempt.Status.REDIRECTED,
+}
+
+
+def _invalid_callback_response(request, *, status_code=409):
+    """Return one non-disclosing response for forged or replayed outcomes."""
+
+    return render(request, "surveys/flow_error.html", {
+        "title": "Invalid survey callback",
+        "message": "This survey result could not be verified and was not recorded.",
+    }, status=status_code)
+
+
+def _render_recorded_status(request, attempt, ip_address):
+    """Render only the immutable status stored for a finalized attempt."""
+
+    page = STATUS_PAGES.get(attempt.status)
+    if page is None:
+        return _invalid_callback_response(request)
+    status_label = attempt.get_status_display()
+    page, status_label = _status_presentation_for_attempt(attempt, page, status_label)
+    return render(request, "surveys/status.html", {
+        **page,
+        "status_label": status_label,
+        "pid": attempt.pid,
+        "ip_address": ip_address or attempt.callback_ip or attempt.initiation_ip,
+        "loi_seconds": attempt.loi_seconds,
+        "attempt_found": True,
+    })
 
 
 def _status_presentation_for_attempt(attempt, page, status_label):
@@ -2334,7 +2619,7 @@ def _rfg_attempt_from_request(request):
             }:
                 continue
             attempt = base.filter(
-                Q(rid=value) | Q(prescreener_uid=value) | Q(provider_profile_uid=value)
+                Q(rid=value) | Q(pid=value) | Q(prescreener_uid=value) | Q(provider_profile_uid=value)
             ).order_by("-initiated_at").first()
             if attempt:
                 if matched_attempt and matched_attempt.pk != attempt.pk:
@@ -2343,36 +2628,65 @@ def _rfg_attempt_from_request(request):
     return matched_attempt
 
 
+SENSITIVE_CALLBACK_PARAMETER_NAMES = {
+    "hash", "hashdata", "hmac", "sig", "signature", "sesskey",
+    "sessionkey", "session_key", "token", "vq_token",
+}
+
+
+def _redacted_callback_parameters(parameters):
+    """Retain useful callback evidence without persisting bearer credentials."""
+
+    return {
+        key: "[redacted]" if str(key).casefold() in SENSITIVE_CALLBACK_PARAMETER_NAMES else value
+        for key, value in parameters.items()
+    }
+
+
+def _request_has_duplicate_query_parameters(request):
+    """Reject ambiguous callbacks instead of accepting QueryDict's last value."""
+
+    return any(len(request.GET.getlist(name)) > 1 for name in request.GET.keys())
+
+
 @require_http_methods(["GET"])
 def rfg_result(request):
+    if _request_has_duplicate_query_parameters(request):
+        return _invalid_callback_response(request, status_code=400)
     attempt = _rfg_attempt_from_request(request)
     if not attempt:
         return _invalid_survey_link(
             request, "This RFG result link is invalid.", status_code=404
         )
 
-    browser_parameters = dict(request.GET.items())
+    received_parameters = dict(request.GET.items())
+    redacted_parameters = _redacted_callback_parameters(received_parameters)
     now = timezone.now()
     client_data = get_request_client_data(request)
     with transaction.atomic():
         locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
-        locked.last_callback_at = now
-        locked.exit_user_agent = client_data.get("user_agent", "")
-        locked.exit_browser = client_data.get("browser", "")
-        locked.exit_device = client_data.get("device", "")
-        locked.exit_os = client_data.get("os", "")
-        locked.exit_client_data = client_data
-        locked.upstream_transaction_data = {
-            **(locked.upstream_transaction_data or {}),
-            "rfg_browser_return": browser_parameters,
-        }
-        locked.save(update_fields=[
-            "last_callback_at", "exit_user_agent", "exit_browser", "exit_device", "exit_os",
-            "exit_client_data", "upstream_transaction_data", "updated_at",
-        ])
+        audit = locked.upstream_transaction_data or {}
+        # A browser redirect is not proof of outcome. Capture its redacted
+        # evidence once, but never let reloads or crafted URLs replace it.
+        if "rfg_browser_return" not in audit:
+            locked.last_callback_at = now
+            locked.exit_user_agent = client_data.get("user_agent", "")
+            locked.exit_browser = client_data.get("browser", "")
+            locked.exit_device = client_data.get("device", "")
+            locked.exit_os = client_data.get("os", "")
+            locked.exit_client_data = client_data
+            locked.upstream_transaction_data = {
+                **audit,
+                "rfg_browser_return": redacted_parameters,
+            }
+            locked.save(update_fields=[
+                "last_callback_at", "exit_user_agent", "exit_browser", "exit_device", "exit_os",
+                "exit_client_data", "upstream_transaction_data", "updated_at",
+            ])
         attempt = locked
 
     stored = attempt.upstream_transaction_data or {}
+    browser_parameters = stored.get("rfg_browser_return") or redacted_parameters
     local_parameters = stored.get("rfg_local_outcome") or {}
     callback_parameters = stored.get("rfg_callback") or {}
     outcome_parameters = (
@@ -2418,10 +2732,16 @@ class RFGCallbackAPIView(APIView):
         responses={200: RFGCallbackResponseSerializer},
     )
     def get(self, request):
+        if _request_has_duplicate_query_parameters(request):
+            return Response(
+                {"detail": "Ambiguous callback parameters."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
         result = request.GET.get("result", "").strip()
         attempt = _rfg_attempt_from_request(request)
         if not attempt or result not in RFG_STATUS_MAP:
             return Response({"detail": "Unknown callback."}, status=status.HTTP_400_BAD_REQUEST)
+        requested_status = RFG_STATUS_MAP[result]
 
         integration = attempt.survey.integration
         config = integration.config or {}
@@ -2440,77 +2760,124 @@ class RFGCallbackAPIView(APIView):
             return Response({"detail": "Callback source is not trusted."}, status=status.HTTP_403_FORBIDDEN)
 
         now = timezone.now()
+        idempotent = False
         with transaction.atomic():
             locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
-            locked.status = RFG_STATUS_MAP[result]
-            locked.callback_at = locked.callback_at or now
-            locked.last_callback_at = now
-            locked.callback_ip = callback_ip
-            locked.callback_count += 1
-            locked.status_source = "rfg_callback"
-            locked.is_verified = True
-            locked.loi_seconds = locked.calculate_loi_seconds(now)
-            locked.upstream_transaction_data = {
-                **(locked.upstream_transaction_data or {}),
-                "rfg_callback": dict(request.GET.items()),
-                "rfg_outcome": describe_rfg_outcome(dict(request.GET.items())),
-            }
-            locked.save(update_fields=[
-                "status", "callback_at", "last_callback_at", "callback_ip", "callback_count",
-                "status_source", "is_verified", "loi_seconds", "upstream_transaction_data", "updated_at",
-            ])
-            finalize_attempt_capacity(locked)
-        return Response({
+            if locked.status in TERMINAL_ATTEMPT_STATUSES:
+                if locked.status != requested_status:
+                    return Response(
+                        {"detail": "Callback conflicts with the recorded final status."},
+                        status=status.HTTP_409_CONFLICT,
+                    )
+                idempotent = True
+            elif locked.status not in PENDING_ATTEMPT_STATUSES or locked.callback_at is not None:
+                return Response(
+                    {"detail": "Callback conflicts with the recorded attempt state."},
+                    status=status.HTTP_409_CONFLICT,
+                )
+            else:
+                locked.status = requested_status
+                locked.callback_at = locked.callback_at or now
+                locked.last_callback_at = now
+                locked.callback_ip = callback_ip
+                locked.callback_count += 1
+                locked.status_source = "rfg_callback"
+                locked.is_verified = True
+                locked.loi_seconds = locked.calculate_loi_seconds(now)
+                callback_parameters = dict(request.GET.items())
+                locked.upstream_transaction_data = {
+                    **(locked.upstream_transaction_data or {}),
+                    "rfg_callback": _redacted_callback_parameters(callback_parameters),
+                    "rfg_outcome": _redacted_callback_parameters(
+                        describe_rfg_outcome(callback_parameters)
+                    ),
+                }
+                locked.save(update_fields=[
+                    "status", "callback_at", "last_callback_at", "callback_ip", "callback_count",
+                    "status_source", "is_verified", "loi_seconds", "upstream_transaction_data", "updated_at",
+                ])
+                finalize_attempt_capacity(locked)
+        queue_supplier_result_callback(locked)
+        payload = {
             "ok": True,
             "rid": locked.rid,
             "status": locked.status,
-        })
+        }
+        if idempotent:
+            payload["idempotent"] = True
+        return Response(payload)
 
 
 def _external_supplier_result_url(attempt, status_code: str) -> str:
-    """Build the configured external-supplier callback without leaking secrets.
+    """Compatibility wrapper for existing callers and callback URL tests."""
 
-    The provider callback is first attached to our immutable SurveyAttempt.
-    Only then do we forward the canonical platform identifiers and normalized
-    provider reason. Optional signing is HMAC-SHA256 over the sorted query.
+    return build_supplier_result_url(attempt, status_code)
+
+
+CALLBACK_TRACKING_PARAMETER_NAMES = (
+    "tid", "TID", "trackId", "rid", "RID", "pid", "PID", "qsid", "QSID",
+    "token", "vq_token", "vendor_user_id", "vq_uid",
+)
+
+
+def _status_callback_has_duplicate_security_parameters(request):
+    """Reject ambiguous query strings instead of trusting QueryDict's last value."""
+
+    return _request_has_duplicate_query_parameters(request) or len(request.GET.getlist("status")) != 1 or any(
+        len(request.GET.getlist(name)) > 1
+        for name in CALLBACK_TRACKING_PARAMETER_NAMES
+    )
+
+
+def _resolve_status_attempt(attempts, identifiers):
+    """Resolve tracking values without letting one value select another journey.
+
+    RID, platform PID and registration UID are unique anchors. Reusable provider
+    profile UIDs may point at many attempts, so they can only refine an anchored
+    callback or resolve independently when exactly one journey exists.
     """
 
-    if not attempt.supplier_api_key_id:
-        return ""
-    api_key = VendorAPIKey.objects.filter(pk=attempt.supplier_api_key_id).first()
-    if not api_key:
-        return ""
-    callback_url = api_key.callback_url_for_status(status_code)
-    if not callback_url:
-        return ""
-    outcome = provider_outcome(attempt)
-    delivery = attempt.supplier_delivery_config or {}
-    parameters = {
-        "status": str(status_code),
-        "surveyId": str(delivery.get("survey_id") or attempt.survey.local_id),
-        "projectId": attempt.survey.local_id,
-        "rid": attempt.rid,
-        "pid": attempt.pid,
-        "statusSource": attempt.status_source or "browser_callback",
-        "termReason": outcome.get("reason", ""),
-        "termCategory": outcome.get("category", ""),
-    }
-    if api_key.callback_signing_enabled:
-        try:
-            secret = decrypt_secret(api_key.encrypted_callback_secret)
-        except ValueError:
-            logger.exception("Could not decrypt supplier callback secret api_key=%s", api_key.pk)
-            return ""
-        if not secret:
-            logger.error("Supplier callback signing is enabled without a secret api_key=%s", api_key.pk)
-            return ""
-        parameters["hash"] = sign_supplier_callback(parameters, secret)
-    separator = "&" if "?" in callback_url else "?"
-    return f"{callback_url}{separator}{urlencode(parameters)}"
+    identifiers = [str(value).strip() for value in identifiers if str(value).strip()]
+    if not identifiers:
+        return None
+    unique_matches = list(attempts.filter(
+        Q(rid__in=identifiers)
+        | Q(pid__in=identifiers)
+        | Q(prescreener_uid__in=identifiers)
+    ))
+    unique_match_ids = {attempt.pk for attempt in unique_matches}
+    if len(unique_match_ids) > 1:
+        return None
+    if unique_matches:
+        anchor = unique_matches[0]
+        anchor_values = {
+            anchor.rid,
+            anchor.pid,
+            anchor.prescreener_uid or "",
+            anchor.provider_profile_uid or "",
+        }
+        profile_values = set(
+            attempts.filter(provider_profile_uid__in=identifiers)
+            .exclude(provider_profile_uid="")
+            .values_list("provider_profile_uid", flat=True)
+        )
+        if any(value in profile_values and value not in anchor_values for value in identifiers):
+            return None
+        return anchor
+
+    profile_matches = list(
+        attempts.filter(provider_profile_uid__in=identifiers)
+        .exclude(provider_profile_uid="")
+        .order_by("-initiated_at")
+    )
+    profile_match_ids = {attempt.pk for attempt in profile_matches}
+    return profile_matches[0] if len(profile_match_ids) == 1 else None
 
 
 @require_http_methods(["GET"])
 def survey_status(request):
+    if _status_callback_has_duplicate_security_parameters(request):
+        return _invalid_callback_response(request)
     status_code = request.GET.get("status", "").strip()
     callback_identifiers = status_identifiers_from_request(request)
     callback_identifier = callback_identifiers[0] if callback_identifiers else ""
@@ -2528,16 +2895,7 @@ def survey_status(request):
     # Canonical journey IDs always win. Provider profile UIDs may deliberately
     # repeat, so that fallback resolves to the newest matching journey only
     # when no RID/PID/new registration UID was returned.
-    attempt = attempts.filter(rid__in=callback_identifiers).first()
-    if attempt is None:
-        attempt = attempts.filter(pid__in=callback_identifiers).first()
-    if attempt is None:
-        attempt = attempts.filter(prescreener_uid__in=callback_identifiers).first()
-    if attempt is None:
-        attempt = attempts.filter(
-            provider_profile_uid__in=callback_identifiers
-        ).order_by("-initiated_at").first()
-    canonical_rid = attempt.rid if attempt else callback_identifier
+    attempt = _resolve_status_attempt(attempts, callback_identifiers)
     provider_code = (
         attempt.survey.integration.provider_code
         if attempt and attempt.survey.integration_id
@@ -2545,13 +2903,37 @@ def survey_status(request):
     )
     ip_address = get_request_ip(request)
     if attempt:
-        canonical_query = set(request.GET.keys()) == {"status", "pid"} and (
+        canonical_query = _has_exact_query(request, {"status", "pid"}) and (
             request.GET.get("pid", "").strip() == attempt.pid
         )
+        # The clean PID URL is a display URL only. It may render the immutable
+        # result already stored on the attempt, but it can never create or
+        # replace a provider outcome.
+        if canonical_query:
+            if (
+                attempt.status not in TERMINAL_ATTEMPT_STATUSES
+                or attempt.status != status_code
+            ):
+                return _invalid_callback_response(request)
+            return _render_recorded_status(request, attempt, ip_address)
+
+        # RFG has a dedicated server-to-server callback with an IP allowlist.
+        # Its browser-visible RID/PID must never be accepted as proof of a
+        # terminal result by this generic redirect endpoint.
+        if provider_code == "rfg":
+            logger.warning(
+                "Rejected unverified RFG browser callback rid=%s ip=%s",
+                attempt.rid,
+                ip_address or "unknown",
+            )
+            return render(request, "surveys/flow_error.html", {
+                "title": "Invalid survey callback",
+                "message": "This survey result could not be verified and was not recorded.",
+            }, status=403)
+
         innovate_callback_verified = False
         if (
             provider_code == "innovatemr"
-            and not canonical_query
             and settings.INNOVATEMR_CALLBACK_HASH_REQUIRED
         ):
             verification = verify_callback_request(request)
@@ -2567,27 +2949,40 @@ def survey_status(request):
                     "message": "This survey result could not be verified and was not recorded.",
                 }, status=403)
             innovate_callback_verified = True
+        transitioned = False
         with transaction.atomic():
             attempt = SurveyAttempt.objects.select_related(
                 "survey__integration"
             ).select_for_update().get(pk=attempt.pk)
+            if attempt.status in TERMINAL_ATTEMPT_STATUSES:
+                # Raw browser/provider callbacks are single-use even when the
+                # replay claims the same result. Only the exact clean PID URL
+                # handled above may display a finalized outcome.
+                return _invalid_callback_response(request)
+            elif (
+                attempt.status not in PENDING_ATTEMPT_STATUSES
+                or attempt.callback_at is not None
+            ):
+                return _invalid_callback_response(request)
+            else:
+                transitioned = True
+
             now = timezone.now()
-            exit_client_data = get_request_client_data(request)
-            if innovate_callback_verified:
-                exit_client_data["innovatemr_callback"] = {
-                    "status": status_code,
-                    "termReason": str(
-                        request.GET.get("termReason")
-                        or request.GET.get("term_reason")
-                        or request.GET.get("reason")
-                        or ""
-                    ).strip()[:1000],
-                    "closeQuotaId": str(request.GET.get("closeQuotaId") or "").strip()[:160],
-                    "surveyId": str(request.GET.get("surveyId") or "").strip()[:160],
-                    "verifiedAt": now.isoformat(),
-                }
-            first_callback = attempt.callback_at is None
-            if attempt.callback_at is None:
+            if transitioned:
+                exit_client_data = get_request_client_data(request)
+                if innovate_callback_verified:
+                    exit_client_data["innovatemr_callback"] = {
+                        "status": status_code,
+                        "termReason": str(
+                            request.GET.get("termReason")
+                            or request.GET.get("term_reason")
+                            or request.GET.get("reason")
+                            or ""
+                        ).strip()[:1000],
+                        "closeQuotaId": str(request.GET.get("closeQuotaId") or "").strip()[:160],
+                        "surveyId": str(request.GET.get("surveyId") or "").strip()[:160],
+                        "verifiedAt": now.isoformat(),
+                    }
                 attempt.callback_at = now
                 attempt.callback_ip = ip_address
                 attempt.loi_seconds = attempt.calculate_loi_seconds(now)
@@ -2602,22 +2997,16 @@ def survey_status(request):
                     if innovate_callback_verified
                     else "browser_callback"
                 )
-            update_fields = [
-                "callback_at", "callback_ip", "loi_seconds", "status", "exit_user_agent", "exit_browser",
-                "exit_device", "exit_os", "exit_client_data", "status_source",
-            ]
-            if first_callback or not canonical_query:
                 attempt.last_callback_at = now
                 attempt.callback_count += 1
-                update_fields.extend(["last_callback_at", "callback_count"])
-            if not canonical_query:
-                callback_data = dict(request.GET.items())
-                # The Cint respondent hash is an upstream transport signature.
-                # It is neither shown in the clean result URL nor persisted in
-                # plaintext audit JSON.
-                for callback_key in list(callback_data):
-                    if callback_key.casefold() in {"hash", "hashdata"}:
-                        callback_data[callback_key] = "[redacted]"
+                update_fields = [
+                    "callback_at", "callback_ip", "loi_seconds", "status", "exit_user_agent",
+                    "exit_browser", "exit_device", "exit_os", "exit_client_data", "status_source",
+                    "last_callback_at", "callback_count",
+                ]
+                callback_data = _redacted_callback_parameters(
+                    dict(request.GET.items())
+                )
                 audit_key = (
                     "rfg_browser_return" if provider_code == "rfg"
                     else "cint_browser_return" if provider_code == "cint"
@@ -2634,18 +3023,22 @@ def survey_status(request):
                     )
                 attempt.upstream_transaction_data = audit
                 update_fields.append("upstream_transaction_data")
-            if innovate_callback_verified:
-                attempt.is_verified = True
-                update_fields.append("is_verified")
-            attempt.save(update_fields=list(dict.fromkeys(update_fields + ["updated_at"])))
-            finalize_attempt_capacity(attempt)
-        status_label = attempt.get_status_display()
-        if not canonical_query:
-            supplier_callback_url = _external_supplier_result_url(attempt, status_code)
+                if innovate_callback_verified:
+                    attempt.is_verified = True
+                    update_fields.append("is_verified")
+                attempt.save(update_fields=list(dict.fromkeys(update_fields + ["updated_at"])))
+                finalize_attempt_capacity(attempt)
+
+        # From this point on, redirects and downstream callbacks always use
+        # the locked database outcome, never the request's untrusted status.
+        status_code = attempt.status
+        page = STATUS_PAGES[status_code]
+        if transitioned:
+            supplier_callback_url = _external_supplier_result_url(attempt, attempt.status)
             if supplier_callback_url:
                 return HttpResponseRedirect(supplier_callback_url)
-            clean_query = urlencode({"status": status_code, "pid": attempt.pid})
-            return HttpResponseRedirect(f"{reverse('survey-status')}?{clean_query}")
+        clean_query = urlencode({"status": attempt.status, "pid": attempt.pid})
+        return HttpResponseRedirect(f"{reverse('survey-status')}?{clean_query}")
     else:
         status_label = "Unknown attempt"
 
@@ -2654,9 +3047,7 @@ def survey_status(request):
     return render(request, "surveys/status.html", {
         **page,
         "status_label": status_label,
-        "rid": canonical_rid,
         "pid": attempt.pid if attempt else callback_identifier,
-        "display_rid": provider_code == "rfg",
         "ip_address": ip_address,
         "loi_seconds": attempt.loi_seconds if attempt else None,
         "attempt_found": bool(attempt),
@@ -2735,6 +3126,44 @@ class ProviderQuestionMappingViewSet(viewsets.ReadOnlyModelViewSet):
         return queryset
 
 
+class SurveySearchFilter(filters.SearchFilter):
+    """Search only project attributes the requesting account may receive."""
+
+    def get_search_fields(self, view, request):
+        codes = effective_permission_codes(request.user)
+        search_fields = []
+        if "projects.column.project_id" in codes or "projects.column.actions" in codes:
+            search_fields.append("local_id")
+        if "projects.column.survey" in codes:
+            search_fields.extend([
+                "=source_key", "=source_id", "name", "buyer_id", "survey_type",
+            ])
+        if "projects.column.client_name" in codes:
+            search_fields.append("company_name")
+        if "projects.column.market" in codes:
+            search_fields.extend(["country", "country_code"])
+        if "projects.column.loi_ir" in codes:
+            search_fields.extend(["group_type", "job_category"])
+        return search_fields
+
+    def filter_queryset(self, request, queryset, view):
+        terms = self.get_search_terms(request)
+        if len(terms) == 1:
+            term = str(terms[0]).strip()
+            codes = effective_permission_codes(request.user)
+            exact_query = Q(pk__isnull=True)
+            if "projects.column.project_id" in codes or "projects.column.actions" in codes:
+                exact_query |= Q(local_id=term)
+            if "projects.column.survey" in codes:
+                exact_query |= Q(source_key=term) | Q(buyer_id=term)
+                if term.isdigit() and len(term) <= 18:
+                    exact_query |= Q(source_id=int(term))
+            exact_queryset = queryset.filter(exact_query)
+            if exact_queryset.exists():
+                return exact_queryset
+        return super().filter_queryset(request, queryset, view)
+
+
 @extend_schema_view(
     list=extend_schema(
         tags=["Surveys"],
@@ -2752,7 +3181,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     project_count_cache_enabled = True
     lookup_field = "local_id"
     filterset_class = SurveyFilter
-    filter_backends = [DjangoFilterBackend, filters.SearchFilter, filters.OrderingFilter]
+    filter_backends = [DjangoFilterBackend, SurveySearchFilter, filters.OrderingFilter]
     search_fields = ["local_id", "=source_key", "=source_id", "name", "company_name", "buyer_id", "survey_type", "country", "country_code", "job_category"]
     ordering_fields = ["source_modified_at", "source_created_at", "cpi", "sample_size", "completes", "created_at"]
     ordering = ["-source_modified_at", "-created_at"]
@@ -2771,13 +3200,13 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
             self.request.query_params.get(name) not in {None, ""}
             for name in ("min_cpi", "max_cpi")
         )
-        if self.action != "list" or cpi_ordering or cpi_filtering:
+        if self.action in {"retrieve", "export"} or cpi_ordering or cpi_filtering:
             queryset = annotate_survey_pricing_for_user(queryset, self.request.user)
 
         # A list page needs completes for only the rows it returns. Detail and
         # export paths keep the correlated annotation because they consume the
         # queryset outside the paginated list handler.
-        if self.action != "list":
+        if self.action in {"retrieve", "export"}:
             completed_attempts = (
                 SurveyAttempt.objects.filter(
                     survey_id=OuterRef("pk"),
@@ -2832,7 +3261,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
     def get_required_function_permission(self):
         if self.action == "export":
             return "projects.export"
-        return "survey_details.view" if self.action in {"retrieve", "quotas", "targeting"} else "projects.view"
+        return "survey_details.view" if self.action in {"retrieve", "quotas", "targeting", "details"} else "projects.view"
 
     def filter_queryset(self, queryset):
         _enforce_query_permissions(self.request, {
@@ -2948,7 +3377,11 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         except (InnovateMRAPIError, ProviderError) as exc:
             if survey.quota_synced_at is None and not survey.quotas.exists():
                 raise UpstreamUnavailable(str(exc)) from exc
-        return Response(SurveyQuotaSerializer(survey.quotas.all(), many=True).data)
+        questions = list(survey.targeting_questions.all())
+        return Response(SurveyQuotaSerializer(
+            survey.quotas.all(), many=True,
+            context={"targeting_questions": questions},
+        ).data)
 
     @extend_schema(
         tags=["Survey details"],
@@ -2965,6 +3398,41 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
             if survey.targeting_synced_at is None and not survey.targeting_questions.exists():
                 raise UpstreamUnavailable(str(exc)) from exc
         return Response(TargetingQuestionSerializer(survey.targeting_questions.all(), many=True).data)
+
+    @extend_schema(
+        tags=["Survey details"],
+        summary="Get a survey's targeting and quotas together",
+        description="Returns the same normalized detail payloads used by the two drawer tabs in one request.",
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    @action(detail=True, methods=["get"], url_path="details")
+    def details(self, request, local_id=None):
+        survey = self.get_object()
+        detail_errors = {}
+        for detail_type, relation_name, synced_field in (
+            ("targeting", "targeting_questions", "targeting_synced_at"),
+            ("quotas", "quotas", "quota_synced_at"),
+        ):
+            try:
+                self._refresh_if_stale(survey, detail_type)
+            except (InnovateMRAPIError, ProviderError) as exc:
+                relation = getattr(survey, relation_name)
+                if getattr(survey, synced_field) is None and not relation.exists():
+                    # The former two-request drawer allowed one tab to remain
+                    # usable when only the other upstream payload failed. Keep
+                    # that partial-success behavior in the combined response.
+                    detail_errors[detail_type] = str(exc)
+            survey.refresh_from_db(fields=["quota_synced_at", "targeting_synced_at"])
+
+        questions = list(survey.targeting_questions.all())
+        quotas = list(survey.quotas.all())
+        return Response({
+            "targeting": TargetingQuestionSerializer(questions, many=True).data,
+            "quotas": SurveyQuotaSerializer(
+                quotas, many=True, context={"targeting_questions": questions}
+            ).data,
+            "errors": detail_errors,
+        })
 
 
 class SyncTriggerView(APIView):
@@ -3211,15 +3679,14 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
 
     def get_queryset(self):
         if getattr(self, "action", None) == "list":
-            queryset = SurveyAttempt.objects.select_related(
-                "survey", "survey__client", "survey__integration", "platform_user", "client",
-            ).only(
+            permission_codes = effective_permission_codes(self.request.user)
+            selected_fields = [
                 "id", "survey_id", "platform_user_id", "client_id",
                 "rid", "pid", "prescreener_uid", "provider_profile_uid", "user_id",
                 "source_cpi_snapshot", "cpi_snapshot_source", "cpi_cut_percent_snapshot",
                 "payable_cpi_snapshot", "cpi_currency_snapshot",
                 "status", "initiated_at", "callback_at", "loi_seconds",
-                "initiation_ip", "callback_ip", "entry_device", "upstream_transaction_data",
+                "initiation_ip", "callback_ip", "entry_device",
                 "survey__id", "survey__client_id", "survey__integration_id",
                 "survey__local_id", "survey__source_id", "survey__source_key",
                 "survey__company_name", "survey__country", "survey__country_code",
@@ -3230,7 +3697,16 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
                 "platform_user__id", "platform_user__username", "platform_user__first_name",
                 "platform_user__last_name", "platform_user__email",
                 "client__id", "client__name",
-            )
+            ]
+            if STUDY_STATUS_SOURCE_PERMISSION in permission_codes:
+                selected_fields.append("status_source")
+            if STUDY_PROVIDER_STATUS_PERMISSION in permission_codes:
+                selected_fields.extend([
+                    "upstream_transaction_data", "is_verified", "exit_client_data",
+                ])
+            queryset = SurveyAttempt.objects.select_related(
+                "survey", "survey__client", "survey__integration", "platform_user", "client",
+            ).only(*selected_fields)
         else:
             queryset = SurveyAttempt.objects.select_related(
                 "survey", "survey__client", "survey__integration", "platform_user", "platform_user__employee_profile", "platform_user__employee_profile__role",
@@ -3352,12 +3828,19 @@ class DashboardAPIView(APIView):
         )) and DASHBOARD_GRAPH_FILTER_PERMISSIONS["finance"] not in codes:
             raise PermissionDenied("Your account cannot filter the Finance dashboard graph.")
         def load_dashboard():
-            range_window = dashboard_range_window(request.query_params.get("range", "24h"))
+            # Anchor all three windows to one instant. Equal range selections
+            # then have exactly equal buckets and can safely reuse one series.
+            dashboard_now = timezone.now()
+            range_window = dashboard_range_window(
+                request.query_params.get("range", "24h"), now=dashboard_now
+            )
             traffic_window = dashboard_range_window(
-                request.query_params.get("traffic_range") or range_window["key"]
+                request.query_params.get("traffic_range") or range_window["key"],
+                now=dashboard_now,
             )
             finance_window = dashboard_range_window(
-                request.query_params.get("finance_range") or range_window["key"]
+                request.query_params.get("finance_range") or range_window["key"],
+                now=dashboard_now,
             )
             visible_queryset = dashboard_attempts(request.user, {})
             client_options = dashboard_client_options(visible_queryset)
@@ -3601,6 +4084,8 @@ def _attempt_excel_rows(queryset, requesting_user=None):
     permitted = set(_permitted_columns(
         effective_permission_codes(requesting_user), STUDY_COLUMN_PERMISSIONS
     ))
+    if "pid" in permitted:
+        permitted.discard("respondent_id")
     specs = {
         "project_id": (
             ["Project id"] + (["Client name"] if can_view_client_name else []),

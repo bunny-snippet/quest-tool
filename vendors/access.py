@@ -3,6 +3,7 @@
 from django.db.models import Q
 
 from accounts.models import EmployeeProfile
+from accounts.profile_context import employee_profile_for_user
 from accounts.request_cache import request_cached
 
 
@@ -50,9 +51,7 @@ def vendor_scope_user_id(user) -> int | None:
     visited: set[int] = set()
     while current and current.pk not in visited:
         visited.add(current.pk)
-        profile = EmployeeProfile.objects.select_related(
-            "created_by", "organization_unit__workspace_owner__employee_profile"
-        ).filter(user=current).first()
+        profile = employee_profile_for_user(current)
         if not profile:
             user._vendor_scope_user_id_cache = None
             return None

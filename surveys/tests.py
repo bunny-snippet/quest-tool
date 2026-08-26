@@ -9,7 +9,7 @@ from urllib.parse import parse_qs, urlsplit
 from zoneinfo import ZoneInfo
 from xml.etree import ElementTree
 
-from django.test import TestCase, override_settings
+from django.test import RequestFactory, TestCase, override_settings
 from django.contrib.auth import get_user_model
 from django.core.cache import caches
 from django.db import connection
@@ -32,6 +32,7 @@ from .models import (
     SyncRun,
     TargetingQuestion,
 )
+from .providers.base import ProviderError
 from .services import (
     merge_inventory,
     parse_upstream_datetime,
@@ -40,6 +41,11 @@ from .services import (
     sync_surveys,
 )
 from .survey_flow import build_outbound_url, create_attempt
+from .views import (
+    PRESCREENER_MAX_LIST_VALUES,
+    PRESCREENER_MAX_TEXT_LENGTH,
+    _collect_prescreener_answers,
+)
 
 
 def xlsx_rows(response, sheet_number=1):
@@ -373,10 +379,81 @@ class SurveyAPITests(TestCase):
         self.assertEqual(response.data["results"][0]["local_id"], self.survey.local_id)
         self.assertEqual(response.data["results"][0]["company_name"], "InnovateMR")
         self.assertIn("source_modified_display", response.data["results"][0])
-        self.assertEqual(
-            response.data["results"][0]["start_link"],
-            f"http://testserver/survey/start?surveyId=9876&supplierCode=1000&userId={self.user.pk}&code={self.survey.local_id}",
+        self.assertNotIn("entry_link", response.data["results"][0])
+        start_link = response.data["results"][0]["start_link"]
+        parsed = urlsplit(start_link)
+        query = parse_qs(parsed.query)
+        self.assertEqual(parsed.path, reverse("survey-start"))
+        self.assertEqual(set(query), {"entry"})
+        self.assertNotIn(str(self.survey.source_id), start_link)
+        self.assertNotIn(str(self.survey.local_id), start_link)
+        self.assertNotIn(f"userId={self.user.pk}", start_link)
+
+    def test_secure_start_link_allocates_pid_server_side_and_hides_rid(self):
+        listing = self.api.get(reverse("survey-list"), {"search": "banking"})
+        start_link = listing.data["results"][0]["start_link"]
+
+        gate = self.client.get(start_link, REMOTE_ADDR="10.10.10.10")
+        self.assertEqual(gate.status_code, 200)
+        self.assertEqual(SurveyAttempt.objects.count(), 0)
+        entry_token = parse_qs(urlsplit(start_link).query)["entry"][0]
+        started = self.client.post(
+            reverse("survey-start"),
+            {"entry": entry_token},
+            REMOTE_ADDR="10.10.10.10",
         )
+
+        self.assertEqual(started.status_code, 302)
+        continuation = urlsplit(started["Location"])
+        self.assertEqual(set(parse_qs(continuation.query)), {"journey"})
+        attempt = SurveyAttempt.objects.get(survey=self.survey, platform_user=self.user)
+        journey = parse_qs(continuation.query)["journey"][0]
+        self.assertNotIn(attempt.rid, started["Location"])
+        self.assertNotIn(attempt.pid, started["Location"])
+
+        form = self.client.get(started["Location"])
+        self.assertContains(form, attempt.pid)
+        self.assertNotContains(form, attempt.rid)
+        self.assertContains(form, f'name="journey" value="{journey}"')
+        self.assertNotContains(form, 'name="pid"')
+
+        # Copying the opaque continuation into another browser session cannot
+        # select or mutate the victim's attempt.
+        attacker = self.client_class()
+        rejected = attacker.get(started["Location"])
+        self.assertEqual(rejected.status_code, 400)
+
+        injected = self.client.post(reverse("survey-start"), {
+            "journey": journey,
+            "pid": attempt.pid,
+            "question_1": "anything",
+        })
+        self.assertEqual(injected.status_code, 400)
+
+    def test_tampered_secure_start_link_is_rejected_without_creating_attempt(self):
+        listing = self.api.get(reverse("survey-list"), {"search": "banking"})
+        parsed = urlsplit(listing.data["results"][0]["start_link"])
+        token = parse_qs(parsed.query)["entry"][0]
+        position = len(token) // 2
+        replacement = "A" if token[position] != "A" else "B"
+        tampered = token[:position] + replacement + token[position + 1:]
+
+        response = self.client.get(reverse("survey-start"), {"entry": tampered})
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(SurveyAttempt.objects.count(), 0)
+
+    @override_settings(ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS=False)
+    def test_unsigned_legacy_entry_parameters_are_rejected(self):
+        response = self.client.get(reverse("survey-start"), {
+            "surveyId": self.survey.source_id,
+            "supplierCode": "1000",
+            "userId": self.user.pk,
+            "code": self.survey.local_id,
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertEqual(SurveyAttempt.objects.count(), 0)
 
     def test_multi_value_filters_use_or_within_each_filter(self):
         Survey.objects.create(
@@ -518,6 +595,35 @@ class SurveyAPITests(TestCase):
             Decimal("12"),
         )
 
+    def test_project_list_query_count_does_not_scale_with_page_rows(self):
+        for index in range(12):
+            Survey.objects.create(
+                source_id=9900 + index,
+                name=f"Query count project {index}",
+                country="United States",
+                country_code="US",
+                status=Survey.Status.LIVE,
+            )
+
+        url = reverse("survey-list")
+        caches["projects"].clear()
+        self.addCleanup(caches["projects"].clear)
+        warm_response = self.api.get(url, {"page_size": 20})
+        self.assertEqual(warm_response.status_code, 200)
+
+        def captured_response(page_size):
+            with CaptureQueriesContext(connection) as captured:
+                response = self.api.get(url, {"page_size": page_size})
+            self.assertEqual(response.status_code, 200)
+            return response, list(captured.captured_queries)
+
+        single_row, single_row_queries = captured_response(1)
+        multiple_rows, multiple_row_queries = captured_response(20)
+
+        self.assertEqual(len(single_row.data["results"]), 1)
+        self.assertGreater(len(multiple_rows.data["results"]), 1)
+        self.assertEqual(len(single_row_queries), len(multiple_row_queries))
+
     def test_project_export_uses_filters_and_column_permissions(self):
         UserFunctionOverride.objects.create(
             user=self.user,
@@ -554,16 +660,50 @@ class SurveyAPITests(TestCase):
         client_denied_rows = xlsx_rows(self.api.get(reverse("survey-export")))
         self.assertNotIn("Client", client_denied_rows[0])
         client_denied_list = self.api.get(reverse("survey-list"))
-        self.assertEqual(client_denied_list.data["results"][0]["client_name"], "")
-        self.assertEqual(client_denied_list.data["results"][0]["display_company_name"], "")
-        self.assertEqual(client_denied_list.data["results"][0]["company_name"], "")
+        self.assertNotIn("client_name", client_denied_list.data["results"][0])
+        self.assertNotIn("display_company_name", client_denied_list.data["results"][0])
+        self.assertNotIn("company_name", client_denied_list.data["results"][0])
 
     def test_detail_actions_return_cached_data(self):
         quota = self.api.get(reverse("survey-quotas", kwargs={"local_id": self.survey.local_id}))
         targeting = self.api.get(reverse("survey-targeting", kwargs={"local_id": self.survey.local_id}))
+        combined = self.api.get(reverse("survey-details", kwargs={"local_id": self.survey.local_id}))
         self.assertEqual(quota.status_code, 200)
         self.assertEqual(quota.data[0]["quota_id"], 1)
         self.assertEqual(targeting.data[0]["key"], "GENDER")
+        self.assertEqual(combined.status_code, 200)
+        self.assertEqual(combined.data["quotas"], quota.data)
+        self.assertEqual(combined.data["targeting"], targeting.data)
+
+        detail = self.api.get(reverse("survey-detail", kwargs={"local_id": self.survey.local_id}))
+        self.assertNotIn("entry_link", detail.data)
+        self.assertNotIn("test_entry_link", detail.data)
+
+    def test_combined_details_preserves_the_available_tab_on_partial_failure(self):
+        self.survey.targeting_questions.all().delete()
+        self.survey.targeting_synced_at = None
+        self.survey.save(update_fields=["targeting_synced_at"])
+
+        def refresh(_survey, detail_type):
+            if detail_type == "targeting":
+                raise ProviderError("Targeting is temporarily unavailable.")
+
+        with patch(
+            "surveys.views.SurveyViewSet._refresh_if_stale",
+            side_effect=refresh,
+        ):
+            response = self.api.get(
+                reverse("survey-details", kwargs={"local_id": self.survey.local_id})
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["targeting"], [])
+        self.assertEqual(
+            response.data["errors"]["targeting"],
+            "Targeting is temporarily unavailable.",
+        )
+        self.assertNotIn("quotas", response.data["errors"])
+        self.assertEqual(response.data["quotas"][0]["quota_id"], 1)
 
     def test_missing_upstream_quota_is_an_empty_successful_result(self):
         self.survey.quota_synced_at = None
@@ -603,6 +743,153 @@ class SurveyAPITests(TestCase):
         self.assertContains(admin_projects, 'id="cpiMaxRange"')
 
 
+class PrescreenerAnswerValidationTests(TestCase):
+    def setUp(self):
+        self.survey = Survey.objects.create(
+            source_key="prescreener-validation",
+            name="Prescreener validation",
+            status=Survey.Status.LIVE,
+            company_name="Validation provider",
+            country_code="US",
+            language_code="EN",
+        )
+        self.gender = TargetingQuestion.objects.create(
+            survey=self.survey,
+            question_id=1,
+            key="GENDER",
+            text="What is your gender?",
+            question_type="Single Punch",
+            options=[
+                {"OptionId": "1", "OptionText": "Male"},
+                {"OptionId": "2", "OptionText": "Female"},
+            ],
+        )
+        self.age = TargetingQuestion.objects.create(
+            survey=self.survey,
+            question_id=2,
+            key="AGE",
+            text="What is your age?",
+            question_type="Numeric Open Ended",
+            options=[{"OptionId": "adult", "ageStart": 18, "ageEnd": 64}],
+        )
+        self.hobbies = TargetingQuestion.objects.create(
+            survey=self.survey,
+            question_id=3,
+            key="HOBBIES",
+            text="Which hobbies do you enjoy?",
+            question_type="Multi Punch",
+            options=[
+                {"OptionId": "a", "OptionText": "Art"},
+                {"OptionId": "b", "OptionText": "Books"},
+            ],
+        )
+        self.dob = TargetingQuestion.objects.create(
+            survey=self.survey,
+            question_id=4,
+            key="DOB",
+            text="What is your date of birth?",
+            question_type="Date",
+            options=[],
+        )
+        self.comment = TargetingQuestion.objects.create(
+            survey=self.survey,
+            question_id=5,
+            key="COMMENT",
+            text="Tell us something about yourself",
+            question_type="Open Ended",
+            options=[],
+        )
+        self.factory = RequestFactory()
+
+    @staticmethod
+    def field(question):
+        return f"question_{question.pk}"
+
+    def valid_payload(self):
+        return {
+            self.field(self.gender): "1",
+            self.field(self.age): "30",
+            self.field(self.hobbies): ["a"],
+            self.field(self.dob): "01-01-1990",
+            self.field(self.comment): "A valid answer",
+        }
+
+    def collect(self, payload):
+        request = self.factory.post("/survey/start", payload)
+        return _collect_prescreener_answers(request, self.survey)
+
+    def test_scalar_controls_reject_repeated_post_keys(self):
+        repeated_values = (
+            (self.gender, ["1", "2"]),
+            (self.age, ["30", "31"]),
+            (self.dob, ["01-01-1990", "02-02-1990"]),
+            (self.comment, ["first", "second"]),
+        )
+        for question, values in repeated_values:
+            with self.subTest(question=question.key):
+                payload = self.valid_payload()
+                payload[self.field(question)] = values
+
+                answers, errors = self.collect(payload)
+
+                self.assertNotIn(str(question.pk), answers)
+                self.assertTrue(any("exactly one answer" in error for error in errors))
+
+    def test_checkbox_values_are_deduplicated_in_submission_order(self):
+        payload = self.valid_payload()
+        payload[self.field(self.hobbies)] = ["b", "a", "b"]
+
+        answers, errors = self.collect(payload)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(answers[str(self.hobbies.pk)]["values"], ["b", "a"])
+        self.assertEqual(
+            answers[str(self.hobbies.pk)]["upstream_values"], ["b", "a"]
+        )
+
+    def test_numeric_minimum_and_maximum_are_enforced_inclusively(self):
+        for invalid_age in (17, 65):
+            with self.subTest(invalid_age=invalid_age):
+                payload = self.valid_payload()
+                payload[self.field(self.age)] = str(invalid_age)
+
+                answers, errors = self.collect(payload)
+
+                self.assertNotIn(str(self.age.pk), answers)
+                self.assertTrue(any("between 18 and 64" in error for error in errors))
+
+        for boundary_age in (18, 64):
+            with self.subTest(boundary_age=boundary_age):
+                payload = self.valid_payload()
+                payload[self.field(self.age)] = str(boundary_age)
+
+                answers, errors = self.collect(payload)
+
+                self.assertEqual(errors, [])
+                self.assertEqual(
+                    answers[str(self.age.pk)]["upstream_values"], [str(boundary_age)]
+                )
+
+    def test_text_and_checkbox_submission_limits_are_enforced(self):
+        payload = self.valid_payload()
+        payload[self.field(self.comment)] = "x" * (PRESCREENER_MAX_TEXT_LENGTH + 1)
+        answers, errors = self.collect(payload)
+        self.assertNotIn(str(self.comment.pk), answers)
+        self.assertTrue(any("Answer is too long" in error for error in errors))
+
+        payload = self.valid_payload()
+        payload[self.field(self.hobbies)] = [
+            "a" for _ in range(PRESCREENER_MAX_LIST_VALUES + 1)
+        ]
+        answers, errors = self.collect(payload)
+        self.assertNotIn(str(self.hobbies.pk), answers)
+        self.assertTrue(any("Too many answers" in error for error in errors))
+
+
+@override_settings(
+    ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS=True,
+    INNOVATEMR_CALLBACK_HASH_REQUIRED=False,
+)
 class SurveyFlowTests(TestCase):
     def setUp(self):
         now = timezone.now()
@@ -976,7 +1263,7 @@ class SurveyFlowTests(TestCase):
             "supplierCode": "1000",
             "userId": self.platform_user.pk,
             "code": self.survey.local_id,
-        }, REMOTE_ADDR="127.0.0.1", HTTP_X_FORWARDED_FOR="8.8.8.8, 127.0.0.1")
+        }, REMOTE_ADDR="127.0.0.1", HTTP_X_REAL_IP="8.8.8.8")
         rid = parse_qs(urlsplit(start["Location"]).query)["rid"][0]
         callback = self.client.get(
             reverse("survey-status"), {"status": "2", "rid": rid}, REMOTE_ADDR="127.0.0.1",
@@ -1103,7 +1390,7 @@ class SurveyFlowTests(TestCase):
             reverse("survey-start"),
             {"rid": rid},
             REMOTE_ADDR="127.0.0.1",
-            HTTP_X_FORWARDED_FOR="8.8.8.8, 127.0.0.1",
+            HTTP_X_REAL_IP="8.8.8.8",
             HTTP_USER_AGENT="Mozilla/5.0 (Windows NT 10.0) Chrome/126.0.0.0",
             HTTP_ACCEPT_LANGUAGE="en-IN,en;q=0.9",
         )
@@ -1225,7 +1512,7 @@ class StudiesTrackingTests(TestCase):
         self.assertContains(page, "Idle Studies")
         self.assertContains(page, "Canada · CA")
         self.assertContains(page, '<th class="study-col-cpi">CPI</th>', html=True)
-        self.assertContains(page, '<th class="study-col-rid">RID / UID</th>', html=True)
+        self.assertNotContains(page, '<th class="study-col-rid">RID / UID</th>', html=True)
         self.assertContains(page, '<th class="study-col-pid">PID</th>', html=True)
         self.assertContains(page, 'data-multi-filter="branch"')
         self.assertContains(page, 'data-multi-filter="sub_branch"')
@@ -1251,9 +1538,9 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
         result = response.data["results"][0]
-        self.assertEqual(result["rid"], self.complete.rid)
         self.assertEqual(result["pid"], self.complete.pid)
-        self.assertEqual(result["prescreener_uid"], self.complete.prescreener_uid)
+        self.assertNotIn("rid", result)
+        self.assertNotIn("prescreener_uid", result)
         self.assertEqual(result["user_name"], "Kanik Sharma")
         self.assertEqual(result["entry_ip"], "10.0.0.1")
         self.assertEqual(result["exit_ip"], "20.0.0.1")
@@ -1277,7 +1564,7 @@ class StudiesTrackingTests(TestCase):
         )
         self.assertEqual(uid_search.status_code, 200)
         self.assertEqual(uid_search.data["count"], 1)
-        self.assertEqual(uid_search.data["results"][0]["rid"], self.complete.rid)
+        self.assertEqual(uid_search.data["results"][0]["pid"], self.complete.pid)
 
     def test_client_buyer_and_project_deep_link_filters(self):
         response = self.api.get(reverse("survey-attempt-list"), {
@@ -1311,7 +1598,7 @@ class StudiesTrackingTests(TestCase):
         response = self.api.get(reverse("survey-attempt-list"), {"supplier": supplier.pk})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.data["count"], 1)
-        self.assertEqual(response.data["results"][0]["rid"], self.complete.rid)
+        self.assertEqual(response.data["results"][0]["pid"], self.complete.pid)
 
     def test_traffic_report_api_exposes_clean_provider_termination_reason(self):
         self.complete.status = SurveyAttempt.Status.TERMINATED
@@ -1345,8 +1632,9 @@ class StudiesTrackingTests(TestCase):
         hidden = api.get(reverse("survey-attempt-list"))
 
         self.assertEqual(hidden.status_code, 200)
-        self.assertEqual(hidden.data["results"][0]["termination_reason"], "")
-        self.assertEqual(hidden.data["results"][0]["status_source"], "")
+        self.assertNotIn("termination_reason", hidden.data["results"][0])
+        self.assertNotIn("termination_category", hidden.data["results"][0])
+        self.assertNotIn("status_source", hidden.data["results"][0])
         UserFunctionOverride.objects.create(
             user=self.kanik,
             function=AccessFunction.objects.get(code="studies.field.provider_status"),
@@ -1357,7 +1645,7 @@ class StudiesTrackingTests(TestCase):
 
         self.assertEqual(visible.status_code, 200)
         self.assertEqual(visible.data["results"][0]["termination_reason"], "Provider-only reason")
-        self.assertEqual(visible.data["results"][0]["status_source"], "")
+        self.assertNotIn("status_source", visible.data["results"][0])
 
         UserFunctionOverride.objects.create(
             user=self.kanik,
@@ -1366,6 +1654,80 @@ class StudiesTrackingTests(TestCase):
         )
         source_visible = api.get(reverse("survey-attempt-list"))
         self.assertEqual(source_visible.data["results"][0]["status_source"], "browser_callback")
+
+    def test_traffic_list_omits_identity_fields_denied_to_the_user(self):
+        for code in ("attempts.view", "studies.column.status"):
+            UserFunctionOverride.objects.create(
+                user=self.kanik,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
+        for code in ("studies.column.respondent_id", "studies.column.pid"):
+            UserFunctionOverride.objects.create(
+                user=self.kanik,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.DENY,
+            )
+        api = APIClient()
+        api.force_authenticate(self.kanik)
+
+        response = api.get(reverse("survey-attempt-list"), {"include_summary": "false"})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        row = response.data["results"][0]
+        self.assertIn("status", row)
+        self.assertIn("status_label", row)
+        self.assertNotIn("rid", row)
+        self.assertNotIn("pid", row)
+        self.assertNotIn("prescreener_uid", row)
+
+    def test_attempt_retrieve_requires_explicit_sensitive_audit_permission(self):
+        for code in (
+            "attempts.view",
+            "studies.column.status",
+            "studies.column.respondent_id",
+            "studies.column.pid",
+            "studies.column.device",
+        ):
+            UserFunctionOverride.objects.create(
+                user=self.kanik,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
+        self.complete.answers = {"question": {"values": ["private answer"]}}
+        self.complete.upstream_transaction_data = {"private": "provider audit"}
+        self.complete.entry_client_data = {"fingerprint": "private browser data"}
+        self.complete.outbound_url = "https://provider.example/private-entry"
+        self.complete.save(update_fields=[
+            "answers", "upstream_transaction_data", "entry_client_data", "outbound_url", "updated_at",
+        ])
+        api = APIClient()
+        api.force_authenticate(self.kanik)
+
+        restricted = api.get(reverse("survey-attempt-detail", args=[self.complete.rid]))
+
+        self.assertEqual(restricted.status_code, 200)
+        self.assertEqual(restricted.data["pid"], self.complete.pid)
+        self.assertNotIn("rid", restricted.data)
+        for field_name in (
+            "answers", "upstream_transaction_data", "entry_client_data", "outbound_url",
+            "entry_user_agent", "supplier_code", "callback_count", "is_verified",
+        ):
+            self.assertNotIn(field_name, restricted.data)
+
+        UserFunctionOverride.objects.create(
+            user=self.kanik,
+            function=AccessFunction.objects.get(code="studies.detail.sensitive_audit"),
+            effect=UserFunctionOverride.Effect.ALLOW,
+        )
+        allowed = api.get(reverse("survey-attempt-detail", args=[self.complete.rid]))
+
+        self.assertEqual(allowed.status_code, 200)
+        self.assertEqual(allowed.data["answers"], self.complete.answers)
+        self.assertEqual(allowed.data["upstream_transaction_data"], self.complete.upstream_transaction_data)
+        self.assertEqual(allowed.data["entry_client_data"], self.complete.entry_client_data)
+        self.assertEqual(allowed.data["outbound_url"], self.complete.outbound_url)
 
     def test_traffic_list_is_slim_but_retrieve_keeps_full_audit_contract(self):
         response = self.api.get(reverse("survey-attempt-list"), {"search": self.complete.rid})
@@ -1415,7 +1777,7 @@ class StudiesTrackingTests(TestCase):
         exact = self.api.get(reverse("survey-attempt-list"), {"search": self.complete.rid})
         self.assertEqual(exact.status_code, 200)
         self.assertEqual(exact.data["count"], 1)
-        self.assertEqual(exact.data["results"][0]["rid"], self.complete.rid)
+        self.assertEqual(exact.data["results"][0]["pid"], self.complete.pid)
 
         partial = self.api.get(reverse("survey-attempt-list"), {"search": "Kanik"})
         self.assertEqual(partial.status_code, 200)
@@ -1433,6 +1795,68 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(response.data["results"][0]["termination_reason"], "Off hours")
         self.assertEqual(response.data["results"][0]["termination_category"], "Timing")
         normalized.assert_called_once()
+
+    def test_terminal_traffic_query_count_does_not_scale_with_page_rows(self):
+        self.complete.status = SurveyAttempt.Status.TERMINATED
+        self.complete.status_source = "browser_callback"
+        self.complete.upstream_transaction_data = {
+            "status": "Terminated",
+            "termReason": "Profile mismatch",
+        }
+        self.complete.is_verified = True
+        self.complete.exit_client_data = {
+            "innovatemr_callback": {"termReason": "Profile mismatch"},
+        }
+        self.complete.save(update_fields=[
+            "status",
+            "status_source",
+            "upstream_transaction_data",
+            "is_verified",
+            "exit_client_data",
+            "updated_at",
+        ])
+        SurveyAttempt.objects.bulk_create([
+            SurveyAttempt(
+                rid=f"T{index:09d}",
+                survey=self.survey,
+                platform_user=self.kanik,
+                user_id=str(self.kanik.pk),
+                status=SurveyAttempt.Status.TERMINATED,
+                status_source="browser_callback",
+                upstream_transaction_data={
+                    "status": "Terminated",
+                    "termReason": "Profile mismatch",
+                },
+                is_verified=True,
+                exit_client_data={
+                    "innovatemr_callback": {"termReason": "Profile mismatch"},
+                },
+            )
+            for index in range(12)
+        ])
+
+        url = reverse("survey-attempt-list")
+        base_params = {
+            "include_summary": "false",
+            "status": SurveyAttempt.Status.TERMINATED,
+        }
+        warm_response = self.api.get(url, {**base_params, "page_size": 20})
+        self.assertEqual(warm_response.status_code, 200)
+
+        def captured_response(page_size):
+            with CaptureQueriesContext(connection) as captured:
+                response = self.api.get(url, {**base_params, "page_size": page_size})
+            self.assertEqual(response.status_code, 200)
+            return response, list(captured.captured_queries)
+
+        single_row, single_row_queries = captured_response(1)
+        multiple_rows, multiple_row_queries = captured_response(20)
+
+        self.assertEqual(len(single_row.data["results"]), 1)
+        self.assertGreater(len(multiple_rows.data["results"]), 1)
+        self.assertIn("status_source", multiple_rows.data["results"][0])
+        self.assertIn("termination_reason", multiple_rows.data["results"][0])
+        self.assertEqual(len(single_row_queries), len(multiple_row_queries))
 
     def test_country_filter_and_hit_time_cpi_snapshot_are_stable(self):
         created = create_attempt(self.survey, self.kanik, "10.10.10.10")
@@ -1523,15 +1947,15 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(rows[0], [
             "Project id", "Client name", "Cleint survey id", "Country",
             "Current Client CPI", "Client entry link CPI", "Vendor CPI", "Vendor name",
-            "RID", "PID", "User name", "Device", "OS", "Browser", "User agent",
+            "PID", "User name", "Device", "OS", "Browser", "User agent",
             "Entry IP", "Exit IP", "Actual LOI (minutes)", "Status",
             "Provider status", "Term reason", "Term category", "Status source",
             "Inisitate at", "Presecreent at", "Redirect at", "entry date time",
             "Exit date time",
         ])
         self.assertIn("Kanik Sharma", rows[1])
-        self.assertIn(self.complete.rid, rows[1])
         self.assertIn(self.complete.pid, rows[1])
+        self.assertNotIn(self.complete.rid, rows[1])
         self.assertNotIn("Pre-screener answers", rows[0])
         self.assertNotIn("Outbound supplier URL", rows[0])
         self.assertNotIn("Ee4Ff5Gg6H", str(rows))
@@ -1563,6 +1987,11 @@ class StudiesTrackingTests(TestCase):
         )
         UserFunctionOverride.objects.create(
             user=self.kanik,
+            function=AccessFunction.objects.get(code="studies.column.pid"),
+            effect=UserFunctionOverride.Effect.DENY,
+        )
+        UserFunctionOverride.objects.create(
+            user=self.kanik,
             function=AccessFunction.objects.get(code="studies.column.client_name"),
             effect=UserFunctionOverride.Effect.DENY,
         )
@@ -1580,8 +2009,8 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(attempt_list.status_code, 200)
         self.assertTrue(attempt_list.data["results"])
         for attempt in attempt_list.data["results"]:
-            self.assertEqual(attempt["client_name"], "")
-            self.assertEqual(attempt["company_name"], "")
+            self.assertNotIn("client_name", attempt)
+            self.assertNotIn("company_name", attempt)
 
         self.client.force_login(self.kanik)
         page = self.client.get(reverse("traffic-reports"))
@@ -1722,11 +2151,12 @@ class StudiesTrackingTests(TestCase):
             function=AccessFunction.objects.get(code="attempts.view"),
             effect=UserFunctionOverride.Effect.ALLOW,
         )
-        UserFunctionOverride.objects.create(
-            user=viewer,
-            function=AccessFunction.objects.get(code="studies.card.total"),
-            effect=UserFunctionOverride.Effect.ALLOW,
-        )
+        for code in ("studies.card.total", "studies.column.respondent_id"):
+            UserFunctionOverride.objects.create(
+                user=viewer,
+                function=AccessFunction.objects.get(code=code),
+                effect=UserFunctionOverride.Effect.ALLOW,
+            )
         own_attempt = SurveyAttempt.objects.create(
             rid="Ii7Jj8Kk9L", survey=self.survey, platform_user=viewer, user_id=str(viewer.pk),
             status=SurveyAttempt.Status.INITIATED,
@@ -1736,7 +2166,8 @@ class StudiesTrackingTests(TestCase):
         listing = scoped_api.get(reverse("survey-attempt-list"))
         self.assertEqual(listing.status_code, 200)
         self.assertEqual(listing.data["count"], 1)
-        self.assertEqual(listing.data["results"][0]["rid"], own_attempt.rid)
+        self.assertEqual(listing.data["results"][0]["pid"], own_attempt.pid)
+        self.assertNotIn("rid", listing.data["results"][0])
         self.assertEqual(scoped_api.get(reverse("survey-attempt-export")).status_code, 403)
 
         self.client.force_login(viewer)
@@ -1838,7 +2269,7 @@ class StudiesTrackingTests(TestCase):
         studies = lead_api.get(reverse("survey-attempt-list"))
         self.assertEqual(studies.status_code, 200)
         self.assertEqual(studies.data["count"], 1)
-        self.assertEqual({row["rid"] for row in studies.data["results"]}, {visible_attempt.rid})
+        self.assertEqual({row["pid"] for row in studies.data["results"]}, {visible_attempt.pid})
         branch_studies = lead_api.get(reverse("survey-attempt-list"), {"branch": str(delhi.pk)})
         self.assertEqual(branch_studies.status_code, 200)
         self.assertEqual(branch_studies.data["count"], 1)
@@ -1847,7 +2278,7 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(sub_branch_studies.data["count"], 0)
         shift_studies = lead_api.get(reverse("survey-attempt-list"), {"shift": str(delhi_morning.pk)})
         self.assertEqual(shift_studies.status_code, 200)
-        self.assertEqual({row["rid"] for row in shift_studies.data["results"]}, {visible_attempt.rid})
+        self.assertEqual({row["pid"] for row in shift_studies.data["results"]}, {visible_attempt.pid})
 
         hits = lead_api.get(reverse("user-hits-api"))
         self.assertEqual(hits.status_code, 200)
@@ -1869,9 +2300,9 @@ class StudiesTrackingTests(TestCase):
         second_lead_studies = second_lead_api.get(reverse("survey-attempt-list"))
         self.assertEqual(second_lead_studies.status_code, 200)
         self.assertEqual(second_lead_studies.data["count"], 1)
-        self.assertEqual({row["rid"] for row in second_lead_studies.data["results"]}, {visible_attempt.rid})
+        self.assertEqual({row["pid"] for row in second_lead_studies.data["results"]}, {visible_attempt.pid})
 
-        for code in ("attempts.view", "user_hits.view"):
+        for code in ("attempts.view", "user_hits.view", "user_hits.column.user"):
             UserFunctionOverride.objects.update_or_create(
                 user=employee, function=AccessFunction.objects.get(code=code),
                 defaults={"effect": UserFunctionOverride.Effect.ALLOW},
@@ -1881,7 +2312,7 @@ class StudiesTrackingTests(TestCase):
         employee_studies = employee_api.get(reverse("survey-attempt-list"))
         self.assertEqual(employee_studies.status_code, 200)
         self.assertEqual(employee_studies.data["count"], 1)
-        self.assertEqual(employee_studies.data["results"][0]["rid"], visible_attempt.rid)
+        self.assertEqual(employee_studies.data["results"][0]["pid"], visible_attempt.pid)
         employee_hits = employee_api.get(reverse("user-hits-api"))
         self.assertEqual(employee_hits.status_code, 200)
         self.assertEqual(employee_hits.data["count"], 1)

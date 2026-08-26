@@ -24,13 +24,7 @@
     <div class="status-recorded"><span></span>Result recorded</div>
     <dl class="status-facts">
       <div><dt>Status</dt><dd>{{ status_label }}</dd></div>
-      {% if display_rid %}
-        <div><dt>RID</dt><dd>{{ rid }}</dd></div>
-      {% else %}
-        <div><dt>PID</dt><dd>{{ pid|default:rid }}</dd></div>
-      {% endif %}
-      <div><dt>IP address</dt><dd>{{ ip_address|default:"Unavailable" }}</dd></div>
-      <!--<div><dt>Recorded LOI</dt><dd>{% if loi_seconds != None %}{{ loi_seconds }} seconds{% else %}Pending{% endif %}</dd></div>-->
+      <div><dt>PID</dt><dd>{{ pid }}</dd></div>
     </dl>
     {% if not attempt_found %}<div class="flow-alert error">This tracking ID was not found, so the callback could not be attached to a survey attempt.</div>{% endif %}
     <p class="status-note">You may safely close this window.</p>

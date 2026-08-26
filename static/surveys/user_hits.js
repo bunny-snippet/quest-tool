@@ -119,9 +119,13 @@
     return params;
   }
 
+  const hitDateFormatter = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', weekday: 'short',
+  });
+
   function formatDate(value) {
     if (!value) return '—';
-    return new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', day: '2-digit', month: 'short', year: 'numeric', weekday: 'short' }).format(new Date(`${value}T12:00:00Z`));
+    return hitDateFormatter.format(new Date(`${value}T12:00:00Z`));
   }
 
   function deviceBreakdown(counts) {

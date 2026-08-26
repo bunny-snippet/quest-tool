@@ -4,7 +4,7 @@
 {% block content %}
 <header class="flow-header">
   <a href="/projects/" class="flow-brand"><span class="flow-brand-mark">S</span><span>Exchange Hub</span></a>
-  <span class="rid-pill">RID <strong>{{ attempt.rid }}</strong></span>
+  <span class="rid-pill">PID <strong>{{ attempt.pid }}</strong></span>
 </header>
 
 <main class="prescreener-shell">
@@ -20,7 +20,13 @@
 
   <form method="post" class="prescreener-form" novalidate>
     {% csrf_token %}
-    <input type="hidden" name="rid" value="{{ attempt.rid }}">
+    {% if journey_token %}
+      <input type="hidden" name="journey" value="{{ journey_token }}">
+    {% elif tracking_name == "rid" %}
+      <input type="hidden" name="rid" value="{{ attempt.rid }}">
+    {% else %}
+      <input type="hidden" name="pid" value="{{ attempt.pid }}">
+    {% endif %}
     {% if is_rfg %}<input type="hidden" id="rfgFingerprint" name="rfg_fingerprint" value="0">{% endif %}
     {% for question in questions %}
       <section class="screen-question" aria-labelledby="question-title-{{ question.model.pk }}">

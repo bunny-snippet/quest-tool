@@ -31,7 +31,10 @@ from .services import (
 from .services import PrescreenerVaultError
 
 
-@override_settings(PRESCREENER_VAULT_ENABLED=True)
+@override_settings(
+    PRESCREENER_VAULT_ENABLED=True,
+    ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS=True,
+)
 class PrescreenerVaultFlowTests(TestCase):
     databases = {"default", DATABASE_ALIAS}
 

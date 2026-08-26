@@ -92,6 +92,7 @@ FUNCTION_CATALOG = (
     ("studies.column.status", "Show Status column", "Traffic Reports - Table columns", "Display the normalized platform survey outcome (S1-S4).", TRACKING_ROLES),
     ("studies.field.provider_status", "Show provider outcome under Status", "Traffic Reports - Row details", "Display the provider-reported status, term reason and category below the normalized S1-S4 status in Traffic Reports, its API rows and Excel export.", TRACKING_ROLES),
     ("studies.field.status_source", "Show status source in export", "Traffic Reports - Row details", "Include the internal callback/status source in the Traffic Reports Excel export.", TRACKING_ROLES),
+    ("studies.detail.sensitive_audit", "View sensitive attempt audit payload", "Traffic Reports - Row details", "Read raw pre-screener answers, supplier URLs, callback payloads, browser fingerprints and internal relationship identifiers through the Traffic Reports detail API.", ADMIN_ROLES),
     ("studies.column.start", "Show Start column", "Traffic Reports - Table columns", "Display the survey start timestamp.", TRACKING_ROLES),
     ("studies.column.end", "Show End column", "Traffic Reports - Table columns", "Display the callback or current end timestamp.", TRACKING_ROLES),
     ("studies.card.total", "Show Total hits card", "Traffic Reports - Summary cards", "Display the filtered traffic report hit total.", TRACKING_ROLES),

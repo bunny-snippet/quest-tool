@@ -222,19 +222,22 @@ adapter, not separately in the UI.
 
 ```text
 Projects Copy Link
-  -> GET /survey/start?surveyId=...&supplierCode=1000&userId=...&code=...
+  -> GET /survey/start?entry={opaque token}
+  -> validate token without writes; render CSRF auto-submit gate
+  -> POST /survey/start (entry token)
   -> surveys.views.survey_start
-  -> validate exact parameters, user access, survey identity and allocation
+  -> decrypt token; validate user access, survey identity and allocation
   -> surveys.survey_flow.create_attempt
-  -> create RID + UID + CPI/IP/device snapshots atomically
+  -> create internal RID + public PID + UID + CPI/IP/device snapshots atomically
   -> reserve allocation capacity when applicable
-  -> redirect to /survey/start?rid={RID}
+  -> bind journey nonce to session
+  -> redirect to /survey/start?journey={encrypted short-lived token}
 ```
 
 ### Prescreener POST and provider redirect
 
 ```text
-POST /survey/start (RID + answers)
+POST /survey/start (session-bound journey token + answers)
   -> _collect_prescreener_answers
   -> capture_prescreener_submission (vault transaction)
   -> provider-specific validation / duplicate check
@@ -347,6 +350,7 @@ Connected functions: `_has_exact_query`, `_invalid_survey_link`,
 | RFG callback not found | confirm RFG `tid` contains platform RID and RFG `rid` contains UID; inspect `_rfg_attempt_from_request`. |
 | Cint signature rejected | confirm stable hash key, query order, UID/PID, RID/MID, email pool and trailing ampersand. |
 | Status stays initiated/redirected | callback URLs, `survey_status`/RFG callback, worker reconciliation and callback IP/security. |
+| External supplier missed an RFG result | `supplier_callbacks.py`, the attempt's `supplier_callback_delivery` audit state and `surveys.deliver_supplier_result_callback` worker logs. |
 | Wrong LOI | compare `initiated_at`, first `callback_at` and provider transaction end time; do not use current time. |
 | Wrong CPI/revenue | inspect attempt CPI snapshots and visibility percentage, not current survey CPI. |
 | TL sees another sub-branch | `accounts.access.activity_visible_user_ids` and organization-unit assignments. |

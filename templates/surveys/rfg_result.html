@@ -20,12 +20,7 @@
     {% endif %}
 
     <dl class="status-facts rfg-result-facts">
-      <div><dt>RID</dt><dd>{{ attempt.rid }}</dd></div>
-      <div><dt>Project ID</dt><dd>{{ attempt.survey.local_id }}</dd></div>
-      <div><dt>Survey ID</dt><dd>{{ attempt.survey.source_identifier }}</dd></div>
-      <div><dt>Result code</dt><dd>{{ outcome.code|default:'Pending' }}</dd></div>
-      <div><dt>LOI</dt><dd>{% if attempt.loi_seconds != None %}{{ attempt.loi_seconds }} seconds{% else %}Pending{% endif %}</dd></div>
-      {% if outcome.sesskey %}<div><dt>RFG session</dt><dd>{{ outcome.sesskey }}</dd></div>{% endif %}
+      <div><dt>PID</dt><dd>{{ attempt.pid }}</dd></div>
     </dl>
   </section>
 </main>

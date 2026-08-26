@@ -15,6 +15,13 @@ def env_bool(name: str, default: bool = False) -> bool:
 
 SECRET_KEY = os.getenv("DJANGO_SECRET_KEY", "development-only-change-me")
 DEBUG = env_bool("DJANGO_DEBUG", True)
+SURVEY_ENTRY_TOKEN_KEY = os.getenv("SURVEY_ENTRY_TOKEN_KEY", "").strip()
+# New links are opaque tokens. Legacy unsigned links are rejected unless an
+# operator deliberately enables the temporary rollback switch.
+ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS = env_bool("ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS", False)
+SURVEY_JOURNEY_TOKEN_MAX_AGE_SECONDS = max(
+    60, int(os.getenv("SURVEY_JOURNEY_TOKEN_MAX_AGE_SECONDS", "7200"))
+)
 ALLOWED_HOSTS = [value.strip() for value in os.getenv("DJANGO_ALLOWED_HOSTS", "localhost,127.0.0.1").split(",") if value.strip()]
 API_DOCS_BASIC_USERNAME = os.getenv("API_DOCS_BASIC_USERNAME", "").strip()
 API_DOCS_BASIC_PASSWORD = os.getenv("API_DOCS_BASIC_PASSWORD", "")
@@ -207,6 +214,21 @@ REPORT_CACHE_DEFAULT_TTL_SECONDS = max(1, int(os.getenv("REPORT_CACHE_DEFAULT_TT
 REPORT_CACHE_RESULT_TTL_SECONDS = max(1, int(os.getenv("REPORT_CACHE_RESULT_TTL_SECONDS", "15")))
 REPORT_CACHE_METADATA_TTL_SECONDS = max(1, int(os.getenv("REPORT_CACHE_METADATA_TTL_SECONDS", "600")))
 REPORT_CACHE_TTL_JITTER_SECONDS = max(0, int(os.getenv("REPORT_CACHE_TTL_JITTER_SECONDS", "3")))
+SUPPLIER_CALLBACK_CONNECT_TIMEOUT_SECONDS = max(
+    0.5, float(os.getenv("SUPPLIER_CALLBACK_CONNECT_TIMEOUT_SECONDS", "3"))
+)
+SUPPLIER_CALLBACK_READ_TIMEOUT_SECONDS = max(
+    0.5, float(os.getenv("SUPPLIER_CALLBACK_READ_TIMEOUT_SECONDS", "7"))
+)
+SUPPLIER_CALLBACK_RECOVERY_INTERVAL_SECONDS = max(
+    60, int(os.getenv("SUPPLIER_CALLBACK_RECOVERY_INTERVAL_SECONDS", "300"))
+)
+SUPPLIER_CALLBACK_RECOVERY_LOOKBACK_HOURS = max(
+    1, int(os.getenv("SUPPLIER_CALLBACK_RECOVERY_LOOKBACK_HOURS", "168"))
+)
+SUPPLIER_CALLBACK_RECOVERY_BATCH = max(
+    1, min(int(os.getenv("SUPPLIER_CALLBACK_RECOVERY_BATCH", "100")), 1000)
+)
 INNOVATEMR_INVENTORY_WRITE_BATCH_SIZE = max(
     100,
     min(int(os.getenv("INNOVATEMR_INVENTORY_WRITE_BATCH_SIZE", "1000")), 5000),
@@ -348,7 +370,13 @@ INNOVATEMR_CALLBACK_HASH_KEY = os.getenv("INNOVATEMR_CALLBACK_HASH_KEY", "")
 INNOVATEMR_CALLBACK_HASH_ALGORITHM = os.getenv(
     "INNOVATEMR_CALLBACK_HASH_ALGORITHM", "sha256"
 ).strip().lower()
-INNOVATEMR_CALLBACK_HASH_REQUIRED = bool(INNOVATEMR_CALLBACK_HASH_KEY)
+# Provider result redirects mutate attempt status and capacity, so production
+# must fail closed when their signature cannot be verified.  The explicit env
+# switch exists only for isolated legacy/UAT tests; an empty key never silently
+# downgrades callback authentication.
+INNOVATEMR_CALLBACK_HASH_REQUIRED = env_bool(
+    "INNOVATEMR_CALLBACK_HASH_REQUIRED", True
+)
 PUBLIC_SUPPLIER_CODE = os.getenv("PUBLIC_SUPPLIER_CODE", "1000").strip() or "1000"
 INTEGRATION_CREDENTIAL_ENCRYPTION_KEY = os.getenv("INTEGRATION_CREDENTIAL_ENCRYPTION_KEY", SECRET_KEY)
 RESPONDENT_EMAIL_ENCRYPTION_KEY = os.getenv(
@@ -412,6 +440,9 @@ INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_ATTEMP
 INNOVATEMR_ATTEMPT_RECONCILE_BATCH = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_BATCH", "20"))
 INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS", "168"))
 VENDOR_RESERVATION_TTL_MINUTES = int(os.getenv("VENDOR_RESERVATION_TTL_MINUTES", "180"))
+VENDOR_API_KEY_LAST_USED_WRITE_INTERVAL_SECONDS = max(
+    0, int(os.getenv("VENDOR_API_KEY_LAST_USED_WRITE_INTERVAL_SECONDS", "300"))
+)
 VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS = int(os.getenv("VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS", "60"))
 CELERY_BEAT_SCHEDULE = {
     "dispatch-client-integration-syncs": {
@@ -425,5 +456,9 @@ CELERY_BEAT_SCHEDULE = {
     "expire-vendor-allocation-reservations": {
         "task": "vendors.expire_allocation_reservations",
         "schedule": float(VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS),
+    },
+    "recover-pending-supplier-callbacks": {
+        "task": "surveys.dispatch_pending_supplier_callbacks",
+        "schedule": float(SUPPLIER_CALLBACK_RECOVERY_INTERVAL_SECONDS),
     },
 } if ENABLE_SCHEDULED_JOBS else {}

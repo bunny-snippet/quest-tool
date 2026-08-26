@@ -19,6 +19,7 @@ from config.cache_utils import (
 )
 
 from .models import AccessFunction, EmployeeProfile, Role, UserFunctionOverride
+from .profile_context import employee_profile_for_user
 from .request_cache import request_cached
 
 
@@ -58,7 +59,7 @@ def is_super_admin_account(user) -> bool:
         return False
     if user.is_superuser:
         return True
-    profile = EmployeeProfile.objects.select_related("role").filter(user=user).first()
+    profile = employee_profile_for_user(user)
     return bool(profile and profile.role and profile.role.is_active and profile.role.slug in {"super-admin", "superadmin"})
 
 
@@ -79,12 +80,7 @@ def effective_permission_codes(user) -> set[str]:
                 AccessFunction.objects.filter(is_active=True).values_list("code", flat=True)
             )
 
-        try:
-            profile = user.employee_profile
-        except EmployeeProfile.DoesNotExist:
-            profile = None
-        if profile is None:
-            profile = EmployeeProfile.objects.select_related("role").filter(user=user).first()
+        profile = employee_profile_for_user(user)
         codes: set[str] = set()
         if profile and profile.role and profile.role.is_active:
             assignments = getattr(
@@ -223,10 +219,7 @@ def manageable_user_ids(user) -> set[int]:
         ids = subordinate_user_ids(user)
         if user.is_superuser:
             return frozenset(ids)
-        try:
-            profile = user.employee_profile
-        except EmployeeProfile.DoesNotExist:
-            profile = None
+        profile = employee_profile_for_user(user)
         if profile and profile.account_type == EmployeeProfile.AccountType.INTERNAL_VENDOR:
             ids.update(
                 EmployeeProfile.objects.filter(
@@ -266,10 +259,7 @@ def _activity_visible_user_ids_uncached(user) -> set[int]:
         return set(get_user_model().objects.values_list("id", flat=True))
 
     visible_ids = {user.id}
-    profile = EmployeeProfile.objects.select_related(
-        "role", "organization_unit__workspace_owner",
-        "organization_unit__parent", "organization_unit__parent__parent",
-    ).filter(user=user).first()
+    profile = employee_profile_for_user(user)
     if (
         not profile
         or not profile.role

@@ -357,19 +357,32 @@ def build_dashboard_payload(
     traffic_chart = None
     finance_chart = None
     if chart_access.get("performance"):
+        traffic_points = _permission_scoped_performance(
+            traffic_queryset, traffic_range_window, user, card_access
+        )
         traffic_chart = {
             "range": _range_payload(traffic_range_window),
             "client_id": traffic_client_id,
-            "points": _permission_scoped_performance(
-                traffic_queryset, traffic_range_window, user, card_access
-            ),
+            "points": traffic_points,
         }
         if any(card_access.get(key) for key in ("revenue", "average_cpi", "rpc")):
+            same_scope = (
+                traffic_client_id == finance_client_id
+                and traffic_range_window["start"] == finance_range_window["start"]
+                and traffic_range_window["end"] == finance_range_window["end"]
+                and traffic_range_window["buckets"] == finance_range_window["buckets"]
+                and traffic_queryset.query.sql_with_params()
+                == finance_queryset.query.sql_with_params()
+            )
             finance_chart = {
                 "range": _range_payload(finance_range_window),
                 "client_id": finance_client_id,
-                "points": _permission_scoped_performance(
-                    finance_queryset, finance_range_window, user, card_access
+                "points": (
+                    [dict(point) for point in traffic_points]
+                    if same_scope
+                    else _permission_scoped_performance(
+                        finance_queryset, finance_range_window, user, card_access
+                    )
                 ),
             }
     return {

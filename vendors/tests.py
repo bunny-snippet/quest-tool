@@ -6,7 +6,7 @@ from urllib.parse import parse_qs, urlsplit
 from django.contrib.auth import get_user_model
 from django.conf import settings
 from django.core.exceptions import ValidationError
-from django.test import TestCase
+from django.test import TestCase, override_settings
 from django.urls import reverse
 from django.utils import timezone
 from rest_framework.test import APIClient
@@ -205,6 +205,7 @@ class VendorFoundationTests(TestCase):
         with self.assertRaisesMessage(AllocationUnavailable, "Upstream survey quantity is exhausted"):
             reserve_attempt_capacity(self.attempt("Ua0Kk1Ll2M"), self.external_survey_allocation)
 
+    @override_settings(ALLOW_LEGACY_UNSIGNED_ENTRY_LINKS=True)
     def test_client_grant_exposes_all_projects_without_shared_quantity_cap(self):
         unallocated_survey = Survey.objects.create(
             client=self.client_record,
@@ -469,10 +470,19 @@ class VendorFoundationTests(TestCase):
         self.assertEqual([row["source_id"] for row in listing.data["results"]], [second_survey.source_id])
         self.assertEqual([row["survey_id"] for row in listing.data["results"]], [second_survey.local_id])
         start_link = listing.data["results"][0]["start_link"]
-        self.assertIn("delivery=", start_link)
-        started = APIClient().get(f"{urlsplit(start_link).path}?{urlsplit(start_link).query}")
+        self.assertEqual(set(parse_qs(urlsplit(start_link).query)), {"entry"})
+        browser = APIClient()
+        gate = browser.get(f"{urlsplit(start_link).path}?{urlsplit(start_link).query}")
+        self.assertEqual(gate.status_code, 200)
+        self.assertEqual(SurveyAttempt.objects.filter(survey=second_survey).count(), 0)
+        started = browser.post(reverse("survey-start"), {
+            "entry": parse_qs(urlsplit(start_link).query)["entry"][0],
+        })
         self.assertEqual(started.status_code, 302)
-        self.assertIn("rid=", started["Location"])
+        self.assertEqual(
+            set(parse_qs(urlsplit(started["Location"]).query)),
+            {"journey"},
+        )
 
         catalog = owner_api.get(
             reverse("vendor-survey-allocation-catalog"),
@@ -643,8 +653,10 @@ class VendorFoundationTests(TestCase):
         }
         supplied_hash = params.pop("hash")
         self.assertEqual(f"{parsed.scheme}://{parsed.netloc}{parsed.path}", "https://supplier.example/result/terminate")
-        self.assertEqual(params["rid"], attempt.rid)
         self.assertEqual(params["pid"], attempt.pid)
+        self.assertNotIn("rid", params)
+        self.assertEqual(params["eventId"], f"{attempt.pid}-2")
+        self.assertTrue(params["timestamp"])
         self.assertEqual(params["surveyId"], self.survey.local_id)
         self.assertEqual(supplied_hash, sign_supplier_callback(params, callback_secret))
 

@@ -845,8 +845,15 @@ class CintProvider(SurveyProvider):
                 "Set CINT_CALLBACK_BASE_URL or PUBLIC_APP_BASE_URL before Cint can configure callback-enabled supplier links."
             )
         parsed = urlsplit(base)
-        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-            raise ProviderConfigurationError("The Cint callback base URL must be an absolute HTTP(S) URL.")
+        if (
+            parsed.scheme != "https"
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+        ):
+            raise ProviderConfigurationError(
+                "The Cint callback base URL must be an absolute HTTPS URL without credentials."
+            )
         callback = f"{base}/survey"
         return {
             "SupplierLinkTypeCode": "OWS",
@@ -1104,7 +1111,12 @@ class CintProvider(SurveyProvider):
             raise ProviderConfigurationError("Cint has not returned a live supplier link for this survey.")
         parsed = urlsplit(live_link)
         hostname = (parsed.hostname or "").lower()
-        if hostname != "samplicio.us" and not hostname.endswith(".samplicio.us"):
+        if (
+            parsed.scheme != "https"
+            or parsed.username
+            or parsed.password
+            or (hostname != "samplicio.us" and not hostname.endswith(".samplicio.us"))
+        ):
             raise ProviderConfigurationError("Cint returned an unexpected supplier-link hostname.")
         pid = effective_profile_uid(attempt)
         if not pid:

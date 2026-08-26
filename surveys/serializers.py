@@ -6,10 +6,10 @@ from django.urls import reverse
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from accounts.access import has_function_access
+from accounts.access import effective_permission_codes, has_function_access
 from vendors.access import vendor_scope_user_id
 from vendors.models import VendorAPIKey
-from vendors.security import generate_delivery_token
+from surveys.entry_tokens import issue_entry_token
 from vendors.services import organization_client_ids_for_user, survey_pricing_for_user
 
 from .models import (
@@ -141,7 +141,9 @@ class SurveyQuotaSerializer(serializers.ModelSerializer):
         normalized = (obj.raw_data or {}).get("targeting_details")
         if isinstance(normalized, list):
             return normalized
-        questions = list(obj.survey.targeting_questions.all())
+        questions = self.context.get("targeting_questions")
+        if questions is None:
+            questions = list(obj.survey.targeting_questions.all())
         if self._is_toluna(obj):
             question_map = {str(item.question_id): item for item in questions}
             grouped = {}
@@ -298,6 +300,37 @@ class ProviderQuestionMappingSerializer(serializers.ModelSerializer):
         ]
 
 
+PROJECT_API_FIELDS_BY_PERMISSION = {
+    "projects.column.project_id": {"local_id"},
+    "projects.column.survey": {
+        "source_id", "survey_id", "provider_code", "name", "buyer_id",
+    },
+    "projects.column.client_name": {
+        "client_name", "display_company_name", "company_name",
+    },
+    "projects.column.market": {
+        "country", "country_code", "country_label", "language", "language_code",
+    },
+    "projects.column.completes": {
+        "sample_size", "completes", "remaining", "starts", "progress_percent", "has_quota",
+    },
+    "projects.column.cpi": {"cpi", "cpi_cut_percent", "vendor_pricing"},
+    "projects.column.loi_ir": {
+        "loi", "incidence_rate", "group_type", "survey_type", "device_type",
+    },
+    "projects.column.entry_link": {"start_link"},
+    "projects.column.modified": {
+        "status", "source_created_at", "source_modified_at", "source_created_display",
+        "source_modified_display", "detail_synced_at", "quota_synced_at",
+        "targeting_synced_at", "created_at", "updated_at",
+    },
+    # Actions are rendered only when the separate Project ID grant is present;
+    # never let an action permission become a back door to the route identifier.
+    "projects.column.actions": {"provider_code", "has_quota"},
+}
+PROJECT_API_PROTECTED_FIELDS = set().union(*PROJECT_API_FIELDS_BY_PERMISSION.values())
+
+
 class SurveyListSerializer(serializers.ModelSerializer):
     source_id = serializers.SerializerMethodField()
     survey_id = serializers.SerializerMethodField(help_text="External delivery identifier selected on the authenticated API key.")
@@ -317,21 +350,50 @@ class SurveyListSerializer(serializers.ModelSerializer):
     class Meta:
         model = Survey
         fields = [
-            "id", "local_id", "client", "client_name", "display_company_name", "source_id", "survey_id", "provider_code", "company_name", "name", "status", "sample_size", "completes", "remaining",
+            "local_id", "client_name", "display_company_name", "source_id", "survey_id", "provider_code", "company_name", "name", "status", "sample_size", "completes", "remaining",
             "starts", "cpi", "cpi_cut_percent", "vendor_pricing", "loi", "incidence_rate", "country", "country_code", "country_label",
-            "language", "language_code", "group_type", "buyer_id", "survey_type", "device_type", "entry_link", "start_link", "has_quota",
+            "language", "language_code", "group_type", "buyer_id", "survey_type", "device_type", "start_link", "has_quota",
             "source_created_at", "source_modified_at", "source_created_display", "source_modified_display",
             "detail_synced_at", "quota_synced_at", "targeting_synced_at", "created_at", "updated_at",
             "progress_percent",
         ]
 
+    def _permission_codes(self):
+        if not hasattr(self, "_project_permission_codes"):
+            request = self.context.get("request")
+            self._project_permission_codes = (
+                effective_permission_codes(request.user) if request else None
+            )
+        return self._project_permission_codes
+
+    def get_fields(self):
+        """Project column grants are an API boundary, not a CSS preference."""
+
+        fields = super().get_fields()
+        permission_codes = self._permission_codes()
+        if permission_codes is None:
+            return fields
+        allowed = set().union(*(
+            field_names
+            for permission, field_names in PROJECT_API_FIELDS_BY_PERMISSION.items()
+            if permission in permission_codes
+        )) if permission_codes else set()
+        for field_name in PROJECT_API_PROTECTED_FIELDS - allowed:
+            fields.pop(field_name, None)
+        return fields
+
     def to_representation(self, instance):
         data = super().to_representation(instance)
         request = self.context.get("request")
-        if request and not has_function_access(request.user, "projects.column.client_name"):
-            data["client_name"] = ""
-            data["display_company_name"] = ""
-            data["company_name"] = ""
+        if request:
+            permission_codes = self._permission_codes()
+            allowed = set().union(*(
+                field_names
+                for permission, field_names in PROJECT_API_FIELDS_BY_PERMISSION.items()
+                if permission in permission_codes
+            )) if permission_codes else set()
+            for field_name in PROJECT_API_PROTECTED_FIELDS - allowed:
+                data.pop(field_name, None)
         return data
 
     def get_country_label(self, obj) -> str:
@@ -412,21 +474,16 @@ class SurveyListSerializer(serializers.ModelSerializer):
             return None
         api_key = getattr(request, "auth", None)
         external_delivery = isinstance(api_key, VendorAPIKey)
-        exposed_survey_id = (
-            obj.local_id
-            if external_delivery and api_key.survey_id_mode == VendorAPIKey.SurveyIdMode.PROJECT_ID
-            else obj.source_identifier
-        )
-        query_values = {
-            "surveyId": exposed_survey_id,
-            # Public platform links never expose a client's real upstream supplier code.
-            "supplierCode": settings.PUBLIC_SUPPLIER_CODE,
-            "userId": request.user.pk,
-            "code": obj.local_id,
-        }
-        if external_delivery:
-            query_values["delivery"] = generate_delivery_token(api_key.pk, obj.pk)
-        query = urlencode(query_values)
+        # The browser receives one opaque, authenticated value instead of an
+        # editable survey/user/PID tuple. Current permissions are rechecked
+        # when the link is opened.
+        query = urlencode({
+            "entry": issue_entry_token(
+                survey_id=obj.pk,
+                user_id=request.user.pk,
+                api_key_id=api_key.pk if external_delivery else None,
+            )
+        })
         path = f"{reverse('survey-start')}?{query}"
         return request.build_absolute_uri(path) if request else path
 
@@ -437,7 +494,7 @@ class SurveyDetailSerializer(SurveyListSerializer):
 
     class Meta(SurveyListSerializer.Meta):
         fields = SurveyListSerializer.Meta.fields + [
-            "test_entry_link", "job_category", "is_pii_required", "is_recontact", "quotas", "targeting_questions"
+            "job_category", "is_pii_required", "is_recontact", "quotas", "targeting_questions"
         ]
 
 
@@ -607,6 +664,48 @@ class DashboardResponseSerializer(serializers.Serializer):
     generated_at = serializers.DateTimeField()
 
 
+ATTEMPT_API_FIELDS_BY_PERMISSION = {
+    "studies.column.project_id": {"survey_local_id"},
+    "studies.column.client_name": {"client_name", "company_name"},
+    "studies.column.survey_id": {"survey_source_id", "survey_name", "buyer_id"},
+    "studies.column.country": {"country", "country_code", "language_code"},
+    "studies.column.cpi": {
+        "source_cpi_snapshot", "cpi_snapshot_source", "cpi_cut_percent_snapshot",
+        "payable_cpi_snapshot", "cpi_currency_snapshot",
+    },
+    "studies.column.respondent_id": {
+        "rid", "prescreener_uid", "registered_profile_uid", "profile_was_reused",
+    },
+    "studies.column.pid": {"pid"},
+    "studies.column.user": {
+        "platform_user", "user_id", "user_name", "username", "user_email",
+    },
+    "studies.column.device": {
+        "entry_device", "exit_device", "entry_browser", "exit_browser", "entry_os",
+        "exit_os", "entry_user_agent", "exit_user_agent", "entry_referrer",
+        "entry_accept_language", "entry_client_data", "exit_client_data",
+    },
+    "studies.column.ip": {"entry_ip", "exit_ip", "initiation_ip", "callback_ip"},
+    "studies.column.loi": {"loi_seconds"},
+    "studies.column.status": {"status", "status_label"},
+    "studies.field.provider_status": {"termination_reason", "termination_category"},
+    "studies.field.status_source": {"status_source"},
+    "studies.column.start": {"initiated_at", "submitted_at", "redirected_at", "created_at"},
+    "studies.column.end": {"callback_at", "last_callback_at", "updated_at"},
+}
+
+
+ATTEMPT_SENSITIVE_AUDIT_PERMISSION = "studies.detail.sensitive_audit"
+ATTEMPT_SENSITIVE_AUDIT_FIELDS = {
+    "supplier", "supplier_name", "vendor", "vendor_name", "client", "client_allocation",
+    "survey_allocation", "supplier_code", "cpi_cut_percent_snapshot",
+    "payable_cpi_snapshot", "entry_user_agent", "exit_user_agent", "entry_browser",
+    "exit_browser", "entry_os", "exit_os", "entry_referrer", "entry_accept_language",
+    "entry_client_data", "exit_client_data", "upstream_checked_at",
+    "upstream_transaction_data", "answers", "outbound_url", "callback_count", "is_verified",
+}
+
+
 class SurveyAttemptSerializer(serializers.ModelSerializer):
     prescreener_uid = serializers.SerializerMethodField()
     registered_profile_uid = serializers.CharField(source="prescreener_uid", read_only=True)
@@ -649,34 +748,64 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
             "is_verified", "created_at", "updated_at",
         ]
 
+    def _permission_codes(self):
+        if not hasattr(self, "_attempt_permission_codes"):
+            request = self.context.get("request")
+            self._attempt_permission_codes = (
+                effective_permission_codes(request.user) if request else None
+            )
+        return self._attempt_permission_codes
+
+    def get_fields(self):
+        """Remove denied data before DRF reads fields or runs method fields."""
+
+        fields = super().get_fields()
+        permission_codes = self._permission_codes()
+        if permission_codes is None:
+            return fields
+        for permission, field_names in ATTEMPT_API_FIELDS_BY_PERMISSION.items():
+            if permission not in permission_codes:
+                for field_name in field_names:
+                    fields.pop(field_name, None)
+        if ATTEMPT_SENSITIVE_AUDIT_PERMISSION not in permission_codes:
+            for field_name in ATTEMPT_SENSITIVE_AUDIT_FIELDS:
+                fields.pop(field_name, None)
+        # PID is the browser/report identifier. When both legacy grants exist,
+        # never send the internal RID/profile UID alongside it.
+        if "studies.column.pid" in permission_codes:
+            for field_name in ATTEMPT_API_FIELDS_BY_PERMISSION["studies.column.respondent_id"]:
+                fields.pop(field_name, None)
+        return fields
+
     def to_representation(self, instance):
-        """Apply the same component permissions used by Traffic Reports UI/export."""
+        """Apply Traffic Report field grants as a server-side data boundary.
+
+        The browser cannot be trusted to hide fields after receiving them.  The
+        list and detail APIs therefore omit every denied column, and raw audit
+        material additionally requires its own explicit permission.
+        """
 
         data = super().to_representation(instance)
         request = self.context.get("request")
-        if request and not hasattr(self, "_can_view_client_name"):
-            # A list serializer reuses this child instance for every row.  The
-            # effective permission is request-scoped, so resolve it once rather
-            # than re-querying role assignments for every Traffic table row.
-            self._can_view_client_name = has_function_access(
-                request.user, "studies.column.client_name"
-            )
-        if request and not self._can_view_client_name:
-            data["client_name"] = ""
-            data["company_name"] = ""
-        if request and not hasattr(self, "_can_view_provider_status"):
-            self._can_view_provider_status = has_function_access(
-                request.user, "studies.field.provider_status"
-            )
-        if request and not self._can_view_provider_status:
-            data["termination_reason"] = ""
-            data["termination_category"] = ""
-        if request and not hasattr(self, "_can_view_status_source"):
-            self._can_view_status_source = has_function_access(
-                request.user, "studies.field.status_source"
-            )
-        if request and not self._can_view_status_source:
-            data["status_source"] = ""
+        if not request:
+            return data
+
+        # DRF reuses one child serializer for every list row. Cache the
+        # request-scoped permission snapshot so projection adds no per-row DB
+        # work to large Traffic Report pages.
+        permission_codes = self._permission_codes()
+
+        for permission, field_names in ATTEMPT_API_FIELDS_BY_PERMISSION.items():
+            if permission not in permission_codes:
+                for field_name in field_names:
+                    data.pop(field_name, None)
+
+        if ATTEMPT_SENSITIVE_AUDIT_PERMISSION not in permission_codes:
+            for field_name in ATTEMPT_SENSITIVE_AUDIT_FIELDS:
+                data.pop(field_name, None)
+        if "studies.column.pid" in permission_codes:
+            for field_name in ATTEMPT_API_FIELDS_BY_PERMISSION["studies.column.respondent_id"]:
+                data.pop(field_name, None)
         return data
 
     def get_user_name(self, obj) -> str:

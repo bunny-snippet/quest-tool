@@ -17,6 +17,7 @@ from config.cache_utils import (
     safe_cache_add,
     safe_cache_delete,
     safe_cache_get,
+    safe_cache_increment,
     safe_cache_set,
     stable_cache_key,
 )
@@ -24,6 +25,23 @@ from config.cache_utils import (
 
 CACHE_ALIAS = "reports"
 _MISSING = object()
+REPORT_METADATA_GENERATION_KEY = "reports:metadata:generation"
+
+
+def report_metadata_generation() -> int:
+    """Return the global version for filter/hierarchy selector payloads."""
+
+    return int(safe_cache_get(
+        REPORT_METADATA_GENERATION_KEY, 1, alias=CACHE_ALIAS
+    ) or 1)
+
+
+def invalidate_report_metadata_cache() -> int:
+    """Expire selector payloads after their underlying dimensions change."""
+
+    return safe_cache_increment(
+        REPORT_METADATA_GENERATION_KEY, default=1, alias=CACHE_ALIAS
+    )
 
 
 def _cached_with_stale_revalidation(key: str, factory: Callable[[], Any], *, timeout: int) -> Any:
@@ -142,6 +160,7 @@ def cached_user_metadata(
         {
             "viewer": report_viewer_scope(user),
             "extra": extra_scope,
+            "metadata_generation": report_metadata_generation(),
         },
     )
     return _cached_with_stale_revalidation(

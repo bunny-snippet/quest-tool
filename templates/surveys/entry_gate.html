@@ -1,0 +1,26 @@
+{% extends 'surveys/flow_base.html' %}
+
+{% block title %}Preparing survey{% endblock %}
+{% block body_class %}security-check-body{% endblock %}
+
+{% block content %}
+<main class="security-check-page">
+  <div class="silent-loader" role="status" aria-label="Preparing survey">
+    <span></span><span></span><span></span>
+  </div>
+  <form id="entryGate" method="post" action="{% url 'survey-start' %}">
+    {% csrf_token %}
+    <input type="hidden" name="entry" value="{{ entry_token }}">
+    <noscript><button type="submit">Continue to survey</button></noscript>
+  </form>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  const form = document.getElementById('entryGate');
+  if (form) window.requestAnimationFrame(() => form.requestSubmit());
+})();
+</script>
+{% endblock %}

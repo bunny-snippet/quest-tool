@@ -3,6 +3,7 @@ import hashlib
 import hmac
 from decimal import Decimal
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from django.contrib.auth import get_user_model
 from django.core.cache import cache
@@ -971,8 +972,9 @@ class CintProviderTests(TestCase):
         request = APIRequestFactory().get("/api/v1/surveys/")
         request.user = user
         public_start = SurveyListSerializer(survey, context={"request": request}).data["start_link"]
-        self.assertIn("supplierCode=1000", public_start)
-        self.assertNotIn("supplierCode=0050", public_start)
+        self.assertEqual(set(parse_qs(urlsplit(public_start).query)), {"entry"})
+        self.assertNotIn("supplierCode=", public_start)
+        self.assertNotIn("0050", public_start)
         attempt = SurveyAttempt.objects.create(
             rid="Ab3dE5fG7h",
             prescreener_uid="Ab12-Cd34-Ef56-Gh78",
@@ -1040,8 +1042,8 @@ class CintProviderTests(TestCase):
 
         listing = api.get("/api/v1/surveys/", {"search": survey.source_key})
         start_link = listing.data["results"][0]["start_link"]
-        self.assertIn(f"surveyId={survey.source_key}", start_link)
-        self.assertIn("supplierCode=1000", start_link)
+        self.assertEqual(set(parse_qs(urlsplit(start_link).query)), {"entry"})
+        self.assertNotIn(str(survey.source_key), start_link)
 
     @override_settings(PUBLIC_APP_BASE_URL="https://api.exchange-ip.com")
     @patch.dict("os.environ", {"TEST_CINT_API_KEY": "cint-secret"}, clear=False)

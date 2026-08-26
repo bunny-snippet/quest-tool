@@ -52,7 +52,9 @@
 <script>
 (() => {
   const endpoint = "{{ security_check_url|escapejs }}";
-  const rid = "{{ attempt.rid|escapejs }}";
+  const journey = "{{ journey_token|escapejs }}";
+  const legacyTrackingName = "{{ tracking_name|escapejs }}";
+  const legacyIdentifier = "{% if not journey_token %}{% if tracking_name == 'rid' %}{{ attempt.rid|escapejs }}{% else %}{{ attempt.pid|escapejs }}{% endif %}{% endif %}";
   const csrf = document.querySelector('[name=csrfmiddlewaretoken]').value;
 
   const postDecision = async (sessionId) => {
@@ -60,7 +62,9 @@
       method: 'POST',
       credentials: 'same-origin',
       headers: {'Content-Type': 'application/json', 'X-CSRFToken': csrf},
-      body: JSON.stringify({rid, session_id: sessionId || ''}),
+      body: JSON.stringify(journey
+        ? {journey, session_id: sessionId || ''}
+        : {[legacyTrackingName]: legacyIdentifier, session_id: sessionId || ''}),
     });
     const payload = await response.json().catch(() => ({}));
     if (payload.status === 'pending') {

@@ -909,6 +909,19 @@ class ResearchForGoodProvider(SurveyProvider):
         if not postal:
             raise ProviderError("Postal code is required for Research For Good.")
         parts = urlsplit(survey.entry_link)
+        hostname = (parts.hostname or "").lower()
+        if (
+            parts.scheme != "https"
+            or parts.username
+            or parts.password
+            or (
+                hostname != "saysoforgood.com"
+                and not hostname.endswith(".saysoforgood.com")
+            )
+        ):
+            raise ProviderConfigurationError(
+                "RFG returned an unexpected respondent-link hostname."
+            )
         query = dict(parse_qsl(parts.query, keep_blank_values=True))
         rfg_rid = effective_profile_uid(attempt)
         if not rfg_rid:

@@ -1,11 +1,13 @@
 """Celery task boundary for scheduled provider work and attempt reconciliation."""
 
+import logging
 from datetime import timedelta
 
 from celery import shared_task
 from django.conf import settings
 from django.db.models import F, Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from vendors.models import ClientIntegration
 from vendors.credentials import resolve_integration_token
@@ -19,6 +21,14 @@ from .provider_services import (
     sync_client_integration,
 )
 from .providers import has_provider
+from .supplier_callbacks import (
+    DELIVERY_AUDIT_KEY,
+    SupplierCallbackRetryableError,
+    deliver_supplier_result_callback,
+)
+
+
+logger = logging.getLogger(__name__)
 
 
 def _stale_surveys(integration, limit):
@@ -280,3 +290,77 @@ def reconcile_pending_attempts_task():
         return {"checked": checked, "terminal": terminal, "failures": failures}
     finally:
         SyncLease.release(lease_name)
+
+
+@shared_task(
+    bind=True,
+    name="surveys.deliver_supplier_result_callback",
+    max_retries=5,
+    acks_late=True,
+    reject_on_worker_lost=True,
+    soft_time_limit=45,
+    time_limit=60,
+)
+def deliver_supplier_result_callback_task(self, attempt_id, event_id):
+    """Send one persisted supplier result with bounded exponential retries."""
+
+    try:
+        return deliver_supplier_result_callback(attempt_id, event_id)
+    except SupplierCallbackRetryableError as exc:
+        countdown = min(300, 5 * (2 ** int(self.request.retries or 0)))
+        raise self.retry(exc=exc, countdown=countdown)
+
+
+@shared_task(name="surveys.dispatch_pending_supplier_callbacks")
+def dispatch_pending_supplier_callbacks_task():
+    """Recover callbacks stranded by broker outages or killed workers."""
+
+    now = timezone.now()
+    stale_before = now - timedelta(seconds=60)
+    lookback = now - timedelta(
+        hours=settings.SUPPLIER_CALLBACK_RECOVERY_LOOKBACK_HOURS
+    )
+    candidates = SurveyAttempt.objects.filter(
+        status__in=(
+            SurveyAttempt.Status.COMPLETED,
+            SurveyAttempt.Status.TERMINATED,
+            SurveyAttempt.Status.OVER_QUOTA,
+            SurveyAttempt.Status.QUALITY_TERMINATED,
+        ),
+        callback_at__gte=lookback,
+        upstream_transaction_data__supplier_callback_delivery__state__in=(
+            "queued", "queue_failed", "delivering",
+        ),
+    ).only(
+        "id", "upstream_transaction_data", "callback_at",
+    ).order_by("-callback_at")[: settings.SUPPLIER_CALLBACK_RECOVERY_BATCH]
+    queued = []
+    failures = 0
+    for attempt in candidates:
+        audit = attempt.upstream_transaction_data
+        record = (
+            audit.get(DELIVERY_AUDIT_KEY, {})
+            if isinstance(audit, dict)
+            else {}
+        )
+        event_id = str(record.get("event_id") or "")
+        if not event_id:
+            continue
+        updated_at = parse_datetime(str(record.get("updated_at") or ""))
+        if (
+            record.get("state") != "queue_failed"
+            and updated_at
+            and updated_at > stale_before
+        ):
+            continue
+        try:
+            deliver_supplier_result_callback_task.delay(attempt.pk, event_id)
+            queued.append(attempt.pk)
+        except Exception as exc:  # pragma: no cover - environment-specific broker failures
+            logger.error(
+                "Could not recover supplier callback attempt_id=%s error_type=%s",
+                attempt.pk,
+                type(exc).__name__,
+            )
+            failures += 1
+    return {"queued": queued, "count": len(queued), "failures": failures}

@@ -140,10 +140,16 @@ def project_filter_metadata(
 
 def project_filtered_count(request, queryset) -> int:
     count_neutral_parameters = {"page", "page_size", "ordering", "format"}
+    # DRF's public ``request.auth`` property performs lazy authentication when
+    # accessed. Pagination runs after authentication, so its private snapshot
+    # is already populated; reading it directly also keeps this cache helper
+    # side-effect free for RequestFactory callers and tests.
+    request_auth = getattr(request, "_auth", None)
     key = stable_cache_key(
         f"projects:v{_version(_COUNT_VERSION_KEY)}:count",
         {
             "user_id": request.user.pk,
+            "api_key_id": getattr(request_auth, "pk", None),
             "query": sorted(
                 (key, tuple(values))
                 for key, values in request.query_params.lists()
@@ -163,7 +169,14 @@ def project_filtered_count(request, queryset) -> int:
         Filters and permission predicates remain attached to the queryset.
         """
 
-        return queryset.order_by().values("pk").distinct().count()
+        count_queryset = queryset.order_by()
+        # Scope querysets that already require DISTINCT must keep it for
+        # correctness, but narrow the subquery back to the primary key so list
+        # annotations and wide model columns are not materialized. Ordinary
+        # scalar/Exists querysets take the cheaper direct COUNT(*) path.
+        if count_queryset.query.distinct:
+            count_queryset = count_queryset.values("pk")
+        return count_queryset.count()
 
     return int(safe_cache_get_or_set(
         key,

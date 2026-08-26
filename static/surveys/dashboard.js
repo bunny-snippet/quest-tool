@@ -237,6 +237,10 @@
     });
   }
 
+  const dashboardUpdatedFormatter = new Intl.DateTimeFormat('en-IN', {
+    timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit',
+  });
+
   function render(data) {
     state.data = data;
     updateSummary(data.summary || {});
@@ -251,7 +255,7 @@
     renderDevices(data.device_breakdown);
     renderTopUsers(data.top_users);
     const updated = byId('dashboardUpdatedAt');
-    if (updated) updated.textContent = `${new Intl.DateTimeFormat('en-IN', { timeZone: 'Asia/Kolkata', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(new Date(data.generated_at))} IST`;
+    if (updated) updated.textContent = `${dashboardUpdatedFormatter.format(new Date(data.generated_at))} IST`;
   }
 
   function showError(message) {

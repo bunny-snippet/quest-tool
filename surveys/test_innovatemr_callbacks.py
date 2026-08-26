@@ -140,6 +140,24 @@ class InnovateMRCallbackTests(TestCase):
         self.assertEqual(self.attempt.status, SurveyAttempt.Status.REDIRECTED)
         self.assertIsNone(self.attempt.callback_at)
 
+    @override_settings(
+        INNOVATEMR_CALLBACK_HASH_KEY="",
+        INNOVATEMR_CALLBACK_HASH_REQUIRED=True,
+    )
+    def test_missing_server_secret_fails_closed_without_recording_result(self):
+        response = self.client.get(reverse("survey-status"), {
+            "status": "1",
+            "rid": self.attempt.rid,
+            "hash": "attacker-controlled",
+        })
+
+        self.assertEqual(response.status_code, 403)
+        self.attempt.refresh_from_db()
+        self.assertEqual(self.attempt.status, SurveyAttempt.Status.REDIRECTED)
+        self.assertFalse(self.attempt.is_verified)
+        self.assertIsNone(self.attempt.callback_at)
+        self.assertEqual(self.attempt.callback_count, 0)
+
     def test_clean_internal_result_url_does_not_require_second_signature(self):
         callback = self.client.get(self.signed_callback_path(
             status="4",

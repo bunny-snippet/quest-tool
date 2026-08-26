@@ -3,6 +3,7 @@
 from decimal import Decimal, ROUND_HALF_UP
 import ipaddress
 import re
+from urllib.parse import urlsplit
 
 from django.contrib.auth import get_user_model
 from django.core.exceptions import ValidationError as DjangoValidationError
@@ -870,6 +871,22 @@ class VendorAPIKeySerializer(serializers.ModelSerializer):
         callback_urls = [
             attrs.get(name, getattr(self.instance, name, "")) for name in callback_fields
         ]
+        callback_errors = {}
+        for field_name, callback_url in zip(callback_fields, callback_urls):
+            if not callback_url:
+                continue
+            parsed_callback = urlsplit(str(callback_url))
+            if (
+                parsed_callback.scheme != "https"
+                or not parsed_callback.hostname
+                or parsed_callback.username
+                or parsed_callback.password
+            ):
+                callback_errors[field_name] = (
+                    "Supplier result callbacks must use an HTTPS URL without embedded credentials."
+                )
+        if callback_errors:
+            raise serializers.ValidationError(callback_errors)
         if signing_enabled and not any(callback_urls):
             raise serializers.ValidationError({
                 "callback_signing_enabled": "Add at least one result callback URL before enabling signing."
