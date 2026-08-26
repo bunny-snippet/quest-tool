@@ -81,6 +81,27 @@
     setTimeout(() => { node.classList.remove('show'); setTimeout(() => node.remove(), 250); }, 3800);
   }
 
+  async function issueFreshEntryLink(rawLink) {
+    const current = new URL(rawLink, window.location.origin);
+    const entry = current.searchParams.get('entry');
+    if (!entry) throw new Error('The secure survey token is missing. Refresh Projects and try again.');
+    const response = await fetch('/api/v1/surveys/entry-link/', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        'Accept': 'application/json',
+        'Content-Type': 'application/json',
+        'X-CSRFToken': document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '',
+      },
+      body: JSON.stringify({ entry }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok || !data.start_link) {
+      throw new Error(data.detail || `Could not create a survey link (${response.status}).`);
+    }
+    return data.start_link;
+  }
+
   function sourceTimestamp(displayValue, fallbackValue) {
     if (!fallbackValue) return '<strong class="source-time">—</strong>';
     const date = new Date(fallbackValue);
@@ -411,8 +432,17 @@
     if (copy) { await navigator.clipboard.writeText(copy.dataset.copy); toast('Project ID copied'); }
     const copyLink = event.target.closest('[data-copy-link]');
     if (copyLink && copyLink.dataset.copyLink) {
-      await navigator.clipboard.writeText(copyLink.dataset.copyLink);
-      toast('Secure entry link copied');
+      copyLink.disabled = true;
+      try {
+        const freshLink = await issueFreshEntryLink(copyLink.dataset.copyLink);
+        copyLink.dataset.copyLink = freshLink;
+        await navigator.clipboard.writeText(freshLink);
+        toast('New secure entry link copied');
+      } catch (error) {
+        toast(error.message || 'Could not create a survey link.', 'error');
+      } finally {
+        copyLink.disabled = false;
+      }
     }
     const action = event.target.closest('[data-action]');
     if (action) {

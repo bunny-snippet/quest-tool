@@ -1979,7 +1979,20 @@ def survey_start(request):
     """
 
     if request.method == "GET" and "entry" in request.GET:
-        if not _has_exact_query(request, {"entry"}):
+        # A short-lived compatibility path is required for Projects pages that
+        # were already open when opaque entry tokens were deployed. Their old
+        # JavaScript appended a browser-generated PID to the new signed token.
+        # The PID is deliberately ignored: the authenticated entry token remains
+        # the sole authority for the survey and account. Reject every other
+        # extra/duplicated parameter and malformed legacy PID.
+        expected_entry_params = {"entry", "pid"} if "pid" in request.GET else {"entry"}
+        if (
+            not _has_exact_query(request, expected_entry_params)
+            or (
+                "pid" in request.GET
+                and not is_valid_platform_pid(request.GET.get("pid", "").strip())
+            )
+        ):
             return _invalid_survey_link(request)
         entry_token = request.GET.get("entry", "")
         try:
@@ -3262,6 +3275,55 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
         if self.action == "export":
             return "projects.export"
         return "survey_details.view" if self.action in {"retrieve", "quotas", "targeting", "details"} else "projects.view"
+
+    @extend_schema(
+        tags=["Surveys"],
+        summary="Issue a fresh secure respondent entry link",
+        description=(
+            "Exchanges an existing authenticated entry token for a newly encrypted "
+            "link after rechecking the account, project scope and copy permission."
+        ),
+        request=OpenApiTypes.OBJECT,
+        responses={200: OpenApiTypes.OBJECT},
+    )
+    @action(detail=False, methods=["post"], url_path="entry-link")
+    def entry_link(self, request):
+        if not has_function_access(request.user, "survey_links.copy"):
+            raise PermissionDenied("Your account cannot copy survey links.")
+
+        token = str(request.data.get("entry") or "").strip()
+        try:
+            entry = decode_entry_token(token)
+        except EntryTokenError:
+            return Response({"detail": "Invalid survey entry token."}, status=status.HTTP_400_BAD_REQUEST)
+
+        request_api_key = request.auth if isinstance(request.auth, VendorAPIKey) else None
+        expected_api_key_id = request_api_key.pk if request_api_key else None
+        if (
+            int(entry["user_id"]) != request.user.pk
+            or entry.get("api_key_id") != expected_api_key_id
+        ):
+            raise PermissionDenied("This survey entry token belongs to a different account.")
+
+        survey = self.get_queryset().filter(
+            pk=int(entry["survey_id"]),
+            status=Survey.Status.LIVE,
+        ).first()
+        if survey is None:
+            return Response(
+                {"detail": "This survey is not available to your account."},
+                status=status.HTTP_404_NOT_FOUND,
+            )
+
+        start_link = SurveyListSerializer(context={"request": request}).get_start_link(survey)
+        if not start_link:
+            return Response(
+                {"detail": "This survey entry link is not ready."},
+                status=status.HTTP_409_CONFLICT,
+            )
+        response = Response({"start_link": start_link})
+        response["Cache-Control"] = "no-store"
+        return response
 
     def filter_queryset(self, queryset):
         _enforce_query_permissions(self.request, {

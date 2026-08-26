@@ -430,6 +430,58 @@ class SurveyAPITests(TestCase):
         })
         self.assertEqual(injected.status_code, 400)
 
+    def test_each_copy_request_returns_a_new_server_signed_entry_link(self):
+        listing = self.api.get(reverse("survey-list"), {"search": "banking"})
+        original_link = listing.data["results"][0]["start_link"]
+        original_token = parse_qs(urlsplit(original_link).query)["entry"][0]
+
+        first = self.api.post(
+            reverse("survey-entry-link"),
+            {"entry": original_token},
+            format="json",
+        )
+        first_token = parse_qs(urlsplit(first.data["start_link"]).query)["entry"][0]
+        second = self.api.post(
+            reverse("survey-entry-link"),
+            {"entry": first_token},
+            format="json",
+        )
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertNotEqual(original_link, first.data["start_link"])
+        self.assertNotEqual(first.data["start_link"], second.data["start_link"])
+        self.assertEqual(self.client.get(first.data["start_link"]).status_code, 200)
+        self.assertEqual(self.client.get(second.data["start_link"]).status_code, 200)
+        self.assertEqual(SurveyAttempt.objects.count(), 0)
+
+    def test_cached_frontend_entry_link_with_ignored_pid_remains_valid(self):
+        listing = self.api.get(reverse("survey-list"), {"search": "banking"})
+        token = parse_qs(
+            urlsplit(listing.data["results"][0]["start_link"]).query
+        )["entry"][0]
+
+        response = self.client.get(reverse("survey-start"), {
+            "entry": token,
+            "pid": generate_platform_pid(),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, 'id="entryGate"')
+        self.assertEqual(SurveyAttempt.objects.count(), 0)
+
+        malformed = self.client.get(reverse("survey-start"), {
+            "entry": token,
+            "pid": "not-valid!",
+        })
+        injected = self.client.get(reverse("survey-start"), {
+            "entry": token,
+            "pid": generate_platform_pid(),
+            "unexpected": "value",
+        })
+        self.assertEqual(malformed.status_code, 400)
+        self.assertEqual(injected.status_code, 400)
+
     def test_tampered_secure_start_link_is_rejected_without_creating_attempt(self):
         listing = self.api.get(reverse("survey-list"), {"search": "banking"})
         parsed = urlsplit(listing.data["results"][0]["start_link"])
