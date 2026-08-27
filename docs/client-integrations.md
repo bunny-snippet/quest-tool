@@ -18,13 +18,13 @@ Client onboarding uses a hybrid model: owners configure non-secret metadata in *
    | Country | Optional two-letter ISO code, for example `US` |
    | Category | Optional `B2C` or `B2B` |
    | Public supplier code | `1000` |
-   | Sync interval | `60` seconds or longer |
+   | Sync interval | `600` seconds or longer |
 
    Generic REST endpoint, API-header, token and Advanced fields are intentionally hidden for RFG because the backend adapter owns its signed-command contract.
 5. Run **Test connection**. Only a verified connection can enable scheduled sync.
 6. Use **Preview inventory** for a read-only check, then **Sync now**. Enable scheduled sync after validation.
 
-Verified RFG inventory is synchronized automatically every 60 seconds. InnovateMR inventory is synchronized every 150 seconds. Celery Beat checks due integrations every 30 seconds, while `last_sync_started_at` and a database lease prevent overlapping provider calls. Inventory rows are keyed by `(integration, source_key)`, so equal upstream IDs belonging to separate client accounts cannot overwrite one another.
+Verified RFG inventory is synchronized no more often than every 600 seconds. InnovateMR inventory is synchronized every 150 seconds. Celery Beat checks due integrations every 30 seconds, while `last_sync_started_at`, queued/running stale guards and a database lease prevent overlapping or duplicate provider calls. Inventory rows are keyed by `(integration, source_key)`, so equal upstream IDs belonging to separate client accounts cannot overwrite one another.
 
 ## Cint Exchange (Model 2, Method B polling)
 

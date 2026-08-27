@@ -195,7 +195,7 @@ class SurveySyncTests(TestCase):
 
     @override_settings(
         CLIENT_INTEGRATION_INNOVATEMR_SYNC_INTERVAL_SECONDS=150,
-        CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS=60,
+        CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS=600,
     )
     @patch("surveys.tasks.sync_client_integration_task.delay")
     def test_dispatcher_automates_innovatemr_and_verified_rfg_at_fixed_intervals(self, delay):
@@ -208,14 +208,14 @@ class SurveySyncTests(TestCase):
         custom_client = Client.objects.create(code="manual-custom", name="Manual Custom", provider_code="custom")
         innovate = ClientIntegration.objects.create(
             client=innovate_client, name="Innovate automatic", provider_code="innovatemr",
-            base_url="https://supplier.innovatemr.net/api/v2", sync_interval_seconds=999,
+            base_url="https://supplier.innovatemr.net/api/v2", sync_interval_seconds=150,
             scheduled_sync_enabled=False, last_sync_started_at=now - timedelta(seconds=151),
         )
         rfg = ClientIntegration.objects.create(
             client=rfg_client, name="RFG automatic", provider_code="rfg",
-            base_url="https://api.researchforgood.com/API", sync_interval_seconds=999,
+            base_url="https://api.researchforgood.com/API", sync_interval_seconds=600,
             scheduled_sync_enabled=False, last_test_status="success",
-            last_sync_started_at=now - timedelta(seconds=61),
+            last_sync_started_at=now - timedelta(seconds=601),
         )
         ClientIntegration.objects.create(
             client=custom_client, name="Custom manual", provider_code="custom",
@@ -224,7 +224,7 @@ class SurveySyncTests(TestCase):
         )
         ClientIntegration.objects.create(
             client=rfg_client, name="RFG unverified", provider_code="rfg",
-            base_url="https://api.researchforgood.com/API", sync_interval_seconds=60,
+            base_url="https://api.researchforgood.com/API", sync_interval_seconds=600,
             scheduled_sync_enabled=False, last_test_status="",
             last_sync_started_at=now - timedelta(days=1),
         )
@@ -237,6 +237,71 @@ class SurveySyncTests(TestCase):
             set(ClientIntegration.objects.filter(last_sync_status="queued").values_list("pk", flat=True)),
             {innovate.pk, rfg.pk},
         )
+
+
+    @override_settings(
+        CLIENT_INTEGRATION_INNOVATEMR_SYNC_INTERVAL_SECONDS=180,
+        CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS=60,
+    )
+    def test_effective_interval_respects_record_environment_and_provider_floors(self):
+        from .tasks import effective_sync_interval_seconds
+
+        client = Client.objects.create(
+            code="interval-floors", name="Interval floors", provider_code="rfg"
+        )
+        integration = ClientIntegration.objects.create(
+            client=client,
+            name="RFG interval floors",
+            provider_code="rfg",
+            base_url="https://api.researchforgood.com/API",
+            sync_interval_seconds=900,
+        )
+        self.assertEqual(effective_sync_interval_seconds(integration), 900)
+
+        integration.sync_interval_seconds = 60
+        self.assertEqual(effective_sync_interval_seconds(integration), 600)
+
+        integration.provider_code = "innovatemr"
+        integration.sync_interval_seconds = 60
+        self.assertEqual(effective_sync_interval_seconds(integration), 180)
+
+
+    @override_settings(CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS=600)
+    @patch("surveys.tasks.sync_client_integration_task.delay")
+    def test_dispatcher_skips_recent_queue_marker_but_recovers_stale_marker(self, delay):
+        from .tasks import dispatch_due_integrations_task
+
+        ClientIntegration.objects.all().delete()
+        client = Client.objects.create(
+            code="rfg-queue-guard", name="RFG queue guard", provider_code="rfg"
+        )
+        recent = ClientIntegration.objects.create(
+            client=client,
+            name="Recent queued RFG",
+            provider_code="rfg",
+            base_url="https://api.researchforgood.com/API",
+            sync_interval_seconds=600,
+            last_test_status="success",
+            last_sync_status="queued",
+            last_sync_started_at=timezone.now() - timedelta(seconds=601),
+        )
+        stale = ClientIntegration.objects.create(
+            client=client,
+            name="Stale running RFG",
+            provider_code="rfg",
+            base_url="https://api.researchforgood.com/API",
+            sync_interval_seconds=600,
+            last_test_status="success",
+            last_sync_status="running",
+            last_sync_started_at=timezone.now() - timedelta(seconds=1801),
+        )
+
+        result = dispatch_due_integrations_task()
+
+        self.assertEqual(result, {"queued": [stale.pk], "count": 1})
+        delay.assert_called_once_with(stale.pk)
+        recent.refresh_from_db()
+        self.assertEqual(recent.last_sync_status, "queued")
 
 
     @patch("surveys.tasks.sync_client_integration_task.delay")

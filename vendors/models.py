@@ -212,10 +212,16 @@ class ClientIntegration(models.Model):
 
     def clean(self):
         super().clean()
-        if self.provider_code in {"rfg", "cint", "purespectrum"} and self.sync_interval_seconds < 60:
+        provider_minimum = {
+            "rfg": 600,
+            "cint": 60,
+            "purespectrum": 60,
+        }.get(self.provider_code)
+        if provider_minimum and self.sync_interval_seconds < provider_minimum:
             raise ValidationError({
                 "sync_interval_seconds": (
-                    "This provider inventory cannot be polled more often than every 60 seconds."
+                    f"This provider inventory cannot be polled more often than every "
+                    f"{provider_minimum} seconds."
                 )
             })
         if self.provider_code in {"rfg", "cint", "purespectrum"} and self.scheduled_sync_enabled and self.last_test_status != "success":

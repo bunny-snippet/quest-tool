@@ -237,6 +237,8 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
 
         if provider_key == "rfg":
             attrs.setdefault("base_url", "https://api.researchforgood.com/API")
+            if self.instance is None:
+                attrs.setdefault("sync_interval_seconds", 600)
             credential_refs = attrs.get(
                 "credential_env_keys", getattr(self.instance, "credential_env_keys", {})
             ) or {}
@@ -285,9 +287,9 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({
                     "sync_interval_seconds": "Sync interval must be a whole number."
                 }) from exc
-            if interval < 60:
+            if interval < 600:
                 raise serializers.ValidationError({
-                    "sync_interval_seconds": "RFG inventory sync must be at least 60 seconds."
+                    "sync_interval_seconds": "RFG inventory sync must be at least 600 seconds."
                 })
             if attrs.get("scheduled_sync_enabled", False) and getattr(
                 self.instance, "last_test_status", ""

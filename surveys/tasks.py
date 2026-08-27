@@ -31,6 +31,28 @@ from .supplier_callbacks import (
 logger = logging.getLogger(__name__)
 
 
+PROVIDER_MINIMUM_SYNC_INTERVAL_SECONDS = {
+    "rfg": 600,
+}
+
+
+def effective_sync_interval_seconds(integration):
+    """Return the slowest operator, environment and provider-safe interval."""
+
+    configured_floor = {
+        "innovatemr": settings.CLIENT_INTEGRATION_INNOVATEMR_SYNC_INTERVAL_SECONDS,
+        "rfg": settings.CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS,
+        "cint": settings.CLIENT_INTEGRATION_CINT_SYNC_INTERVAL_SECONDS,
+        "purespectrum": settings.CLIENT_INTEGRATION_PURESPECTRUM_SYNC_INTERVAL_SECONDS,
+    }.get(integration.provider_code, 60)
+    return max(
+        60,
+        int(integration.sync_interval_seconds or 60),
+        int(configured_floor or 60),
+        PROVIDER_MINIMUM_SYNC_INTERVAL_SECONDS.get(integration.provider_code, 60),
+    )
+
+
 def _stale_surveys(integration, limit):
     return Survey.objects.filter(integration=integration, status=Survey.Status.LIVE).filter(
         Q(quota_synced_at__isnull=True)
@@ -54,6 +76,7 @@ def dispatch_due_integrations_task():
         | Q(provider_code="purespectrum", last_test_status="success")
     ).only(
         "id", "provider_code", "sync_interval_seconds", "last_sync_started_at",
+        "last_sync_status",
         "credential_env_key", "encrypted_api_token", "config",
     )
     for integration in integrations:
@@ -69,13 +92,17 @@ def dispatch_due_integrations_task():
         lease_name = f"integration-{integration.pk}-sync"
         if SyncLease.objects.filter(name=lease_name, locked_until__gt=now).exists():
             continue
-        interval_seconds = {
-            "innovatemr": settings.CLIENT_INTEGRATION_INNOVATEMR_SYNC_INTERVAL_SECONDS,
-            "rfg": settings.CLIENT_INTEGRATION_RFG_SYNC_INTERVAL_SECONDS,
-            "cint": settings.CLIENT_INTEGRATION_CINT_SYNC_INTERVAL_SECONDS,
-            "purespectrum": settings.CLIENT_INTEGRATION_PURESPECTRUM_SYNC_INTERVAL_SECONDS,
-        }.get(integration.provider_code, integration.sync_interval_seconds)
-        interval_seconds = max(60, interval_seconds)
+        interval_seconds = effective_sync_interval_seconds(integration)
+        # A broker delay or slow worker must not make every Beat tick enqueue
+        # another copy. Old queue/running markers recover automatically after
+        # three effective intervals (and never sooner than the lease window).
+        active_sync_cutoff = now - timedelta(seconds=max(300, interval_seconds * 3))
+        if (
+            integration.last_sync_status in {"queued", "running"}
+            and integration.last_sync_started_at
+            and integration.last_sync_started_at > active_sync_cutoff
+        ):
+            continue
         due_at = (integration.last_sync_started_at or (now - timedelta(days=1))) + timedelta(
             seconds=interval_seconds
         )
@@ -96,7 +123,9 @@ def dispatch_due_integrations_task():
 def sync_client_integration_task(integration_id):
     integration = ClientIntegration.objects.select_related("client").get(pk=integration_id, is_active=True)
     lease_name = f"integration-{integration_id}-sync"
-    if not SyncLease.acquire(lease_name, seconds=max(300, integration.sync_interval_seconds)):
+    if not SyncLease.acquire(
+        lease_name, seconds=max(300, effective_sync_interval_seconds(integration))
+    ):
         return {"status": "skipped", "reason": "previous integration sync is still running"}
     integration.last_sync_started_at = timezone.now()
     integration.last_sync_status = "running"

@@ -15,7 +15,7 @@ from vendors.models import Client, ClientIntegration
 
 from .models import Survey, SurveyAttempt, SurveyQuota, TargetingQuestion
 from .outcomes import provider_outcome
-from .provider_services import sync_client_integration
+from .provider_services import sync_client_integration, test_provider_connection as verify_provider_connection
 from .providers.base import (
     NormalizedSurvey,
     ProviderConfigurationError,
@@ -95,7 +95,7 @@ class ResearchForGoodIntegrationTests(TestCase):
             provider_code="rfg",
             base_url="https://api.researchforgood.com/API/",
             credential_env_keys={"apid": "RFG_APID", "secret": "RFG_SECRET"},
-            sync_interval_seconds=60,
+            sync_interval_seconds=600,
         )
 
     @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
@@ -119,6 +119,24 @@ class ResearchForGoodIntegrationTests(TestCase):
             with self.assertRaises(ProviderConfigurationError):
                 ResearchForGoodProvider(self.integration)
         self.assertEqual(self.integration.credential_env_keys["secret"], "RFG_SECRET")
+
+    @patch("surveys.provider_services.get_provider")
+    def test_successful_connection_test_restores_rfg_minimum_without_lowering_operator_value(
+        self, get_provider
+    ):
+        provider = get_provider.return_value
+        provider.minimum_sync_interval_seconds = 600
+        provider.test_connection.return_value = {"status": "ok"}
+        ClientIntegration.objects.filter(pk=self.integration.pk).update(
+            sync_interval_seconds=60
+        )
+        self.integration.sync_interval_seconds = 60
+
+        verify_provider_connection(self.integration)
+
+        self.integration.refresh_from_db()
+        self.assertEqual(self.integration.sync_interval_seconds, 600)
+        self.assertEqual(self.integration.last_test_status, "success")
 
     @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
     def test_rfg_unauthorized_project_is_classified_as_unavailable(self):
@@ -155,6 +173,7 @@ class ResearchForGoodIntegrationTests(TestCase):
         response = api.get("/api/v1/vendors/integrations/providers/")
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.json()[0]["code"], "rfg")
+        self.assertEqual(response.json()[0]["minimum_sync_interval_seconds"], 600)
         self.assertEqual(
             {provider["code"] for provider in response.json()},
             {"rfg", "cint", "purespectrum", "innovatemr", "custom"},
@@ -173,14 +192,19 @@ class ResearchForGoodIntegrationTests(TestCase):
                 "callback_security_mode": "ip",
             },
             "supplier_code": "1000",
-            "sync_interval_seconds": 60,
+            "sync_interval_seconds": 600,
             "detail_refresh_batch": 3,
             "scheduled_sync_enabled": False,
             "is_active": True,
         }, format="json")
         self.assertEqual(response.status_code, 201, response.json())
-        self.assertEqual(response.json()["sync_interval_seconds"], 60)
+        self.assertEqual(response.json()["sync_interval_seconds"], 600)
         created_integration_id = response.json()["id"]
+        response = api.patch(f"/api/v1/vendors/integrations/{created_integration_id}/", {
+            "sync_interval_seconds": 599,
+        }, format="json")
+        self.assertEqual(response.status_code, 400, response.json())
+        self.assertIn("at least 600 seconds", response.json()["sync_interval_seconds"][0])
         response = api.patch(f"/api/v1/vendors/integrations/{created_integration_id}/", {
             "config": {
                 "country": "US",

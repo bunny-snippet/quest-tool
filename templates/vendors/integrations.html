@@ -113,7 +113,7 @@ document.addEventListener('DOMContentLoaded',()=>{
   const fallbackProviders=[
     {code:'purespectrum',label:'PureSpectrum Fusion Match',default_base_url:'https://fusionapi.spectrumsurveys.com/surveys/fusionMatch',minimum_sync_interval_seconds:60},
     {code:'cint',label:'Cint Exchange',default_base_url:'https://api.samplicio.us',minimum_sync_interval_seconds:60},
-    {code:'rfg',label:'Research For Good',default_base_url:'https://api.researchforgood.com/API',minimum_sync_interval_seconds:60},
+    {code:'rfg',label:'Research For Good',default_base_url:'https://api.researchforgood.com/API',minimum_sync_interval_seconds:600},
     {code:'innovatemr',label:'InnovateMR',default_base_url:'https://supplier.innovatemr.net/api/v2',minimum_sync_interval_seconds:60},
     {code:'biobrain',label:'BioBrain / Voqall',default_base_url:'https://partner-api.voqall.com/api/v1/surveys',minimum_sync_interval_seconds:60},
     {code:'custom',label:'Custom REST API',default_base_url:'',minimum_sync_interval_seconds:60}
@@ -206,7 +206,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     el('scheduled').disabled=innovate||rfg||cint||pureSpectrum;
     if(innovate){el('scheduled').checked=true;el('scheduleHelp').textContent='InnovateMR inventory runs automatically every 150 seconds.';el('scheduleHelp').className='schedule-help'}
     else if(rfg&&!verified){el('scheduled').checked=false;el('scheduleHelp').textContent='Test this RFG connection once; automatic 60-second sync starts after verification.';el('scheduleHelp').className='schedule-help warning'}
-    else if(rfg){el('scheduled').checked=true;el('scheduleHelp').textContent='RFG inventory runs automatically every 60 seconds.';el('scheduleHelp').className='schedule-help'}
+    else if(rfg){el('scheduled').checked=true;el('scheduleHelp').textContent='RFG inventory runs automatically no more often than every 600 seconds.';el('scheduleHelp').className='schedule-help'}
     else if(cintWebhook){el('scheduled').checked=false;el('scheduleHelp').textContent='Signed Feed Opportunities is active; periodic Cint inventory polling is disabled.';el('scheduleHelp').className='schedule-help'}
     else if(cint&&!verified){el('scheduled').checked=false;el('scheduleHelp').textContent='Test this Cint connection once; automatic 60-second polling starts after verification.';el('scheduleHelp').className='schedule-help warning'}
     else if(cint){el('scheduled').checked=true;el('scheduleHelp').textContent='Cint Model 2 inventory polls automatically every 60 seconds.';el('scheduleHelp').className='schedule-help'}
@@ -233,7 +233,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     el('providerNote').classList.toggle('hidden',!code);
     el('interval').min=String(meta.minimum_sync_interval_seconds||60);
     el('intervalLabel').textContent=`Sync interval (seconds, min ${meta.minimum_sync_interval_seconds||60})`;
-    el('intervalHelp').textContent=isRfg?'RFG Live Alert inventory refreshes automatically every 60 seconds.':isCint?'Cint Supply polling is limited to once per minute.':isPureSpectrum?'All approved PureSpectrum localizations are fetched on every inventory sync.':code==='innovatemr'?'InnovateMR inventory refreshes automatically every 150 seconds.':`Minimum ${meta.minimum_sync_interval_seconds||60} seconds.`;
+    el('intervalHelp').textContent=isRfg?'RFG Live Alert inventory refreshes no more often than every 600 seconds.':isCint?'Cint Supply polling is limited to once per minute.':isPureSpectrum?'All approved PureSpectrum localizations are fetched on every inventory sync.':code==='innovatemr'?'InnovateMR inventory refreshes automatically every 150 seconds.':`Minimum ${meta.minimum_sync_interval_seconds||60} seconds.`;
     el('baseUrlHelp').textContent=isRfg?'Official RFG command endpoint. HMAC signing is handled by the backend adapter.':isCint?'Official Cint Exchange production API root. There is no Supply sandbox.':isPureSpectrum?'Official Fusion Match endpoint; the backend locks this value.':'Provider API root. Endpoint fields below may be relative to this URL.';
     el('supplierCodeLabel').textContent=isCint?'Cint Supplier Code':'Public supplier code';
     el('supplierCodeHelp').textContent=isCint?'Enter the real numeric Supplier Code issued by Cint; this is used only for upstream API calls.':'Respondent URLs continue to expose 1000.';
@@ -245,7 +245,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     else{el('providerNoteTitle').textContent='Custom REST contract.';el('providerNoteText').textContent=' Enter only the endpoints and field mappings provided by this client. No InnovateMR values are inherited.'}
     if(applyDefaults&&code){
       el('baseUrl').value=meta.default_base_url||'';
-      el('interval').value=String(code==='innovatemr'?150:isRfg?60:(meta.minimum_sync_interval_seconds||60));
+      el('interval').value=String(code==='innovatemr'?150:isRfg?600:(meta.minimum_sync_interval_seconds||60));
       el('detailBatch').value=isCint?'1':'3';el('supplierCode').value=isCint?'':'1000';
       if(isRfg){el('rfgApidEnv').value='RFG_APID';el('rfgSecretEnv').value='RFG_SECRET';el('rfgCountry').value='';el('rfgCategory').value='';el('rfgRecontacts').checked=false;el('rfgStrictTargeting').checked=true}
       else{Object.entries(presets[code]||presets.custom).forEach(([id,value])=>el(id).value=value);el('tokenEnv').value=isCint?'CINT_API_KEY':isPureSpectrum?'PURESPECTRUM_ACCESS_TOKEN':'';el('apiToken').value='';el('authPrefix').value='';el('fieldMapping').value='';el('cintWebhookEnabled').checked=false;el('cintCallbackUrl').value=isCint?`${window.location.origin}/api/cint/webhook/surveys`:'';el('cintKeyId').value='';el('cintPublicKey').value=''}
