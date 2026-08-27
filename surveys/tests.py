@@ -1727,7 +1727,7 @@ class StudiesTrackingTests(TestCase):
         self.assertContains(page, "Idle Studies")
         self.assertContains(page, "Canada · CA")
         self.assertContains(page, '<th class="study-col-cpi">CPI</th>', html=True)
-        self.assertNotContains(page, '<th class="study-col-rid">RID / UID</th>', html=True)
+        self.assertContains(page, '<th class="study-col-rid">RID / UID</th>', html=True)
         self.assertContains(page, '<th class="study-col-pid">PID</th>', html=True)
         self.assertContains(page, 'data-multi-filter="branch"')
         self.assertContains(page, 'data-multi-filter="sub_branch"')
@@ -1754,8 +1754,8 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(response.data["count"], 1)
         result = response.data["results"][0]
         self.assertEqual(result["pid"], self.complete.pid)
-        self.assertNotIn("rid", result)
-        self.assertNotIn("prescreener_uid", result)
+        self.assertEqual(result["rid"], self.complete.rid)
+        self.assertEqual(result["prescreener_uid"], self.complete.prescreener_uid)
         self.assertEqual(result["user_name"], "Kanik Sharma")
         self.assertEqual(result["entry_ip"], "10.0.0.1")
         self.assertEqual(result["exit_ip"], "20.0.0.1")
@@ -1780,6 +1780,36 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(uid_search.status_code, 200)
         self.assertEqual(uid_search.data["count"], 1)
         self.assertEqual(uid_search.data["results"][0]["pid"], self.complete.pid)
+
+    def test_role_based_super_admin_sees_pid_rid_and_uid_together(self):
+        role_admin = get_user_model().objects.create_user(
+            username="traffic-role-super-admin",
+            email="traffic-role-super-admin@example.test",
+        )
+        role_admin.employee_profile.role = Role.objects.get(slug="super-admin")
+        role_admin.employee_profile.save(update_fields=["role", "updated_at"])
+        attempt = SurveyAttempt.objects.create(
+            rid="Su1Pe2Ra3D",
+            prescreener_uid="Su1p-Er2a-Dm3i-Nu4d",
+            survey=self.survey,
+            platform_user=role_admin,
+            user_id=str(role_admin.pk),
+            status=SurveyAttempt.Status.INITIATED,
+        )
+
+        self.client.force_login(role_admin)
+        page = self.client.get(reverse("studies"))
+        self.assertContains(page, '<th class="study-col-rid">RID / UID</th>', html=True)
+        self.assertContains(page, '<th class="study-col-pid">PID</th>', html=True)
+
+        api = APIClient()
+        api.force_authenticate(role_admin)
+        response = api.get(reverse("survey-attempt-list"), {"search": attempt.rid})
+        self.assertEqual(response.status_code, 200)
+        row = response.data["results"][0]
+        self.assertEqual(row["pid"], attempt.pid)
+        self.assertEqual(row["rid"], attempt.rid)
+        self.assertEqual(row["prescreener_uid"], attempt.prescreener_uid)
 
     def test_client_buyer_and_project_deep_link_filters(self):
         response = self.api.get(reverse("survey-attempt-list"), {

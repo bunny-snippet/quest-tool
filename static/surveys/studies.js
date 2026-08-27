@@ -330,7 +330,7 @@
     if (columns.has('cpi')) cells.push(`<td class="study-col-cpi"><span class="study-cpi"><b>${attempt.source_cpi_snapshot == null ? '—' : formatMoney(attempt.source_cpi_snapshot, attempt.cpi_currency_snapshot || 'USD')}</b><small>${attempt.cpi_snapshot_source === 'legacy_survey' ? 'Legacy recovered' : 'At hit time'}</small></span></td>`);
     if (columns.has('respondent_id')) {
       const uid = attempt.prescreener_uid || '';
-      cells.push(`<td class="study-col-rid"><div class="study-id-stack"><strong class="respondent-id" title="RID ${escapeAttr(attempt.rid)}">${escapeHtml(attempt.rid)}</strong><small class="study-secondary" title="${uid ? `UID ${escapeAttr(uid)}` : 'UID unavailable'}">${uid ? ` ${escapeHtml(uid)}` : 'UID unavailable'}</small></div></td>`);
+      cells.push(`<td class="study-col-rid"><div class="study-id-stack"><strong class="respondent-id" title="RID ${escapeAttr(attempt.rid)}">${escapeHtml(attempt.rid)}</strong><small class="study-secondary" title="${uid ? `UID ${escapeAttr(uid)}` : 'UID unavailable'}">${uid ? `UID ${escapeHtml(uid)}` : 'UID unavailable'}</small></div></td>`);
     }
     if (columns.has('pid')) cells.push(`<td class="study-col-pid"><strong class="study-pid" title="Platform PID ${escapeAttr(attempt.pid || '')}">${escapeHtml(attempt.pid || 'N/A')}</strong></td>`);
     if (columns.has('user')) cells.push(`<td class="study-col-user"><strong class="study-user-name">${escapeHtml(attempt.user_name)}</strong><small class="study-secondary">${escapeHtml(attempt.user_email || attempt.username || `User #${attempt.user_id}`)}</small></td>`);

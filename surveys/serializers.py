@@ -6,7 +6,11 @@ from django.urls import reverse
 from drf_spectacular.utils import extend_schema_field
 from rest_framework import serializers
 
-from accounts.access import effective_permission_codes, has_function_access
+from accounts.access import (
+    effective_permission_codes,
+    has_function_access,
+    is_super_admin_account,
+)
 from vendors.access import vendor_scope_user_id
 from vendors.models import VendorAPIKey
 from surveys.entry_tokens import issue_entry_token
@@ -756,6 +760,14 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
             )
         return self._attempt_permission_codes
 
+    def _can_view_internal_respondent_identity(self) -> bool:
+        if not hasattr(self, "_attempt_internal_identity_access"):
+            request = self.context.get("request")
+            self._attempt_internal_identity_access = bool(
+                request and is_super_admin_account(request.user)
+            )
+        return self._attempt_internal_identity_access
+
     def get_fields(self):
         """Remove denied data before DRF reads fields or runs method fields."""
 
@@ -770,9 +782,13 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
         if ATTEMPT_SENSITIVE_AUDIT_PERMISSION not in permission_codes:
             for field_name in ATTEMPT_SENSITIVE_AUDIT_FIELDS:
                 fields.pop(field_name, None)
-        # PID is the browser/report identifier. When both legacy grants exist,
-        # never send the internal RID/profile UID alongside it.
-        if "studies.column.pid" in permission_codes:
+        # PID remains the only public report identity for normal scoped users.
+        # Super Admins are the audited exception: their explicit respondent-ID
+        # grant exposes RID/UID alongside PID for operational investigation.
+        if (
+            "studies.column.pid" in permission_codes
+            and not self._can_view_internal_respondent_identity()
+        ):
             for field_name in ATTEMPT_API_FIELDS_BY_PERMISSION["studies.column.respondent_id"]:
                 fields.pop(field_name, None)
         return fields
@@ -803,7 +819,10 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
         if ATTEMPT_SENSITIVE_AUDIT_PERMISSION not in permission_codes:
             for field_name in ATTEMPT_SENSITIVE_AUDIT_FIELDS:
                 data.pop(field_name, None)
-        if "studies.column.pid" in permission_codes:
+        if (
+            "studies.column.pid" in permission_codes
+            and not self._can_view_internal_respondent_identity()
+        ):
             for field_name in ATTEMPT_API_FIELDS_BY_PERMISSION["studies.column.respondent_id"]:
                 data.pop(field_name, None)
         return data

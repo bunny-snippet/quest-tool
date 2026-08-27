@@ -44,6 +44,7 @@ from accounts.access import (
     effective_permission_codes,
     function_permission_required,
     has_function_access,
+    is_super_admin_account,
 )
 from vendors.services import (
     AllocationUnavailable,
@@ -453,7 +454,11 @@ def projects_page(request):
 def studies_page(request):
     codes = effective_permission_codes(request.user)
     study_columns = _permitted_columns(codes, STUDY_COLUMN_PERMISSIONS)
-    if "pid" in study_columns and "respondent_id" in study_columns:
+    if (
+        "pid" in study_columns
+        and "respondent_id" in study_columns
+        and not is_super_admin_account(request.user)
+    ):
         study_columns.remove("respondent_id")
     user_ids = activity_visible_user_ids(request.user)
     visible_attempts = SurveyAttempt.objects.all()
