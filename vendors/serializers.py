@@ -169,6 +169,10 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
         ]
 
     def get_profile_reuse_status(self, obj) -> dict:
+        prefetched = self.context.get("profile_reuse_status_by_integration")
+        if prefetched is not None and obj.pk in prefetched:
+            return prefetched[obj.pk]
+
         from prescreener_vault.reuse import profile_reuse_month_status
         from surveys.report_cache import cached_integration_metadata
 
@@ -185,6 +189,10 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
         return int(annotated if annotated is not None else obj.surveys.count())
 
     def get_profile_reuse_available_country_codes(self, obj) -> list[str]:
+        prefetched = self.context.get("country_codes_by_integration")
+        if prefetched is not None and obj.pk in prefetched:
+            return prefetched[obj.pk]
+
         from surveys.report_cache import cached_integration_metadata
 
         return cached_integration_metadata(

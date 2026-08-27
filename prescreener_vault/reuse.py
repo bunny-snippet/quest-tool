@@ -140,6 +140,94 @@ def profile_reuse_month_status(integration, reference=None):
     }
 
 
+def profile_reuse_month_statuses(integrations, reference=None):
+    """Return the card status for many integrations with two set-based reads.
+
+    This is the list-page equivalent of :func:`profile_reuse_month_status`.
+    It deliberately keeps that function's previous-month preference and
+    current-month bootstrap semantics while avoiding three queries per card.
+    """
+
+    integrations = list(integrations)
+    integration_ids = [integration.pk for integration in integrations]
+    if not integration_ids:
+        return {}
+
+    previous_start, current_start, period_start = _calendar_bounds(reference)
+    traffic_by_integration = {
+        row["survey__integration_id"]: row
+        for row in (
+            SurveyAttempt.objects.filter(
+                survey__integration_id__in=integration_ids,
+                initiated_at__gte=previous_start,
+            )
+            .values("survey__integration_id")
+            .annotate(
+                previous_attempts=Count(
+                    "id", filter=Q(initiated_at__lt=current_start)
+                ),
+                current_attempts=Count(
+                    "id", filter=Q(initiated_at__gte=current_start)
+                ),
+            )
+        )
+    }
+    counters = {
+        counter.integration_id: counter
+        for counter in ProfileReuseMonthlyCounter.objects.filter(
+            integration_id__in=integration_ids,
+            period_start=period_start,
+        ).only(
+            "integration_id", "baseline_attempts", "allocated_reuses",
+            "first_reuse_allocated", "repeat_reuse_allocated",
+        )
+    }
+
+    statuses = {}
+    for integration in integrations:
+        traffic = traffic_by_integration.get(integration.pk, {})
+        previous_attempts = int(traffic.get("previous_attempts") or 0)
+        current_attempts = int(traffic.get("current_attempts") or 0)
+        if previous_attempts > 0:
+            live_baseline = previous_attempts
+            baseline_source = "previous_month"
+        else:
+            live_baseline = current_attempts
+            baseline_source = "current_month_bootstrap"
+
+        counter = counters.get(integration.pk)
+        baseline = live_baseline
+        used = first_used = repeat_used = 0
+        if counter:
+            if baseline_source == "current_month_bootstrap":
+                baseline = max(counter.baseline_attempts, live_baseline)
+            used = counter.allocated_reuses
+            first_used = counter.first_reuse_allocated
+            repeat_used = counter.repeat_reuse_allocated
+        target = _target_from_baseline(integration, baseline)
+        first_target, repeat_target = _legacy_pool_targets(integration, target)
+        statuses[integration.pk] = {
+            "period": period_start.isoformat(),
+            "previous_month_attempts": previous_attempts,
+            "baseline_attempts": baseline,
+            "baseline_source": baseline_source,
+            "target_reuses": target,
+            "used_reuses": used,
+            "remaining_reuses": max(0, target - used),
+            "first_reuse_used": first_used,
+            "repeat_reuse_used": repeat_used,
+            "first_reuse_target": first_target,
+            "first_reuse_remaining": max(0, first_target - first_used),
+            "repeat_reuse_target": repeat_target,
+            "repeat_reuse_remaining": max(0, repeat_target - repeat_used),
+            "first_delay_minutes": integration.profile_reuse_first_delay_minutes,
+            "minimum_interval_minutes": integration.profile_reuse_min_interval_minutes,
+            "max_uses_per_window": integration.profile_reuse_max_uses_per_window,
+            "window_minutes": integration.profile_reuse_window_minutes,
+        }
+    return statuses
+
+
 def _claim_month_slot(integration):
     period_start, _, live_baseline, baseline_source = _monthly_baseline(integration)
     with transaction.atomic():

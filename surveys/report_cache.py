@@ -8,6 +8,7 @@ TTL because country/client/hierarchy choices change far less often.
 
 from collections.abc import Callable, Iterable
 import hashlib
+import secrets
 import time
 from typing import Any
 
@@ -22,7 +23,7 @@ from accounts.access import (
 from accounts.request_cache import request_cached
 from config.cache_utils import (
     safe_cache_add,
-    safe_cache_delete,
+    safe_cache_compare_delete,
     safe_cache_generation,
     safe_cache_get,
     safe_cache_increment,
@@ -34,6 +35,8 @@ from config.cache_utils import (
 CACHE_ALIAS = "reports"
 _MISSING = object()
 REPORT_METADATA_GENERATION_KEY = "reports:metadata:generation"
+_REFRESH_LOCK_SECONDS = 30
+_COLD_WAIT_SECONDS = 5
 
 
 def report_metadata_generation() -> int:
@@ -71,7 +74,13 @@ def _cached_with_stale_revalidation(key: str, factory: Callable[[], Any], *, tim
         stale_payload = _MISSING
 
     lock_key = f"{key}:refresh-lock"
-    owns_lock = safe_cache_add(lock_key, "1", timeout=30, alias=CACHE_ALIAS)
+    lock_token = secrets.randbits(63) or 1
+    owns_lock = safe_cache_add(
+        lock_key,
+        lock_token,
+        timeout=_REFRESH_LOCK_SECONDS,
+        alias=CACHE_ALIAS,
+    )
     if owns_lock:
         try:
             value = factory()
@@ -90,16 +99,25 @@ def _cached_with_stale_revalidation(key: str, factory: Callable[[], Any], *, tim
             )
             return value
         finally:
-            safe_cache_delete(lock_key, alias=CACHE_ALIAS)
+            if owns_lock:
+                # The database factory can outlive its lease. Never let an
+                # older builder remove a replacement worker's lock.
+                safe_cache_compare_delete(
+                    lock_key,
+                    lock_token,
+                    alias=CACHE_ALIAS,
+                )
 
     if stale_payload is not _MISSING:
         return stale_payload
     if owns_lock is None:
         return factory()
 
-    # A cold cache has no stale result. Wait for the single owner for at most
-    # 400 ms; this is much cheaper than multiplying a large aggregate query.
-    for _ in range(8):
+    # A cold cache has no stale result. Production metadata queries can take
+    # longer than 400 ms, so wait for the owner through the observed slow-query
+    # range before failing open to MySQL.
+    deadline = time.monotonic() + _COLD_WAIT_SECONDS
+    while time.monotonic() < deadline:
         time.sleep(0.05)
         peer_record = safe_cache_get(key, _MISSING, alias=CACHE_ALIAS)
         if isinstance(peer_record, dict) and peer_record.get("_report_cache_record") is True:
@@ -221,6 +239,30 @@ def cached_integration_metadata(
             "integration_id": integration.pk,
             "integration_updated_at": integration.updated_at,
         },
+    )
+    return _cached_with_stale_revalidation(
+        key,
+        factory,
+        timeout=timeout or settings.REPORT_CACHE_RESULT_TTL_SECONDS,
+    )
+
+
+def cached_integration_metadata_batch(
+    namespace: str,
+    integrations,
+    factory: Callable[[], Any],
+    *,
+    timeout: int | None = None,
+) -> Any:
+    """Cache one set-based card payload for an exact integration page."""
+
+    integration_scope = sorted(
+        (integration.pk, integration.updated_at)
+        for integration in integrations
+    )
+    key = stable_cache_key(
+        f"reports:integration-batch:{namespace}",
+        integration_scope,
     )
     return _cached_with_stale_revalidation(
         key,

@@ -262,6 +262,27 @@ class ReportCacheTests(TestCase):
         self.assertEqual(second, first)
         self.assertEqual(len(calls), 1)
 
+    @patch("surveys.report_cache.secrets.randbits", return_value=912345)
+    @patch("surveys.report_cache.safe_cache_add", return_value=True)
+    @patch("surveys.report_cache.safe_cache_compare_delete")
+    def test_refresh_lock_is_released_only_with_its_owner_token(
+        self,
+        compare_delete,
+        _cache_add,
+        _randbits,
+    ):
+        result = cached_report_payload(
+            "token-owned-lock",
+            self.request("country=US"),
+            lambda: {"total": 1},
+        )
+
+        self.assertEqual(result, {"total": 1})
+        compare_delete.assert_called_once()
+        _lock_key, lock_token = compare_delete.call_args.args
+        self.assertEqual(lock_token, 912345)
+        self.assertEqual(compare_delete.call_args.kwargs, {"alias": "reports"})
+
     def test_filter_values_get_independent_cache_entries(self):
         calls = []
 

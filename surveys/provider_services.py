@@ -124,7 +124,7 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
     if not integration.is_active:
         raise ProviderError("This client integration is inactive.")
     provider = get_provider(integration)
-    now = timezone.now()
+    snapshot_marker = timezone.now()
     run = SyncRun.objects.create(integration=integration)
     touched = []
     project_filter_fields_changed = False
@@ -134,7 +134,7 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
         inventory = provider.inventory()
         run.fetched_full = len(inventory)
         prepared_rows = [
-            provider.normalize_inventory_item(payload, now)
+            provider.normalize_inventory_item(payload, snapshot_marker)
             for payload in inventory
         ]
         source_keys = [row.source_key for row in prepared_rows]
@@ -184,6 +184,11 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                         "integration": integration,
                         "source_key": source_key,
                         "source_id": normalized.numeric_source_id,
+                        # The inventory snapshot, rather than a provider
+                        # adapter, owns this marker. Every successfully
+                        # prepared row receives the same value so missing rows
+                        # can be closed without a source-key NOT IN list.
+                        "last_seen_at": snapshot_marker,
                     }
                     if survey is None:
                         survey = Survey.objects.create(**values)
@@ -205,8 +210,8 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                             values,
                         )
                         if not changed_fields:
-                            survey.last_seen_at = now
-                            survey.updated_at = now
+                            survey.last_seen_at = snapshot_marker
+                            survey.updated_at = snapshot_marker
                             unchanged_surveys.append(survey)
                             run.unchanged += 1
                             continue
@@ -224,7 +229,7 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                         # bulk_update does not apply auto_now. Preserve the old
                         # save() timestamp contract explicitly while collapsing
                         # hundreds of one-row UPDATEs into bounded statements.
-                        survey.updated_at = now
+                        survey.updated_at = snapshot_marker
                         changed_fields.update({"last_seen_at", "updated_at"})
                         changed_surveys.append(survey)
                         changed_update_fields.update(changed_fields)
@@ -260,9 +265,13 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
             run.closed = Survey.objects.filter(
                 integration=integration,
                 status=Survey.Status.LIVE,
-            ).exclude(source_key__in=normalized_rows).update(
+                # A concurrent/newer snapshot must never be closed by an
+                # older worker. The strict range is also directly served by
+                # (integration, status, last_seen_at).
+                last_seen_at__lt=snapshot_marker,
+            ).update(
                 status=Survey.Status.CLOSED,
-                updated_at=now,
+                updated_at=snapshot_marker,
             )
         else:
             # Cint open opportunities disappear after link creation. Only
@@ -272,7 +281,7 @@ def sync_client_integration(integration: ClientIntegration, *, refresh_details=F
                 integration=integration,
                 status=Survey.Status.LIVE,
                 source_key__in=getattr(provider, "rejected_source_keys", set()),
-            ).update(status=Survey.Status.CLOSED, updated_at=now)
+            ).update(status=Survey.Status.CLOSED, updated_at=snapshot_marker)
         if run.closed:
             project_count_fields_changed = True
             report_metadata_fields_changed = True

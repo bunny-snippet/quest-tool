@@ -156,6 +156,10 @@ class Survey(models.Model):
             models.Index(fields=["client", "cpi"]),
             models.Index(fields=["integration", "last_seen_at"], name="survey_integration_seen_idx"),
             models.Index(
+                fields=["integration", "status", "last_seen_at"],
+                name="survey_int_status_seen_idx",
+            ),
+            models.Index(
                 fields=["-source_modified_at", "-created_at"],
                 name="survey_modified_created_idx",
             ),
@@ -545,6 +549,10 @@ class SurveyAttempt(models.Model):
             models.Index(fields=["platform_user", "status", "-initiated_at"], name="attempt_user_status_idx"),
             models.Index(fields=["survey", "status"], name="attempt_survey_status_idx"),
             models.Index(fields=["status", "-callback_at"], name="attempt_status_cb_idx"),
+            models.Index(
+                fields=["-callback_at", "-initiated_at", "status"],
+                name="attempt_term_order_idx",
+            ),
             models.Index(fields=["client", "-initiated_at"], name="attempt_client_init_idx"),
             models.Index(fields=["-callback_at"], name="attempt_callback_idx"),
             models.Index(fields=["callback_ip"], name="attempt_exit_ip_idx"),

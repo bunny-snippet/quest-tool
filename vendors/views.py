@@ -62,6 +62,51 @@ from .serializers import (
 from .services import organization_unit_rollup_counts
 
 
+INTEGRATION_SURVEY_COUNTS = (
+    Survey.objects.filter(integration_id=OuterRef("pk"))
+    .order_by()
+    .values("integration_id")
+    .annotate(total=Count("pk"))
+    .values("total")[:1]
+)
+
+
+def _integration_card_metadata(integrations):
+    """Build all integration-card read models with three set-based queries."""
+
+    from prescreener_vault.reuse import profile_reuse_month_statuses
+
+    integration_ids = [integration.pk for integration in integrations]
+    country_codes = {integration_id: [] for integration_id in integration_ids}
+    for integration_id, country_code in (
+        Survey.objects.filter(integration_id__in=integration_ids)
+        .exclude(country_code="")
+        .values_list("integration_id", "country_code")
+        .distinct()
+        .order_by("integration_id", "country_code")
+    ):
+        # Match the existing per-card serializer contract: at most the first
+        # 250 distinct, alphabetically ordered country codes per integration.
+        if len(country_codes[integration_id]) < 250:
+            country_codes[integration_id].append(country_code)
+    return {
+        "profile_reuse_status_by_integration": profile_reuse_month_statuses(
+            integrations
+        ),
+        "country_codes_by_integration": country_codes,
+    }
+
+
+def _cached_integration_card_metadata(integrations):
+    from surveys.report_cache import cached_integration_metadata_batch
+
+    return cached_integration_metadata_batch(
+        "client-integration-cards-v1",
+        integrations,
+        lambda: _integration_card_metadata(integrations),
+    )
+
+
 @any_function_permission_required("vendors.view", "vendors.manage", "allocations.view", "allocations.manage")
 def vendor_management_page(request):
     owner_controlled = vendor_scope_user_id(request.user) is None
@@ -466,7 +511,19 @@ class VendorDirectoryViewSet(viewsets.ReadOnlyModelViewSet):
     destroy=extend_schema(tags=["Suppliers & allocations"], summary="Deactivate a survey client"),
 )
 class ClientViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
-    queryset = Client.objects.select_related("created_by").prefetch_related("integrations").exclude(
+    queryset = Client.objects.select_related("created_by").prefetch_related(
+        Prefetch(
+            "integrations",
+            queryset=ClientIntegration.objects.select_related(
+                "client", "created_by"
+            ).annotate(
+                survey_count_value=Coalesce(
+                    Subquery(INTEGRATION_SURVEY_COUNTS, output_field=IntegerField()),
+                    Value(0),
+                )
+            ).order_by("client__name", "name"),
+        )
+    ).exclude(
         is_active=False, provider_code__in=("biobrain", "voqall")
     )
     serializer_class = ClientSerializer
@@ -480,6 +537,22 @@ class ClientViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     ordering = ["name"]
     vendor_scope_filter = "vendor_allocations__vendor_id"
 
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        clients = list(page if page is not None else queryset)
+        integrations = [
+            integration
+            for client in clients
+            for integration in client.integrations.all()
+        ]
+        context = self.get_serializer_context()
+        context.update(_cached_integration_card_metadata(integrations))
+        serializer = self.get_serializer(clients, many=True, context=context)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
+
 
 @extend_schema_view(
     list=extend_schema(tags=["Suppliers & allocations"], summary="List non-secret client integration metadata"),
@@ -490,13 +563,7 @@ class ClientViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     destroy=extend_schema(tags=["Suppliers & allocations"], summary="Deactivate client integration metadata"),
 )
 class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
-    integration_survey_counts = (
-        Survey.objects.filter(integration_id=OuterRef("pk"))
-        .order_by()
-        .values("integration_id")
-        .annotate(total=Count("pk"))
-        .values("total")[:1]
-    )
+    integration_survey_counts = INTEGRATION_SURVEY_COUNTS
     queryset = ClientIntegration.objects.select_related("client", "created_by").annotate(
         survey_count_value=Coalesce(
             Subquery(integration_survey_counts, output_field=IntegerField()),
@@ -513,6 +580,20 @@ class ClientIntegrationViewSet(PermissionByActionMixin, viewsets.ModelViewSet):
     filterset_fields = ["client", "provider_code", "scheduled_sync_enabled", "is_active"]
     search_fields = ["name", "client__name", "client__code"]
     vendor_scope_filter = "client__vendor_allocations__vendor_id"
+
+    def list(self, request, *args, **kwargs):
+        """Serialize integration cards without per-card metadata queries."""
+
+        queryset = self.filter_queryset(self.get_queryset())
+        page = self.paginate_queryset(queryset)
+        integrations = list(page if page is not None else queryset)
+        metadata = _cached_integration_card_metadata(integrations)
+        context = self.get_serializer_context()
+        context.update(metadata)
+        serializer = self.get_serializer(integrations, many=True, context=context)
+        if page is not None:
+            return self.get_paginated_response(serializer.data)
+        return Response(serializer.data)
 
     def get_required_function_permission(self):
         if self.action in {"list", "retrieve", "providers"}:
