@@ -20,19 +20,27 @@ from .base import (
 
 
 class PureSpectrumProvider(SurveyProvider):
-    """Expose the three approved Fusion Match markets as project inventory."""
+    """Expose the approved Fusion Match markets as project inventory."""
 
     code = "purespectrum"
     label = "PureSpectrum Fusion Match"
     default_base_url = "https://fusionapi.spectrumsurveys.com/surveys/fusionMatch"
     minimum_sync_interval_seconds = 60
     credential_fields = (("token", "Access-token environment key"),)
-    localizations = ("en_US", "en_IN", "en_GB")
-    market_codes = {
-        "en_US": ("US", "United States"),
-        "en_IN": ("IN", "India"),
-        "en_GB": ("GB", "United Kingdom"),
+    localization_metadata = {
+        "en_US": ("US", "United States", "EN", "English"),
+        "en_CA": ("CA", "Canada", "EN", "English"),
+        "en_AU": ("AU", "Australia", "EN", "English"),
+        "en_NZ": ("NZ", "New Zealand", "EN", "English"),
+        "es_MX": ("MX", "Mexico", "ES", "Spanish"),
+        "en_IN": ("IN", "India", "EN", "English"),
+        "en_GB": ("GB", "United Kingdom", "EN", "English"),
+        "fr_FR": ("FR", "France", "FR", "French"),
+        "de_DE": ("DE", "Germany", "DE", "German"),
+        "en_SG": ("SG", "Singapore", "EN", "English"),
+        "en_HK": ("HK", "Hong Kong", "EN", "English"),
     }
+    localizations = tuple(localization_metadata)
     respondent_placeholder = "[RID]"
     max_surveys = 200
 
@@ -73,7 +81,8 @@ class PureSpectrumProvider(SurveyProvider):
 
         if localization not in self.localizations:
             raise ProviderConfigurationError(
-                "PureSpectrum localization must be en_US, en_IN, or en_GB."
+                "PureSpectrum localization must be one of: "
+                f"{', '.join(self.localizations)}."
             )
         try:
             response = self.session.get(
@@ -121,7 +130,7 @@ class PureSpectrumProvider(SurveyProvider):
         }
 
     def inventory(self):
-        """Fetch only en_US, en_IN and en_GB, using three explicit calls."""
+        """Fetch every approved localization with one explicit call per market."""
 
         return [
             survey
@@ -150,7 +159,9 @@ class PureSpectrumProvider(SurveyProvider):
         if localization not in self.localizations:
             raise ProviderError("PureSpectrum inventory row has an unsupported localization.")
         survey_id = str(payload["surveyId"])
-        country_code, country_name = self.market_codes[localization]
+        country_code, country_name, language_code, language_name = (
+            self.localization_metadata[localization]
+        )
         match_type = str(payload.get("fullOrPartialMatch") or "").strip()
         entry_link = str(payload.get("entryLink") or "").strip()
         return NormalizedSurvey(
@@ -170,8 +181,8 @@ class PureSpectrumProvider(SurveyProvider):
                 "incidence_rate": self._decimal(payload.get("ir")),
                 "country": country_name,
                 "country_code": country_code,
-                "language": "English",
-                "language_code": "EN",
+                "language": language_name,
+                "language_code": language_code,
                 "group_type": match_type,
                 "survey_type": match_type[:20],
                 "device_type": "Desktop, Mobile, Tablet",

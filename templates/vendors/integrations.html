@@ -233,7 +233,7 @@ document.addEventListener('DOMContentLoaded',()=>{
     el('providerNote').classList.toggle('hidden',!code);
     el('interval').min=String(meta.minimum_sync_interval_seconds||60);
     el('intervalLabel').textContent=`Sync interval (seconds, min ${meta.minimum_sync_interval_seconds||60})`;
-    el('intervalHelp').textContent=isRfg?'RFG Live Alert inventory refreshes automatically every 60 seconds.':isCint?'Cint Supply polling is limited to once per minute.':isPureSpectrum?'Three approved localizations are fetched on every inventory sync.':code==='innovatemr'?'InnovateMR inventory refreshes automatically every 150 seconds.':`Minimum ${meta.minimum_sync_interval_seconds||60} seconds.`;
+    el('intervalHelp').textContent=isRfg?'RFG Live Alert inventory refreshes automatically every 60 seconds.':isCint?'Cint Supply polling is limited to once per minute.':isPureSpectrum?'All approved PureSpectrum localizations are fetched on every inventory sync.':code==='innovatemr'?'InnovateMR inventory refreshes automatically every 150 seconds.':`Minimum ${meta.minimum_sync_interval_seconds||60} seconds.`;
     el('baseUrlHelp').textContent=isRfg?'Official RFG command endpoint. HMAC signing is handled by the backend adapter.':isCint?'Official Cint Exchange production API root. There is no Supply sandbox.':isPureSpectrum?'Official Fusion Match endpoint; the backend locks this value.':'Provider API root. Endpoint fields below may be relative to this URL.';
     el('supplierCodeLabel').textContent=isCint?'Cint Supplier Code':'Public supplier code';
     el('supplierCodeHelp').textContent=isCint?'Enter the real numeric Supplier Code issued by Cint; this is used only for upstream API calls.':'Respondent URLs continue to expose 1000.';

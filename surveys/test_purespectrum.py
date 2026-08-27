@@ -61,20 +61,27 @@ class PureSpectrumProviderTests(TestCase):
         self.assertEqual(self.integration.provider_code, "purespectrum")
 
     @patch.dict("os.environ", {"PURESPECTRUM_TEST_ACCESS_TOKEN": "private-token"}, clear=False)
-    def test_inventory_sends_exact_three_params_and_never_member_id(self):
-        session = RecordingSession(
-            {"surveys": [{"surveyId": "US-1", "entryLink": "https://survey.test/?rid=%5BRID%5D"}]},
-            {"surveys": [{"surveyId": "IN-1", "entryLink": "https://survey.test/?rid=%5BRID%5D"}]},
-            {"surveys": [{"surveyId": "GB-1", "entryLink": "https://survey.test/?rid=%5BRID%5D"}]},
-        )
+    def test_inventory_sends_all_approved_locales_and_never_member_id(self):
+        session = RecordingSession(*(
+            {
+                "surveys": [{
+                    "surveyId": localization,
+                    "entryLink": "https://survey.test/?rid=%5BRID%5D",
+                }],
+            }
+            for localization in PureSpectrumProvider.localizations
+        ))
         provider = PureSpectrumProvider(self.integration, session=session)
 
         inventory = provider.inventory()
 
-        self.assertEqual(len(inventory), 3)
+        self.assertEqual(len(inventory), 11)
         self.assertEqual(
             [call[1]["params"]["respondentLocalization"] for call in session.calls],
-            ["en_US", "en_IN", "en_GB"],
+            [
+                "en_US", "en_CA", "en_AU", "en_NZ", "es_MX", "en_IN",
+                "en_GB", "fr_FR", "de_DE", "en_SG", "en_HK",
+            ],
         )
         for url, kwargs in session.calls:
             self.assertEqual(url, PureSpectrumProvider.default_base_url)
@@ -113,23 +120,66 @@ class PureSpectrumProviderTests(TestCase):
         )
 
     @patch.dict("os.environ", {"PURESPECTRUM_TEST_ACCESS_TOKEN": "private-token"}, clear=False)
+    def test_each_localization_maps_to_the_correct_country_and_language(self):
+        provider = PureSpectrumProvider(
+            self.integration, session=RecordingSession({"surveys": []})
+        )
+        expected = {
+            "en_US": ("US", "United States", "EN", "English"),
+            "en_CA": ("CA", "Canada", "EN", "English"),
+            "en_AU": ("AU", "Australia", "EN", "English"),
+            "en_NZ": ("NZ", "New Zealand", "EN", "English"),
+            "es_MX": ("MX", "Mexico", "ES", "Spanish"),
+            "en_IN": ("IN", "India", "EN", "English"),
+            "en_GB": ("GB", "United Kingdom", "EN", "English"),
+            "fr_FR": ("FR", "France", "FR", "French"),
+            "de_DE": ("DE", "Germany", "DE", "German"),
+            "en_SG": ("SG", "Singapore", "EN", "English"),
+            "en_HK": ("HK", "Hong Kong", "EN", "English"),
+        }
+
+        for localization, metadata in expected.items():
+            with self.subTest(localization=localization):
+                normalized = provider.normalize_inventory_item({
+                    "surveyId": "PS-LOCALE",
+                    "entryLink": "https://survey.test/?rid=%5BRID%5D",
+                    "_respondentLocalization": localization,
+                }, timezone.now())
+                self.assertEqual(
+                    (
+                        normalized.values["country_code"],
+                        normalized.values["country"],
+                        normalized.values["language_code"],
+                        normalized.values["language"],
+                    ),
+                    metadata,
+                )
+
+    @patch.dict("os.environ", {"PURESPECTRUM_TEST_ACCESS_TOKEN": "private-token"}, clear=False)
     @patch("surveys.provider_services.get_provider")
     def test_sync_persists_each_locale_as_project_inventory(self, get_provider_mock):
-        session = RecordingSession(
-            {"surveys": [{"surveyId": "PS-1", "entryLink": "https://survey.test/?rid=%5BRID%5D"}]},
-            {"surveys": [{"surveyId": "PS-1", "entryLink": "https://survey.test/?rid=%5BRID%5D"}]},
-            {"surveys": [{"surveyId": "PS-1", "entryLink": "https://survey.test/?rid=%5BRID%5D"}]},
-        )
+        session = RecordingSession(*(
+            {
+                "surveys": [{
+                    "surveyId": "PS-1",
+                    "entryLink": "https://survey.test/?rid=%5BRID%5D",
+                }],
+            }
+            for _localization in PureSpectrumProvider.localizations
+        ))
         get_provider_mock.return_value = PureSpectrumProvider(
             self.integration, session=session
         )
 
         run = sync_client_integration(self.integration, refresh_details=False)
 
-        self.assertEqual(run.created, 3)
+        self.assertEqual(run.created, 11)
         self.assertEqual(
             set(Survey.objects.filter(integration=self.integration).values_list("source_key", flat=True)),
-            {"en_US:PS-1", "en_IN:PS-1", "en_GB:PS-1"},
+            {
+                f"{localization}:PS-1"
+                for localization in PureSpectrumProvider.localizations
+            },
         )
 
     @patch.dict("os.environ", {"PURESPECTRUM_TEST_ACCESS_TOKEN": "private-token"}, clear=False)
