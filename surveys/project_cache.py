@@ -156,13 +156,23 @@ def project_filter_metadata(
         # blank) while using the same canonical country code.  The filter is
         # keyed by country_code, so publish exactly one option per code.  This
         # also prevents the browser from submitting values such as ``FR,FR``.
-        countries = list(
+        country_rows = list(
             queryset.exclude(country_code="")
-            .values("country_code")
-            .annotate(country_name=Max("country"))
-            .values_list("country_code", "country_name")
+            .values_list("country_code", "country")
+            .distinct()
             .order_by("country_code")
         )
+        countries_by_code = {}
+        for code, name in country_rows:
+            current = countries_by_code.get(code)
+            # Prefer the most descriptive non-empty label while retaining the
+            # old index-friendly DISTINCT query. MySQL otherwise performs a
+            # full grouped MAX scan across the entire inventory on cache miss.
+            if current is None or (bool(name), len(name or ""), name or "") > (
+                bool(current), len(current or ""), current or ""
+            ):
+                countries_by_code[code] = name
+        countries = sorted(countries_by_code.items())
         company_field = "client__name" if client_scoped else "company_name"
         companies = list(
             queryset.exclude(**{company_field: ""})
