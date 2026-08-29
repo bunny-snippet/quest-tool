@@ -152,10 +152,15 @@ def project_filter_metadata(
     )
 
     def load():
+        # Providers can spell the same market label differently (or leave it
+        # blank) while using the same canonical country code.  The filter is
+        # keyed by country_code, so publish exactly one option per code.  This
+        # also prevents the browser from submitting values such as ``FR,FR``.
         countries = list(
             queryset.exclude(country_code="")
-            .values_list("country_code", "country")
-            .distinct()
+            .values("country_code")
+            .annotate(country_name=Max("country"))
+            .values_list("country_code", "country_name")
             .order_by("country_code")
         )
         company_field = "client__name" if client_scoped else "company_name"

@@ -13,7 +13,15 @@ from rest_framework.test import APIClient
 
 from vendors.models import Client, ClientIntegration
 
-from .models import Survey, SurveyAttempt, SurveyQuota, TargetingQuestion
+from .mappings import sync_survey_mappings
+from .models import (
+    CanonicalOption,
+    CanonicalQuestion,
+    Survey,
+    SurveyAttempt,
+    SurveyQuota,
+    TargetingQuestion,
+)
 from .outcomes import provider_outcome
 from .provider_services import sync_client_integration, test_provider_connection as verify_provider_connection
 from .providers.base import (
@@ -119,6 +127,36 @@ class ResearchForGoodIntegrationTests(TestCase):
             with self.assertRaises(ProviderConfigurationError):
                 ResearchForGoodProvider(self.integration)
         self.assertEqual(self.integration.credential_env_keys["secret"], "RFG_SECRET")
+
+    def test_mapping_bounds_provider_display_labels_without_losing_metadata(self):
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG-LONG-LABEL",
+            country_code="US",
+        )
+        long_question = "Question " + ("q" * 260)
+        long_option = "Option " + ("o" * 320)
+        TargetingQuestion.objects.create(
+            survey=survey,
+            question_id=987654,
+            key="RFG_LONG_LABEL",
+            text=long_question,
+            question_type="single",
+            options=[{"OptionId": "1", "OptionText": long_option}],
+        )
+
+        sync_survey_mappings(survey)
+
+        canonical = CanonicalQuestion.objects.get(
+            provider_mappings__external_question_id="987654"
+        )
+        option = CanonicalOption.objects.get(question=canonical)
+        self.assertEqual(canonical.label, long_question[:180])
+        self.assertEqual(option.label, long_option[:250])
+        self.assertEqual(
+            canonical.provider_mappings.get().metadata["text"], long_question
+        )
 
     @patch("surveys.provider_services.get_provider")
     def test_successful_connection_test_restores_rfg_minimum_without_lowering_operator_value(

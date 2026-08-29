@@ -149,6 +149,25 @@ class ProjectCacheTests(TestCase):
         self.assertEqual([row[0] for row in refreshed["countries"]], ["CA", "US"])
         self.assertEqual(str(refreshed["cpi_max"]), "4")
 
+    def test_country_filter_publishes_each_country_code_once(self):
+        Survey.objects.create(
+            source_id=103,
+            company_name="Cint Exchange",
+            country="USA",
+            country_code="US",
+            cpi="3.00",
+        )
+        invalidate_project_cache()
+
+        metadata = project_filter_metadata(
+            Survey.objects.all(),
+            user_id=self.user.pk,
+            client_scoped=False,
+            include_cpi=False,
+        )
+
+        self.assertEqual(metadata["countries"], [("US", "United States")])
+
     def test_high_frequency_invalidations_are_throttled(self):
         self.assertTrue(invalidate_project_cache(throttle_seconds=30))
         filter_version = caches["projects"].get("projects:filters-version")

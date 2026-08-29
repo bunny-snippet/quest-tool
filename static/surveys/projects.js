@@ -112,7 +112,9 @@
 
   function selectedValues(filter) {
     if (!filter) return [];
-    return [...filter.querySelectorAll('input:checked')].map((input) => input.value);
+    return [...new Set(
+      [...filter.querySelectorAll('input:checked')].map((input) => input.value),
+    )];
   }
 
   function updateMultiLabel(filter) {

@@ -782,6 +782,46 @@ class SurveyAPITests(TestCase):
         self.assertNotIn("display_company_name", client_denied_list.data["results"][0])
         self.assertNotIn("company_name", client_denied_list.data["results"][0])
 
+    def test_cint_fr_export_matches_list_with_duplicate_country_input(self):
+        cint = Client.objects.create(
+            code="cint-fr-export",
+            name="Cint Exchange",
+            provider_code="cint",
+        )
+        self.survey.client = cint
+        self.survey.company_name = cint.name
+        self.survey.country = "France"
+        self.survey.country_code = "FR"
+        self.survey.status = Survey.Status.LIVE
+        self.survey.save(update_fields=[
+            "client", "company_name", "country", "country_code", "status",
+        ])
+        Survey.objects.create(
+            source_id=9891,
+            client=cint,
+            company_name=cint.name,
+            country="United States",
+            country_code="US",
+            status=Survey.Status.LIVE,
+        )
+        params = {
+            "country": "FR,FR",
+            "status": "live",
+            "client_name": cint.name,
+            "ordering": "-source_modified_at",
+        }
+
+        listing = self.api.get(reverse("survey-list"), params)
+        export_rows = xlsx_rows(self.api.get(reverse("survey-export"), params))
+        project_id_index = export_rows[0].index("Project ID")
+
+        self.assertEqual(listing.status_code, 200)
+        self.assertEqual(listing.data["count"], 1)
+        self.assertEqual(
+            {row[project_id_index] for row in export_rows[1:]},
+            {listing.data["results"][0]["local_id"]},
+        )
+
     def test_detail_actions_return_cached_data(self):
         quota = self.api.get(reverse("survey-quotas", kwargs={"local_id": self.survey.local_id}))
         targeting = self.api.get(reverse("survey-targeting", kwargs={"local_id": self.survey.local_id}))

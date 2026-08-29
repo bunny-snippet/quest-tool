@@ -95,6 +95,14 @@ def _canonical_option_code(question_code: str, label: str, external_value: str) 
     return f"{value[:77]}-{digest}"
 
 
+def _bounded_display_label(model, value) -> str:
+    """Fit provider display text without changing mapping identity fields."""
+
+    text = str(value or "")
+    max_length = model._meta.get_field("label").max_length
+    return text[:max_length] if max_length else text
+
+
 @transaction.atomic
 def sync_survey_mappings(survey) -> dict[str, int]:
     """Learn mappings from stored targeting rows without changing respondent data."""
@@ -108,7 +116,10 @@ def sync_survey_mappings(survey) -> dict[str, int]:
         canonical, _ = CanonicalQuestion.objects.get_or_create(
             code=canonical_code,
             defaults={
-                "label": question.text or question.key or canonical_code.replace("-", " ").title(),
+                "label": _bounded_display_label(
+                    CanonicalQuestion,
+                    question.text or question.key or canonical_code.replace("-", " ").title(),
+                ),
                 "value_type": _question_value_type(question),
                 "description": "Automatically discovered from provider targeting metadata.",
             },
@@ -141,7 +152,7 @@ def sync_survey_mappings(survey) -> dict[str, int]:
                 question=canonical,
                 code=option_code,
                 defaults={
-                    "label": external_label,
+                    "label": _bounded_display_label(CanonicalOption, external_label),
                     "normalized_value": option_code,
                 },
             )

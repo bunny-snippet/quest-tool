@@ -4427,8 +4427,14 @@ def _survey_excel_rows(queryset, request, columns):
 
     def rows():
         serializer_context = {"request": request}
+        # Reuse one bound serializer for the whole stream. Constructing and
+        # permission-pruning a DRF serializer for every project made large
+        # Cint exports spend most of their time rebuilding identical fields;
+        # representation, pricing, security and entry-link logic stay exactly
+        # the same for every row.
+        serializer = SurveyListSerializer(context=serializer_context)
         for survey in queryset.iterator(chunk_size=500):
-            data = SurveyListSerializer(survey, context=serializer_context).data
+            data = serializer.to_representation(survey)
             values_by_column = {
                 "project_id": [data.get("local_id")],
                 "survey": (
