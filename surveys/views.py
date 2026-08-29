@@ -3255,18 +3255,19 @@ def survey_status(request):
             return _render_recorded_status(request, attempt, ip_address)
 
         # RFG has a dedicated server-to-server callback with an IP allowlist.
-        # Its browser-visible RID/PID must never be accepted as proof of a
-        # terminal result by this generic redirect endpoint.
+        # Some legacy RFG projects still have their browser return URL set to
+        # this generic endpoint.  Preserve the browser evidence and show the
+        # safe RFG result page instead of a confusing hard failure, but never
+        # accept browser parameters as proof of a terminal result.
         if provider_code == "rfg":
-            logger.warning(
-                "Rejected unverified RFG browser callback rid=%s ip=%s",
+            logger.info(
+                "Forwarding legacy RFG browser return rid=%s ip=%s to result page",
                 attempt.rid,
                 ip_address or "unknown",
             )
-            return render(request, "surveys/flow_error.html", {
-                "title": "Invalid survey callback",
-                "message": "This survey result could not be verified and was not recorded.",
-            }, status=403)
+            return HttpResponseRedirect(
+                f"{reverse('rfg-result')}?{request.GET.urlencode()}"
+            )
 
         innovate_callback_verified = False
         if (

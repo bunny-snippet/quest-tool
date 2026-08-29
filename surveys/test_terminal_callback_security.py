@@ -222,7 +222,7 @@ class RFGTerminalCallbackSecurityTests(TestCase):
         self.assertEqual(attempt.callback_count, 0)
 
     @patch("surveys.views._external_supplier_result_url")
-    def test_generic_status_endpoint_cannot_finalize_rfg_attempt(self, supplier_result_url):
+    def test_generic_status_endpoint_forwards_but_cannot_finalize_rfg_attempt(self, supplier_result_url):
         attempt = SurveyAttempt.objects.create(
             rid="Br1Ow2Se3R",
             survey=self.survey,
@@ -235,7 +235,8 @@ class RFGTerminalCallbackSecurityTests(TestCase):
             "rid": attempt.rid,
         })
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/survey/rfg/result?"))
         supplier_result_url.assert_not_called()
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, SurveyAttempt.Status.REDIRECTED)

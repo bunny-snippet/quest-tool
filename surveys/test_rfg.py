@@ -674,7 +674,7 @@ class ResearchForGoodIntegrationTests(TestCase):
             attempt.upstream_transaction_data["rfg_browser_return"]["result"], "41"
         )
 
-    def test_universal_rfg_browser_callback_cannot_finalize_attempt(self):
+    def test_legacy_rfg_browser_return_is_forwarded_without_finalizing_attempt(self):
         survey = Survey.objects.create(
             client=self.client_record,
             integration=self.integration,
@@ -699,11 +699,19 @@ class ResearchForGoodIntegrationTests(TestCase):
             "integration": "2",
         })
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/survey/rfg/result?"))
+        result_page = self.client.get(response["Location"])
+        self.assertEqual(result_page.status_code, 200)
+        self.assertNotContains(result_page, "Invalid survey callback")
+        self.assertContains(result_page, "Secure server confirmation is still pending")
         attempt.refresh_from_db()
         self.assertEqual(attempt.rid, "Fg7Hi8Jk9L")
         self.assertEqual(attempt.status, SurveyAttempt.Status.REDIRECTED)
-        self.assertEqual(attempt.upstream_transaction_data, {})
+        self.assertFalse(attempt.is_verified)
+        self.assertEqual(
+            attempt.upstream_transaction_data["rfg_browser_return"]["status"], "2"
+        )
 
     @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
     def test_non_matching_prescreener_finishes_locally_with_reason_page(self):
@@ -988,7 +996,7 @@ class ResearchForGoodIntegrationTests(TestCase):
         other_attempt.refresh_from_db()
         self.assertEqual(other_attempt.status, SurveyAttempt.Status.REDIRECTED)
 
-    def test_generic_status_rejects_rfg_uid_and_rid_browser_callbacks(self):
+    def test_generic_status_forwards_rfg_uid_and_rid_browser_returns(self):
         survey = Survey.objects.create(
             client=self.client_record,
             integration=self.integration,
@@ -1008,12 +1016,14 @@ class ResearchForGoodIntegrationTests(TestCase):
             "rid": attempt.prescreener_uid,
         })
 
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/survey/rfg/result?"))
 
         response = self.client.get("/survey", {
             "status": "2",
             "rid": attempt.rid,
         })
-        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.status_code, 302)
+        self.assertTrue(response["Location"].startswith("/survey/rfg/result?"))
         attempt.refresh_from_db()
         self.assertEqual(attempt.status, SurveyAttempt.Status.REDIRECTED)
