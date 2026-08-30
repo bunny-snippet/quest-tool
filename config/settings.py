@@ -455,6 +455,13 @@ INNOVATEMR_DETAIL_SYNC_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_DETAIL_SYNC_
 INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS", "60"))
 INNOVATEMR_ATTEMPT_RECONCILE_BATCH = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_BATCH", "20"))
 INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS = int(os.getenv("INNOVATEMR_ATTEMPT_RECONCILE_LOOKBACK_HOURS", "168"))
+RFG_LOG_RECONCILE_INTERVAL_SECONDS = max(
+    60, int(os.getenv("RFG_LOG_RECONCILE_INTERVAL_SECONDS", "120"))
+)
+RFG_LOG_RECONCILE_BATCH = max(1, int(os.getenv("RFG_LOG_RECONCILE_BATCH", "250")))
+RFG_LOG_RECONCILE_LOOKBACK_HOURS = max(
+    1, int(os.getenv("RFG_LOG_RECONCILE_LOOKBACK_HOURS", "168"))
+)
 VENDOR_RESERVATION_TTL_MINUTES = int(os.getenv("VENDOR_RESERVATION_TTL_MINUTES", "180"))
 VENDOR_API_KEY_LAST_USED_WRITE_INTERVAL_SECONDS = max(
     0, int(os.getenv("VENDOR_API_KEY_LAST_USED_WRITE_INTERVAL_SECONDS", "300"))
@@ -468,6 +475,10 @@ CELERY_BEAT_SCHEDULE = {
     "reconcile-legacy-redirect-attempts": {
         "task": "surveys.reconcile_pending_attempts",
         "schedule": float(INNOVATEMR_ATTEMPT_RECONCILE_INTERVAL_SECONDS),
+    },
+    "reconcile-rfg-project-log-outcomes": {
+        "task": "surveys.reconcile_rfg_log_outcomes",
+        "schedule": float(RFG_LOG_RECONCILE_INTERVAL_SECONDS),
     },
     "expire-vendor-allocation-reservations": {
         "task": "vendors.expire_allocation_reservations",

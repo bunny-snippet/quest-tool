@@ -1,16 +1,18 @@
 """Celery task boundary for scheduled provider work and attempt reconciliation."""
 
 import logging
-from datetime import timedelta
+from datetime import timedelta, timezone as dt_timezone
 
 from celery import shared_task
 from django.conf import settings
+from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from vendors.models import ClientIntegration
 from vendors.credentials import resolve_integration_token
+from vendors.services import finalize_attempt_capacity
 
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .models import CintWebhookDelivery, Survey, SurveyAttempt, SyncLease
@@ -20,11 +22,13 @@ from .provider_services import (
     sync_cint_redirect_contracts,
     sync_client_integration,
 )
-from .providers import has_provider
+from .providers import get_provider, has_provider
+from .rfg_outcomes import RFG_STATUS_MAP, describe_rfg_outcome
 from .supplier_callbacks import (
     DELIVERY_AUDIT_KEY,
     SupplierCallbackRetryableError,
     deliver_supplier_result_callback,
+    queue_supplier_result_callback,
 )
 
 
@@ -423,6 +427,198 @@ def reconcile_pending_attempts_task():
                 SurveyAttempt.objects.filter(pk=attempt.pk).update(upstream_checked_at=now)
                 failures += 1
         return {"checked": checked, "terminal": terminal, "failures": failures}
+    finally:
+        SyncLease.release(lease_name)
+
+
+def _rfg_log_datetime(value):
+    """Parse an RFG project-log timestamp into an aware UTC datetime."""
+
+    if not value:
+        return None
+    parsed = parse_datetime(str(value))
+    if parsed is None:
+        return None
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, dt_timezone.utc)
+    return parsed.astimezone(dt_timezone.utc)
+
+
+def _rfg_log_tracking_id(entry):
+    """Read only provider-echoed platform tracking identifiers from a log row."""
+
+    for key in ("tid", "TID", "trackId", "trackerId"):
+        value = str(entry.get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _rfg_log_loi_seconds(entry, fallback):
+    """Use a non-negative provider LOI when available, otherwise local elapsed time."""
+
+    try:
+        return max(0, int(entry.get("loi")))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def reconcile_rfg_project_log_entries(attempts, log_entries, *, checked_at=None):
+    """Apply one project's authenticated RFG log entries to exact pending RIDs.
+
+    The caller owns the provider request.  Keeping the database transition in
+    this small shared function lets the public result page and the background
+    task use the identical verification, locking and audit path.
+    """
+
+    checked_at = checked_at or timezone.now()
+    pending_statuses = (SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED)
+    attempt_by_rid = {attempt.rid: attempt for attempt in attempts}
+    terminal_entries = {}
+    for entry in log_entries:
+        tracking_id = _rfg_log_tracking_id(entry)
+        result_code = str(entry.get("result") or "").strip()
+        if tracking_id not in attempt_by_rid or result_code not in RFG_STATUS_MAP:
+            continue
+        current = terminal_entries.get(tracking_id)
+        if current is None or (_rfg_log_datetime(entry.get("end")) or checked_at) >= (
+            _rfg_log_datetime(current.get("end")) or checked_at
+        ):
+            terminal_entries[tracking_id] = entry
+
+    # A successful authenticated log request is the checkpoint for all
+    # attempts in this project, including journeys that are still in progress.
+    SurveyAttempt.objects.filter(
+        pk__in=[attempt.pk for attempt in attempts],
+        status__in=pending_statuses,
+        callback_at__isnull=True,
+    ).update(upstream_checked_at=checked_at)
+
+    matched = applied = 0
+    callback_attempts = []
+    for rid, entry in terminal_entries.items():
+        result_code = str(entry.get("result")).strip()
+        requested_status = RFG_STATUS_MAP[result_code]
+        matched += 1
+        finished_at = _rfg_log_datetime(entry.get("end")) or checked_at
+        with transaction.atomic():
+            locked = SurveyAttempt.objects.select_for_update().get(pk=attempt_by_rid[rid].pk)
+            if locked.status not in pending_statuses or locked.callback_at is not None:
+                continue
+            if finished_at < locked.loi_started_at:
+                finished_at = checked_at
+            audit = locked.upstream_transaction_data if isinstance(locked.upstream_transaction_data, dict) else {}
+            outcome = describe_rfg_outcome({"result": result_code})
+            # ``sesskey`` is a bearer-like session identifier. Keep enough
+            # audit evidence for support without storing it or raw tracking IDs.
+            locked.upstream_transaction_data = {
+                **audit,
+                "rfg_log_reconciliation": {
+                    "source": "livealert/log/1",
+                    "result": result_code,
+                    "started_at": str(entry.get("start") or ""),
+                    "ended_at": str(entry.get("end") or ""),
+                    "loi_seconds": _rfg_log_loi_seconds(entry, locked.calculate_loi_seconds(finished_at)),
+                    "tracking_id_matched": True,
+                },
+                "rfg_outcome": {
+                    key: value for key, value in outcome.items() if key != "sesskey"
+                },
+            }
+            locked.status = requested_status
+            locked.callback_at = finished_at
+            locked.last_callback_at = checked_at
+            locked.loi_seconds = _rfg_log_loi_seconds(
+                entry, locked.calculate_loi_seconds(finished_at)
+            )
+            locked.callback_count += 1
+            locked.status_source = "rfg_log_reconciliation"
+            locked.is_verified = True
+            locked.upstream_checked_at = checked_at
+            locked.save(update_fields=[
+                "status", "callback_at", "last_callback_at", "loi_seconds", "callback_count",
+                "status_source", "is_verified", "upstream_checked_at", "upstream_transaction_data", "updated_at",
+            ])
+            finalize_attempt_capacity(locked)
+            callback_attempts.append(locked)
+            applied += 1
+    return {"matched": matched, "applied": applied, "callback_attempts": callback_attempts}
+
+
+@shared_task(
+    name="surveys.reconcile_rfg_log_outcomes",
+    soft_time_limit=120,
+    time_limit=150,
+)
+def reconcile_rfg_log_outcomes_task():
+    """Finalize RFG journeys from the signed LiveAlert project log.
+
+    RFG browser redirects are presentation-only and can be replayed by anyone.
+    This task deliberately never finalizes from those redirects.  It accepts an
+    outcome only after the RFG-authenticated API echoes the immutable attempt
+    RID in ``tid`` (or a documented equivalent tracking ID).
+    """
+
+    lease_name = "rfg-log-outcome-reconciliation"
+    if not SyncLease.acquire(lease_name, seconds=180):
+        return {"status": "skipped", "reason": "previous RFG log reconciliation is still running"}
+
+    now = timezone.now()
+    retry_before = now - timedelta(seconds=settings.RFG_LOG_RECONCILE_INTERVAL_SECONDS)
+    lookback = now - timedelta(hours=settings.RFG_LOG_RECONCILE_LOOKBACK_HOURS)
+    pending_statuses = (SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED)
+    pending = list(
+        SurveyAttempt.objects.select_related("survey__integration")
+        .filter(
+            survey__integration__provider_code="rfg",
+            status__in=pending_statuses,
+            callback_at__isnull=True,
+            initiated_at__gte=lookback,
+        )
+        .filter(Q(upstream_checked_at__isnull=True) | Q(upstream_checked_at__lte=retry_before))
+        .order_by("upstream_checked_at", "initiated_at", "pk")[: settings.RFG_LOG_RECONCILE_BATCH]
+    )
+    if not pending:
+        SyncLease.release(lease_name)
+        return {"checked": 0, "matched": 0, "applied": 0, "failures": 0}
+
+    grouped = {}
+    for attempt in pending:
+        survey = attempt.survey
+        integration = survey.integration
+        key = (integration.pk, survey.source_key)
+        grouped.setdefault(key, {"integration": integration, "attempts": []})["attempts"].append(attempt)
+
+    checked = matched = applied = failures = 0
+    supplier_callback_attempts = []
+    try:
+        providers = {}
+        for group in grouped.values():
+            integration = group["integration"]
+            attempts = group["attempts"]
+            start = min(attempt.initiated_at for attempt in attempts) - timedelta(minutes=5)
+            try:
+                provider = providers.setdefault(integration.pk, get_provider(integration))
+                log_entries = provider.project_log(attempts[0].survey.source_key, start=start, end=now)
+            except Exception:
+                failures += len(attempts)
+                logger.exception(
+                    "RFG project-log reconciliation failed integration=%s project=%s",
+                    integration.pk,
+                    attempts[0].survey.source_key,
+                )
+                continue
+
+            checked += len(attempts)
+            reconciliation = reconcile_rfg_project_log_entries(
+                attempts, log_entries, checked_at=now
+            )
+            matched += reconciliation["matched"]
+            applied += reconciliation["applied"]
+            supplier_callback_attempts.extend(reconciliation["callback_attempts"])
+        for attempt in supplier_callback_attempts:
+            queue_supplier_result_callback(attempt)
+        return {"checked": checked, "matched": matched, "applied": applied, "failures": failures}
     finally:
         SyncLease.release(lease_name)
 

@@ -224,6 +224,28 @@ class ResearchForGoodProvider(SurveyProvider):
 
         return self._command({"command": "livealert/targeting/1", "rfg_id": source_key, "zipsOnly": False})
 
+    def project_log(self, source_key, *, start=None, end=None):
+        """Return RFG's authenticated outcome log for one project and time range.
+
+        The response is used to reconcile a journey only when one of our
+        immutable tracking IDs is echoed back by RFG.  ``start`` and ``end``
+        intentionally use the ISO-like representation shown in RFG's API
+        examples, without a timezone suffix because the API declares these
+        fields as ``Date`` rather than timezone-aware timestamps.
+        """
+
+        payload = {"command": "livealert/log/1", "rfg_id": str(source_key)}
+        for key, value in (("start", start), ("end", end)):
+            if value is None:
+                continue
+            if isinstance(value, datetime):
+                value = value.astimezone(dt_timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+            payload[key] = str(value)
+        entries = self._command(payload).get("log") or []
+        if not isinstance(entries, list):
+            raise ProviderError("Research For Good project log must be a list.")
+        return [entry for entry in entries if isinstance(entry, dict)]
+
     def datapoint(self, name):
         """Fetch localized question/answer metadata for one RFG datapoint."""
 

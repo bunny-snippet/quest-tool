@@ -1,7 +1,7 @@
 import hashlib
 import hmac
 import json
-from datetime import datetime, timezone as dt_timezone
+from datetime import datetime, timedelta, timezone as dt_timezone
 from decimal import Decimal
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
@@ -31,6 +31,7 @@ from .providers.base import (
 )
 from .providers.rfg import ResearchForGoodProvider
 from .serializers import SurveyQuotaSerializer, TargetingQuestionSerializer
+from .tasks import reconcile_rfg_log_outcomes_task
 from .views import SurveyViewSet
 
 
@@ -121,6 +122,95 @@ class ResearchForGoodIntegrationTests(TestCase):
         ).hexdigest()
         self.assertEqual(kwargs["params"], {"apid": "publisher", "time": "1700000000", "hash": expected})
         self.assertEqual(json.loads(body)["command"], "test/copy/1")
+
+    @patch.dict("os.environ", {"RFG_APID": "publisher", "RFG_SECRET": "00112233445566778899aabbccddeeff"}, clear=False)
+    def test_project_log_uses_signed_date_range_and_returns_entries(self):
+        session = RecordingSession({
+            "result": 0,
+            "response": {"log": [{"tid": "RfgLog1234", "result": 1}]},
+        })
+        provider = ResearchForGoodProvider(self.integration, session=session)
+
+        entries = provider.project_log(
+            "RFG123456-001",
+            start=datetime(2026, 8, 30, 1, tzinfo=dt_timezone.utc),
+            end=datetime(2026, 8, 30, 2, tzinfo=dt_timezone.utc),
+        )
+
+        self.assertEqual(entries, [{"tid": "RfgLog1234", "result": 1}])
+        _, kwargs = session.request
+        self.assertEqual(json.loads(kwargs["data"])["command"], "livealert/log/1")
+        self.assertEqual(json.loads(kwargs["data"])["rfg_id"], "RFG123456-001")
+        self.assertEqual(json.loads(kwargs["data"])["start"], "2026-08-30T01:00:00")
+        self.assertEqual(json.loads(kwargs["data"])["end"], "2026-08-30T02:00:00")
+
+    @patch("surveys.tasks.get_provider")
+    def test_signed_project_log_finalizes_exact_pending_rfg_attempt(self, get_provider_mock):
+        now = timezone.now()
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG123456-log",
+            country_code="US",
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="RfgLog1234",
+            survey=survey,
+            user_id="log-reconcile",
+            status=SurveyAttempt.Status.REDIRECTED,
+            initiated_at=now - timedelta(minutes=5),
+        )
+        get_provider_mock.return_value.project_log.return_value = [{
+            "tid": attempt.rid,
+            "result": 1,
+            "start": (now - timedelta(minutes=5)).isoformat(),
+            "end": (now - timedelta(minutes=1)).isoformat(),
+            "loi": 240,
+            "sesskey": "must-not-be-stored",
+        }]
+
+        result = reconcile_rfg_log_outcomes_task.run()
+
+        attempt.refresh_from_db()
+        self.assertEqual(result["applied"], 1)
+        self.assertEqual(attempt.status, SurveyAttempt.Status.COMPLETED)
+        self.assertEqual(attempt.status_source, "rfg_log_reconciliation")
+        self.assertTrue(attempt.is_verified)
+        self.assertEqual(attempt.loi_seconds, 240)
+        self.assertNotIn("sesskey", attempt.upstream_transaction_data)
+        self.assertNotIn("must-not-be-stored", str(attempt.upstream_transaction_data))
+
+    @patch("surveys.views.get_provider")
+    def test_result_page_immediately_renders_authenticated_project_log_complete(self, get_provider_mock):
+        now = timezone.now()
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG123456-immediate-log",
+            country_code="US",
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="RfgPage123",
+            survey=survey,
+            user_id="result-page",
+            status=SurveyAttempt.Status.REDIRECTED,
+            initiated_at=now - timedelta(minutes=4),
+        )
+        get_provider_mock.return_value.project_log.return_value = [{
+            "tid": attempt.rid,
+            "result": 1,
+            "end": (now - timedelta(minutes=1)).isoformat(),
+            "loi": 180,
+        }]
+
+        response = self.client.get("/survey/rfg/result", {"rid": attempt.rid})
+
+        attempt.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Survey completed")
+        self.assertNotContains(response, "awaiting confirmation")
+        self.assertEqual(attempt.status, SurveyAttempt.Status.COMPLETED)
+        self.assertTrue(attempt.is_verified)
 
     def test_missing_environment_secret_fails_without_storing_secret(self):
         with patch.dict("os.environ", {}, clear=True):

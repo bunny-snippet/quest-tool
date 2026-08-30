@@ -159,7 +159,7 @@ from .survey_flow import (
     get_request_ip,
     status_identifiers_from_request,
 )
-from .tasks import sync_innovatemr_surveys_task
+from .tasks import reconcile_rfg_project_log_entries, sync_innovatemr_surveys_task
 from .user_hits import aggregate_user_hit_payload, expand_user_hit_rows, user_hit_filter_options
 
 
@@ -3021,6 +3021,37 @@ def rfg_result(request):
                 "exit_client_data", "upstream_transaction_data", "updated_at",
             ])
         attempt = locked
+
+    # The provider's browser redirect is deliberately not trusted as an
+    # outcome.  A just-finished respondent should nevertheless see their real
+    # result immediately, so make one bounded authenticated LiveAlert log
+    # lookup before rendering the pending page. The periodic worker below is
+    # the durable fallback if RFG has not published the log entry yet.
+    if attempt.status not in TERMINAL_ATTEMPT_STATUSES and attempt.callback_at is None:
+        try:
+            provider = get_provider(attempt.survey.integration)
+            entries = provider.project_log(
+                attempt.survey.source_key,
+                start=attempt.initiated_at - timedelta(minutes=5),
+                end=timezone.now(),
+            )
+            reconciliation = reconcile_rfg_project_log_entries(
+                [attempt], entries, checked_at=timezone.now()
+            )
+            for finalized_attempt in reconciliation["callback_attempts"]:
+                queue_supplier_result_callback(finalized_attempt)
+            if reconciliation["matched"]:
+                attempt.refresh_from_db()
+        except ProviderError as exc:
+            logger.info(
+                "Immediate RFG log reconciliation unavailable attempt=%s reason=%s",
+                attempt.pk,
+                str(exc),
+            )
+        except Exception:
+            # Rendering a temporary pending page is safer than treating an
+            # upstream timeout as a completion. Celery will retry shortly.
+            logger.exception("Immediate RFG log reconciliation failed attempt=%s", attempt.pk)
 
     stored = attempt.upstream_transaction_data or {}
     browser_parameters = stored.get("rfg_browser_return") or redacted_parameters
