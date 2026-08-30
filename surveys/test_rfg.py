@@ -141,8 +141,8 @@ class ResearchForGoodIntegrationTests(TestCase):
         _, kwargs = session.request
         self.assertEqual(json.loads(kwargs["data"])["command"], "livealert/log/1")
         self.assertEqual(json.loads(kwargs["data"])["rfg_id"], "RFG123456-001")
-        self.assertEqual(json.loads(kwargs["data"])["start"], "2026-08-30T01:00:00")
-        self.assertEqual(json.loads(kwargs["data"])["end"], "2026-08-30T02:00:00")
+        self.assertEqual(json.loads(kwargs["data"])["start"], "2026-08-30T01:00:00Z")
+        self.assertEqual(json.loads(kwargs["data"])["end"], "2026-08-30T02:00:00Z")
 
     @patch("surveys.tasks.get_provider")
     def test_signed_project_log_finalizes_exact_pending_rfg_attempt(self, get_provider_mock):

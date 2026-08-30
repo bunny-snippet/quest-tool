@@ -22,7 +22,7 @@ from .provider_services import (
     sync_cint_redirect_contracts,
     sync_client_integration,
 )
-from .providers import get_provider, has_provider
+from .providers import ProviderSurveyUnavailable, get_provider, has_provider
 from .rfg_outcomes import RFG_STATUS_MAP, describe_rfg_outcome
 from .supplier_callbacks import (
     DELIVERY_AUDIT_KEY,
@@ -576,7 +576,7 @@ def reconcile_rfg_log_outcomes_task():
             initiated_at__gte=lookback,
         )
         .filter(Q(upstream_checked_at__isnull=True) | Q(upstream_checked_at__lte=retry_before))
-        .order_by("upstream_checked_at", "initiated_at", "pk")[: settings.RFG_LOG_RECONCILE_BATCH]
+        .order_by("-initiated_at", "upstream_checked_at", "pk")[: settings.RFG_LOG_RECONCILE_BATCH]
     )
     if not pending:
         SyncLease.release(lease_name)
@@ -600,6 +600,23 @@ def reconcile_rfg_log_outcomes_task():
             try:
                 provider = providers.setdefault(integration.pk, get_provider(integration))
                 log_entries = provider.project_log(attempts[0].survey.source_key, start=start, end=now)
+            except ProviderSurveyUnavailable:
+                # Historical inventory can contain projects that RFG has
+                # removed from the authenticated account. Do not burn every
+                # two-minute run retrying those dead project IDs; a later
+                # inventory refresh/new attempt can still bring them back.
+                SurveyAttempt.objects.filter(
+                    pk__in=[attempt.pk for attempt in attempts],
+                    status__in=pending_statuses,
+                    callback_at__isnull=True,
+                ).update(upstream_checked_at=now + timedelta(hours=24))
+                failures += len(attempts)
+                logger.info(
+                    "RFG project log unavailable for removed project integration=%s project=%s",
+                    integration.pk,
+                    attempts[0].survey.source_key,
+                )
+                continue
             except Exception:
                 failures += len(attempts)
                 logger.exception(

@@ -230,8 +230,8 @@ class ResearchForGoodProvider(SurveyProvider):
         The response is used to reconcile a journey only when one of our
         immutable tracking IDs is echoed back by RFG.  ``start`` and ``end``
         intentionally use the ISO-like representation shown in RFG's API
-        examples, without a timezone suffix because the API declares these
-        fields as ``Date`` rather than timezone-aware timestamps.
+        examples. RFG defines ISO dates specifically as UTC values ending in
+        ``Z``; an offset-less value is rejected by the live endpoint.
         """
 
         payload = {"command": "livealert/log/1", "rfg_id": str(source_key)}
@@ -239,7 +239,7 @@ class ResearchForGoodProvider(SurveyProvider):
             if value is None:
                 continue
             if isinstance(value, datetime):
-                value = value.astimezone(dt_timezone.utc).replace(tzinfo=None).isoformat(timespec="seconds")
+                value = value.astimezone(dt_timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
             payload[key] = str(value)
         entries = self._command(payload).get("log") or []
         if not isinstance(entries, list):
