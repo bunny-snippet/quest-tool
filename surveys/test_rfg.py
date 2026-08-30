@@ -203,7 +203,9 @@ class ResearchForGoodIntegrationTests(TestCase):
             "loi": 180,
         }]
 
-        response = self.client.get("/survey/rfg/result", {"rid": attempt.rid})
+        response = self.client.get(
+            "/survey/rfg/result", {"rid": attempt.rid}, REMOTE_ADDR="203.0.113.25"
+        )
 
         attempt.refresh_from_db()
         self.assertEqual(response.status_code, 200)
@@ -211,6 +213,7 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertNotContains(response, "awaiting confirmation")
         self.assertEqual(attempt.status, SurveyAttempt.Status.COMPLETED)
         self.assertTrue(attempt.is_verified)
+        self.assertEqual(attempt.callback_ip, "203.0.113.25")
 
     def test_missing_environment_secret_fails_without_storing_secret(self):
         with patch.dict("os.environ", {}, clear=True):

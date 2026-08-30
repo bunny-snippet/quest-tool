@@ -2999,6 +2999,7 @@ def rfg_result(request):
     received_parameters = dict(request.GET.items())
     redacted_parameters = _redacted_callback_parameters(received_parameters)
     now = timezone.now()
+    exit_ip = get_request_ip(request)
     client_data = get_request_client_data(request)
     with transaction.atomic():
         locked = SurveyAttempt.objects.select_for_update().get(pk=attempt.pk)
@@ -3007,6 +3008,11 @@ def rfg_result(request):
         # evidence once, but never let reloads or crafted URLs replace it.
         if "rfg_browser_return" not in audit:
             locked.last_callback_at = now
+            # RFG's authenticated project log intentionally has no respondent
+            # IP. The browser return is therefore the only truthful source for
+            # the exit IP shown in Traffic Reports; it does not decide the
+            # outcome itself.
+            locked.callback_ip = exit_ip or locked.callback_ip
             locked.exit_user_agent = client_data.get("user_agent", "")
             locked.exit_browser = client_data.get("browser", "")
             locked.exit_device = client_data.get("device", "")
@@ -3017,7 +3023,7 @@ def rfg_result(request):
                 "rfg_browser_return": redacted_parameters,
             }
             locked.save(update_fields=[
-                "last_callback_at", "exit_user_agent", "exit_browser", "exit_device", "exit_os",
+                "last_callback_at", "callback_ip", "exit_user_agent", "exit_browser", "exit_device", "exit_os",
                 "exit_client_data", "upstream_transaction_data", "updated_at",
             ])
         attempt = locked
