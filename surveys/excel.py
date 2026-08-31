@@ -66,7 +66,8 @@ def _cell_xml(reference: str, value, row_style: int) -> str:
     preserve = ' xml:space="preserve"' if content[:1].isspace() or content[-1:].isspace() else ""
     # Force report identifiers and other text through Excel's text format.
     # This prevents long numeric-looking IDs from being displayed in scientific
-    # notation or rounded by spreadsheet applications.
+    # notation or rounded by spreadsheet applications, without adding Excel's
+    # visible apostrophe/quote-prefix marker to copied cell values.
     text_style = 6 if row_style == 2 else 7 if row_style == 3 else row_style
     return f'<c r="{reference}" s="{text_style}" t="inlineStr"><is><t{preserve}>{content}</t></is></c>'
 
@@ -128,8 +129,8 @@ def _styles_xml() -> str:
     <xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0"><alignment vertical="center"/></xf>
     <xf numFmtId="4" fontId="0" fillId="0" borderId="1" xfId="0"><alignment vertical="center"/></xf>
     <xf numFmtId="4" fontId="0" fillId="3" borderId="1" xfId="0"><alignment vertical="center"/></xf>
-    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0" quotePrefix="1"><alignment vertical="center"/></xf>
-    <xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0" quotePrefix="1"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="0" borderId="1" xfId="0"><alignment vertical="center"/></xf>
+    <xf numFmtId="0" fontId="0" fillId="3" borderId="1" xfId="0"><alignment vertical="center"/></xf>
   </cellXfs>
   <cellStyles count="1"><cellStyle name="Normal" xfId="0" builtinId="0"/></cellStyles>
 </styleSheet>"""
