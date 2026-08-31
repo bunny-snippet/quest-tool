@@ -1666,6 +1666,7 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
             normalized_text,
         )
         options = []
+        provider_option_codes = {}
         age_ranges = []
         allowed_values = _qualifying_option_values(question)
         postal_targeting_values = []
@@ -1712,6 +1713,9 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                     option.get("OptionText") or str(option_id or "Option")
                 )
             value = str(option_id if option_id is not None else label)
+            option_code = option.get("OptionCode")
+            if option_code not in (None, ""):
+                provider_option_codes[value] = str(option_code)
             option_is_qualified = not allowed_values or value in allowed_values
             if (is_dob_question or is_age_question) and option_is_qualified:
                 normalized_range = _age_range_from_payload(option)
@@ -1834,6 +1838,11 @@ def _prescreener_questions(survey, submitted_data=None, *, qualifying_options_on
                 else (question.question_type or "Question")
             ),
             "options": options,
+            # Keep provider codes separate from the browser-visible choices.
+            # BioBrain needs the standard gender code in addition to its
+            # qualification OptionId, but the form must still submit the
+            # original option value used by every provider mapping.
+            "provider_option_codes": provider_option_codes,
             "current_value": current_value,
             "min_value": min_value,
             "max_value": max_value,
@@ -2007,6 +2016,11 @@ def _collect_prescreener_answers(request, survey):
             "question_category": question.category,
             "values": values,
             "upstream_values": upstream_values,
+            "provider_option_codes": [
+                prepared["provider_option_codes"][value]
+                for value in values
+                if value in prepared.get("provider_option_codes", {})
+            ],
             "platform_only": platform_only,
         }
         for alias in prepared.get("aliases", []):

@@ -139,14 +139,24 @@ class ConfigurableProviderClientTests(SimpleTestCase):
 
     def test_biobrain_outbound_url_uses_canonical_rid_and_profile_uid(self):
         outbound = build_biobrain_outbound_url(
-            "https://respond.voqall.com/l?vq_sid=44&vq_vid=7",
+            "https://respond.voqall.com/l?vq_sid=44&vq_vid=7&vq_token=[#vq_tid#]&vq_uid=[#vq_tuid#]",
             "Abc123xYz9",
             "uidA-123",
-            {"1": {"question_id": 59, "upstream_values": [100]}},
+            {
+                "age": {"question_id": 59, "question_key": "AGE", "upstream_values": [33]},
+                "gender": {"question_id": 60, "question_key": "GENDER", "upstream_values": [58], "provider_option_codes": ["1"]},
+                "zip": {"question_id": 61, "question_key": "POSTAL_CODE", "upstream_values": ["10001"]},
+            },
         )
         self.assertIn("vq_token=Abc123xYz9", outbound)
         self.assertIn("vq_uid=uidA-123", outbound)
-        self.assertIn("Q59=100", outbound)
+        self.assertIn("Q59=33", outbound)
+        self.assertIn("Q60=58", outbound)
+        self.assertIn("Q61=10001", outbound)
+        self.assertIn("age=33", outbound)
+        self.assertIn("gender=1", outbound)
+        self.assertIn("zip=10001", outbound)
+        self.assertNotIn("%23", outbound)
         self.assertNotIn("trackId=", outbound)
 
     def test_custom_provider_field_mapping(self):

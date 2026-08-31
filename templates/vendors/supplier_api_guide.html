@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Supplier API guide · Exchange Hub</title>
+  <style>
+    :root{font-family:Inter,ui-sans-serif,system-ui,sans-serif;color:#182842;background:#f4f7fb}*{box-sizing:border-box}body{margin:0}.wrap{max-width:1000px;margin:auto;padding:40px 22px 64px}.hero{padding:30px;border-radius:20px;color:#fff;background:linear-gradient(130deg,#162644,#087e9a);box-shadow:0 16px 42px #1328472b}.eyebrow{margin:0 0 10px;text-transform:uppercase;letter-spacing:.13em;font-size:11px;font-weight:800;color:#8de4f3}.hero h1{margin:0;font-size:31px}.hero p{max-width:710px;margin:12px 0 0;color:#d6e9ee;line-height:1.6}.grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px;margin:18px 0}.card,section{background:#fff;border:1px solid #e0e8f0;border-radius:16px;padding:22px;box-shadow:0 5px 20px #1f36580a;margin-top:16px}h2{margin:0 0 9px;font-size:20px}p,li{font-size:14px;line-height:1.6;color:#52637a}ul,ol{padding-left:21px}code,pre{font-family:ui-monospace,SFMono-Regular,Consolas,monospace;background:#f2f6f9;color:#1e3f5a}code{border-radius:5px;padding:2px 5px}pre{margin:10px 0;overflow:auto;border-radius:10px;padding:14px;font-size:12px;line-height:1.55}.notice{padding:12px 14px;border-radius:10px;background:#ebfafd;color:#24536a;font-size:13px;line-height:1.55}.status{display:grid;grid-template-columns:110px 1fr;gap:6px 14px;margin:10px 0}.status b{font-size:13px}.status span{font-size:13px;color:#52637a}@media(max-width:680px){.wrap{padding:20px 14px 42px}.grid{grid-template-columns:1fr}.hero{padding:23px}.hero h1{font-size:25px}.status{grid-template-columns:1fr;gap:2px}}
+  </style>
+</head>
+<body>
+  <main class="wrap">
+    <header class="hero"><p class="eyebrow">Exchange Hub · External supplier</p><h1>Survey inventory API</h1><p>Use your assigned API key to read only the live surveys and clients allocated to your supplier account, then send the respondent to the secure <code>start_link</code> returned for that survey.</p></header>
+    <div class="grid">
+      <article class="card"><h2>Base URL</h2><pre>{{ base_url }}</pre><p>All API URLs below are relative to this base URL.</p></article>
+      <article class="card"><h2>Authentication</h2><p>Send the plaintext API key provided by Exchange Hub on every API request. Keep it server-side; never put it in browser JavaScript or a public URL.</p><pre>X-API-Key: exh_your_key_here</pre><p>The alternate format <code>Authorization: Api-Key exh_your_key_here</code> is also accepted.</p></article>
+    </div>
+    <section><h2>1. Fetch live inventory</h2><p>Only surveys permitted by your active client allocations, project rules and CPI policy are returned. Pagination is standard; follow <code>next</code> until it is null.</p><pre>GET {{ base_url }}/api/v1/surveys/?status=live&amp;page=1&amp;page_size=50
+X-API-Key: exh_your_key_here</pre><p>Useful optional filters include <code>search</code>, <code>country_code</code>, <code>client</code>, <code>min_cpi</code>, <code>max_cpi</code> and <code>ordering</code>. Use the returned <code>local_id</code> for the detail endpoints.</p><pre>{
+  "count": 1,
+  "next": null,
+  "results": [{
+    "local_id": "20260800123456",
+    "survey_id": "5931305",
+    "name": "Example survey",
+    "country_code": "US",
+    "cpi": "1.25",
+    "loi": 12,
+    "incidence_rate": "35.00",
+    "start_link": "{{ base_url }}/survey/start?entry=..."
+  }]
+}</pre></section>
+    <section><h2>2. Read quota and targeting before routing</h2><p>These endpoints return the normalized quota and pre-screening data used by Exchange Hub. The data reflects the latest provider synchronization.</p><pre>GET {{ base_url }}/api/v1/surveys/{local_id}/quotas/
+GET {{ base_url }}/api/v1/surveys/{local_id}/targeting/
+GET {{ base_url }}/api/v1/surveys/{local_id}/details/
+X-API-Key: exh_your_key_here</pre><p>Do not manufacture answer IDs or alter provider mappings. If you collect profile data in your own flow, preserve the precise accepted values returned by targeting.</p></section>
+    <section><h2>3. Route the respondent</h2><ol><li>Request inventory from your backend.</li><li>Choose a live survey and optionally inspect its quota/targeting.</li><li>Redirect the respondent’s browser to that response’s <code>start_link</code>.</li><li>Do not edit, decode, cache across users, or append user/survey/RID/PID parameters to the link. It is a one-time, authenticated entry token.</li></ol><div class="notice">A fresh <code>start_link</code> is generated in the inventory response for your API key. If you need to refresh an unconsumed token, POST its existing <code>entry</code> value to <code>/api/v1/surveys/entry-link/</code> with the same API key.</div></section>
+    <section><h2>Result callbacks</h2><p>When configured by Exchange Hub, terminal results are sent to the HTTPS callback URLs registered for your API key. Treat <code>eventId</code> as the idempotency key: repeated delivery of the same event must not create duplicate crediting.</p><div class="status"><b>status</b><span><code>1</code> complete, <code>2</code> terminate, <code>3</code> quota full, <code>4</code> quality termination</span><b>surveyId</b><span>The identifier mode selected for this API key</span><b>projectId</b><span>Exchange Hub project ID</span><b>pid</b><span>Supplier-safe respondent journey identifier</span><b>eventId</b><span>Idempotency key for this terminal event</span><b>timestamp</b><span>Terminal provider result time</span><b>statusSource</b><span>How the terminal result was received</span><b>termReason / termCategory</b><span>Provided when available for non-complete outcomes</span><b>hash</b><span>Present only when optional HMAC-SHA256 signing is enabled</span></div><pre>GET https://supplier.example/callback?status=1&amp;surveyId=...&amp;projectId=...&amp;pid=...&amp;eventId=...&amp;timestamp=...</pre></section>
+    <section><h2>Postman quick start</h2><ol><li>Create <code>base_url</code> = <code>{{ base_url }}</code> and secret <code>api_key</code> with the issued key.</li><li>Create a GET request to <code>&#123;&#123;base_url&#125;&#125;/api/v1/surveys/?status=live</code>.</li><li>Add header <code>X-API-Key: &#123;&#123;api_key&#125;&#125;</code>, then Send.</li></ol><p>Expected errors: <code>401</code> invalid/revoked/expired key, <code>403</code> insufficient permission, <code>404</code> survey not visible to the key, and <code>429</code> temporary rate limit. Do not retry 4xx authentication or scope errors automatically.</p></section>
+  </main>
+</body>
+</html>

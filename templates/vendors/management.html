@@ -2,7 +2,7 @@
 {% load static %}
 {% block title %}Supplier Management · Exchange Hub{% endblock %}
 {% block header_title %}Supplier Management{% endblock %}
-{% block extra_head %}<link rel="stylesheet" href="{% static 'vendors/management.css' %}?v=4">{% endblock %}
+{% block extra_head %}<link rel="stylesheet" href="{% static 'vendors/management.css' %}?v=5">{% endblock %}
 {% block content %}
 {{ vendor_columns|json_script:"vendorColumnAccess" }}
 {{ client_columns|json_script:"clientAllocationColumnAccess" }}
@@ -55,13 +55,18 @@
   </section>{% endif %}
 
   {% if can_view_api_keys %}<section class="vendor-tab-panel {% if first_vendor_tab == 'api-keys' %}active{% endif %}" data-vendor-panel="api-keys" {% if first_vendor_tab != 'api-keys' %}hidden{% endif %}>
-    <header class="vendor-panel-head"><div><h2>External supplier API keys</h2><p>Keys inherit the supplier's exact permissions, client grants, survey rules and CPI cuts.</p></div>{% if can_create_api_key %}<button class="primary-button compact" type="button" data-create-api-key>Generate key <span>+</span></button>{% endif %}</header>
+    <header class="vendor-panel-head"><div><h2>External supplier API keys</h2><p>Keys inherit the supplier's exact permissions, client grants, survey rules and CPI cuts. <a href="{% url 'supplier-api-guide' %}" target="_blank" rel="noopener">Open supplier API guide</a></p></div>{% if can_create_api_key %}<button class="primary-button compact" type="button" data-create-api-key>Generate key <span>+</span></button>{% endif %}</header>
     <div class="vendor-table-wrap"><table class="vendor-table"><thead><tr>{% if 'vendor' in api_columns %}<th>Supplier</th>{% endif %}{% if 'key' in api_columns %}<th>Key / Client scope</th>{% endif %}{% if 'created' in api_columns %}<th>Created</th>{% endif %}{% if 'last_used' in api_columns %}<th>Last used</th>{% endif %}{% if 'expires' in api_columns %}<th>Expires</th>{% endif %}{% if 'actions' in api_columns %}<th><span class="sr-only">Actions</span></th>{% endif %}</tr></thead><tbody id="apiKeyRows"></tbody></table></div>
     <div class="vendor-cards" id="apiKeyCards"></div>
   </section>{% endif %}
 </section>
 
 <div class="vendor-modal-backdrop" id="vendorModalBackdrop" hidden></div>
+<section class="vendor-modal" id="supplierClientAccessModal" role="dialog" aria-modal="true" aria-labelledby="supplierClientAccessModalTitle" hidden>
+  <header><div><p class="eyebrow">External supplier access</p><h2 id="supplierClientAccessModalTitle">Assigned clients</h2></div><button type="button" class="vendor-modal-close" data-close-vendor-modal aria-label="Close">×</button></header>
+  <div class="vendor-modal-body"><p class="vendor-form-note">Each client exposes its eligible projects by default. Open a client to change its allocation, pricing window or status.</p><section class="supplier-client-access-list" id="supplierClientAccessRows"></section></div>
+  <footer><button type="button" class="vendor-secondary" data-close-vendor-modal>Close</button></footer>
+</section>
 <section class="vendor-modal" id="vendorPolicyModal" role="dialog" aria-modal="true" aria-labelledby="vendorPolicyModalTitle" hidden>
   <form id="vendorPolicyForm" data-vendor-form="policy">
     <header><div><p class="eyebrow" data-modal-eyebrow>Supplier policy</p><h2 id="vendorPolicyModalTitle" data-modal-title>Edit commercial policy</h2></div><button type="button" class="vendor-modal-close" data-close-vendor-modal aria-label="Close">×</button></header>
@@ -148,11 +153,11 @@
         <label class="vendor-active-toggle wide"><input name="api_callback_signing_enabled" type="checkbox"><span>Sign callbacks with HMAC-SHA256</span><small>Off by default. When enabled, the secret is shown once and callbacks include hash, termReason and termCategory.</small></label>
         <p class="vendor-form-note wide">The plaintext key is displayed once. Its permissions and visible data always follow this supplier's live configuration.</p>
       </div>
-      <section class="issued-key-panel" id="issuedKeyPanel" hidden><span>Copy these credentials now</span><div><input id="issuedKeyValue" readonly><button type="button" id="copyIssuedKey">Copy API key</button></div><div id="issuedCallbackSecretRow" hidden><input id="issuedCallbackSecretValue" readonly><button type="button" id="copyIssuedCallbackSecret">Copy hash secret</button></div><small>Plaintext credentials cannot be recovered after this modal is closed.</small></section>
+      <section class="issued-key-panel" id="issuedKeyPanel" hidden><span>Copy these credentials now</span><div><input id="issuedKeyValue" readonly><button type="button" id="copyIssuedKey">Copy API key</button></div><div id="issuedCallbackSecretRow" hidden><input id="issuedCallbackSecretValue" readonly><button type="button" id="copyIssuedCallbackSecret">Copy hash secret</button></div><small>Plaintext credentials cannot be recovered after this modal is closed. Send the supplier the <a href="{% url 'supplier-api-guide' %}" target="_blank" rel="noopener">supplier API guide</a> with this key.</small></section>
       <div class="vendor-form-error" data-vendor-form-error hidden></div>
     </div>
     <footer><button type="button" class="vendor-secondary" data-close-vendor-modal>Close</button><button class="primary-button" type="submit" data-vendor-submit>Generate secure key</button></footer>
   </form>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'vendors/management.js' %}?v=13" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'vendors/management.js' %}?v=14" defer></script>{% endblock %}

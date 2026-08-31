@@ -355,6 +355,10 @@ def build_biobrain_outbound_url(
     ``vq_uid`` is the stable panelist UID. Qualification answers are sent as
     ``Q{QualificationId}`` so the provider can auto-punch them.
     """
+    # Voqall templates sometimes retain its literal [#vq_tid#] / [#vq_tuid#]
+    # placeholders. ``#`` otherwise starts a browser-only URL fragment and
+    # causes following query fields to be lost before this request is made.
+    entry_link = re.sub(r"\[#(?:vq_tid|vq_tuid)#\]", "", entry_link, flags=re.IGNORECASE)
     parts = urlsplit(entry_link)
     hostname = (parts.hostname or "").lower()
     if (
@@ -365,7 +369,7 @@ def build_biobrain_outbound_url(
         or (hostname != "voqall.com" and not hostname.endswith(".voqall.com"))
     ):
         raise ValueError("BioBrain returned an invalid respondent entry link.")
-    reserved = {"vq_token", "vq_uid", "pid", "trackid"}
+    reserved = {"vq_token", "vq_uid", "pid", "trackid", "age", "gender", "zip"}
     outbound = [
         (key, value)
         for key, value in parse_qsl(parts.query, keep_blank_values=True)
@@ -389,6 +393,29 @@ def build_biobrain_outbound_url(
         ]
         if values:
             outbound.append((f"Q{question_id}", ",".join(values)))
+
+        # Voqall documents these as its standard auto-punch profile fields.
+        # Keep the Q{QualificationId} data above as well: custom/survey
+        # qualifications still depend on it, while these standard fields make
+        # the age/gender/ZIP profile unambiguous at the provider edge.
+        key = str(answer.get("question_key") or "").strip().upper()
+        text = str(answer.get("question_text") or "").strip().lower()
+        if (key == "AGE" or "what is your age" in text) and values:
+            outbound.append(("age", values[0]))
+        elif (key == "GENDER" or "gender" in text) and values:
+            standard_values = [
+                str(value).strip()
+                for value in answer.get("provider_option_codes") or []
+                if str(value).strip()
+            ]
+            outbound.append(("gender", (standard_values or values)[0]))
+        elif (
+            key in {"ZIP", "ZIP_CODE", "POSTAL_CODE", "POSTCODE"}
+            or "zip code" in text
+            or "postal code" in text
+            or "postcode" in text
+        ) and values:
+            outbound.append(("zip", values[0]))
 
     return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(outbound), parts.fragment))
 

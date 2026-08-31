@@ -5,6 +5,7 @@
   if (!workspace) return;
 
   const backdrop = document.querySelector('#vendorModalBackdrop');
+  const supplierClientAccessModal = document.querySelector('#supplierClientAccessModal');
   const modalConfigs = {
     policy: { form: document.querySelector('#vendorPolicyForm'), modal: document.querySelector('#vendorPolicyModal') },
     client: { form: document.querySelector('#clientAllocationForm'), modal: document.querySelector('#clientAllocationModal') },
@@ -201,19 +202,27 @@
 
   function renderClientAllocations() {
     if (!$('#clientAllocationRows')) return;
-    $('#clientAllocationRows').innerHTML = state.clientAllocations.map((row) => {
+    const groups = [...state.clientAllocations.reduce((all, row) => {
+      const key = String(row.vendor);
+      if (!all.has(key)) all.set(key, { vendor: row, rows: [] });
+      all.get(key).rows.push(row);
+      return all;
+    }, new Map()).values()];
+    $('#clientAllocationRows').innerHTML = groups.map(({ vendor, rows }) => {
+      const activeCount = rows.filter((row) => row.is_active).length;
       const cells = [];
-      if (clientColumns.has('vendor')) cells.push(`<td><strong>${escapeHtml(row.vendor_name)}</strong><br>${typeBadge(row.account_type)}</td>`);
-      if (clientColumns.has('client')) cells.push(`<td><strong>${escapeHtml(row.client_name)}</strong><br><small>${stateBadge(row.is_active)}</small></td>`);
-      if (clientColumns.has('cpi')) cells.push(`<td>${cutMarkup(row, 'supplier default')}${cpiRangeMarkup(row)}</td>`);
-      if (clientColumns.has('window')) cells.push(`<td><div class="vendor-window"><span>${dateTime(row.starts_at)}</span><span>to ${dateTime(row.ends_at)}</span></div></td>`);
-      if (clientColumns.has('actions')) cells.push(`<td>${actionButton('client', row.id, canAllocateClient, 'View')}</td>`);
+      if (clientColumns.has('vendor')) cells.push(`<td><strong>${escapeHtml(vendor.vendor_name)}</strong><br>${typeBadge(vendor.account_type)}</td>`);
+      if (clientColumns.has('client')) cells.push(`<td><strong>${number(rows.length)} client${rows.length === 1 ? '' : 's'}</strong><br><small>${activeCount} active</small></td>`);
+      if (clientColumns.has('cpi')) cells.push(`<td>Client-specific policy<br><small>Open the supplier to review each client</small></td>`);
+      if (clientColumns.has('window')) cells.push(`<td><div class="vendor-window"><span>${activeCount} active client grant${activeCount === 1 ? '' : 's'}</span><span>${rows.length - activeCount ? `${rows.length - activeCount} inactive` : 'All active'}</span></div></td>`);
+      if (clientColumns.has('actions')) cells.push(`<td><button class="vendor-action" type="button" data-view-supplier-clients="${vendor.vendor}">View clients</button></td>`);
       return `<tr>${cells.join('') || '<td><div class="vendor-empty">No client-allocation columns assigned.</div></td>'}</tr>`;
     }).join('') || emptyRow(Math.max(1, clientColumns.size), 'No client allocations yet.');
-    $('#clientAllocationCards').innerHTML = state.clientAllocations.map((row) => {
-      const head = `${clientColumns.has('vendor') ? `<strong>${escapeHtml(row.vendor_name)}</strong>` : ''}${clientColumns.has('client') ? `<small>${escapeHtml(row.client_name)}</small>` : ''}`;
-      const details = `${clientColumns.has('cpi') ? `<span>CPI cut<strong>${escapeHtml(row.effective_cpi_cut_percent)}%</strong></span><span>Source CPI range<strong>${escapeHtml(row.min_cpi ?? 'Any')} – ${escapeHtml(row.max_cpi ?? 'Any')}</strong></span>` : ''}${clientColumns.has('vendor') ? `<span>Type<strong>${escapeHtml(accountLabel(row.account_type))}</strong></span>` : ''}${clientColumns.has('window') ? `<span>Window<strong>${dateTime(row.starts_at)} to ${dateTime(row.ends_at)}</strong></span>` : ''}`;
-      return `<article class="vendor-card">${head ? `<div class="vendor-card-head"><div>${head}</div>${clientColumns.has('client') ? stateBadge(row.is_active) : ''}</div>` : ''}${details ? `<div class="vendor-card-grid">${details}</div>` : ''}${clientColumns.has('actions') ? actionButton('client', row.id, canAllocateClient, 'View') : ''}</article>`;
+    $('#clientAllocationCards').innerHTML = groups.map(({ vendor, rows }) => {
+      const activeCount = rows.filter((row) => row.is_active).length;
+      const head = `${clientColumns.has('vendor') ? `<strong>${escapeHtml(vendor.vendor_name)}</strong><small>${escapeHtml(accountLabel(vendor.account_type))}</small>` : ''}`;
+      const details = `${clientColumns.has('client') ? `<span>Assigned clients<strong>${number(rows.length)}</strong></span><span>Active clients<strong>${number(activeCount)}</strong></span>` : ''}${clientColumns.has('window') ? `<span>Access<strong>${activeCount === rows.length ? 'All active' : `${activeCount} active`}</strong></span>` : ''}`;
+      return `<article class="vendor-card">${head ? `<div class="vendor-card-head"><div>${head}</div></div>` : ''}${details ? `<div class="vendor-card-grid">${details}</div>` : ''}${clientColumns.has('actions') ? `<button class="vendor-action" type="button" data-view-supplier-clients="${vendor.vendor}">View clients</button>` : ''}</article>`;
     }).join('');
   }
 
@@ -381,14 +390,26 @@
     backdrop.hidden = false; modal.hidden = false;
     requestAnimationFrame(() => { backdrop.classList.add('open'); modal.classList.add('open'); });
     document.body.classList.add('vendor-modal-open');
-    setTimeout(() => form.querySelector('input:not([type=hidden]):not([disabled]),select:not([disabled])')?.focus(), 140);
+    setTimeout(() => (form || modal).querySelector('input:not([type=hidden]):not([disabled]),select:not([disabled]),button:not([disabled])')?.focus(), 140);
   }
 
-  function closeModal() {
+  function closeModal(afterClose = null) {
     const closingModal = modal;
     backdrop.classList.remove('open'); closingModal?.classList.remove('open');
     document.body.classList.remove('vendor-modal-open');
-    setTimeout(() => { backdrop.hidden = true; if (closingModal) closingModal.hidden = true; }, 210);
+    setTimeout(() => { backdrop.hidden = true; if (closingModal) closingModal.hidden = true; afterClose?.(); }, 210);
+  }
+
+  function openSupplierClientAccess(vendorId) {
+    const rows = state.clientAllocations.filter((row) => Number(row.vendor) === Number(vendorId));
+    const supplier = rows[0];
+    if (!supplier || !supplierClientAccessModal) return;
+    activeMode = null;
+    form = null;
+    modal = supplierClientAccessModal;
+    $('#supplierClientAccessModalTitle').textContent = `${supplier.vendor_name} clients`;
+    $('#supplierClientAccessRows').innerHTML = rows.map((row) => `<article class="supplier-client-access-row"><div><strong>${escapeHtml(row.client_name)}</strong><small>${stateBadge(row.is_active)} · CPI cut ${escapeHtml(row.effective_cpi_cut_percent)}% · source CPI ${escapeHtml(row.min_cpi ?? 'Any')} – ${escapeHtml(row.max_cpi ?? 'Any')}</small><small>${dateTime(row.starts_at)} to ${dateTime(row.ends_at)}</small></div>${canAllocateClient ? `<button class="vendor-action" type="button" data-edit-client="${row.id}">View / edit</button>` : ''}</article>`).join('');
+    showModal();
   }
 
   function openPolicy(vendorId) {
@@ -532,10 +553,12 @@
       event.preventDefault(); event.stopPropagation(); openApiKey(); return;
     }
     const policy = event.target.closest('button[data-edit-policy]');
+    const supplierClients = event.target.closest('button[data-view-supplier-clients]');
     const client = event.target.closest('[data-edit-client]');
     const survey = event.target.closest('[data-edit-survey]');
     const apiKey = event.target.closest('[data-edit-api-key]');
     if (policy && canEditPolicy) { event.preventDefault(); openPolicy(policy.dataset.editPolicy); return; }
+    if (supplierClients) { event.preventDefault(); openSupplierClientAccess(supplierClients.dataset.viewSupplierClients); return; }
     if (client && canAllocateClient) { event.preventDefault(); openClientAllocation(client.dataset.editClient); return; }
     if (survey && canAllocateProject) { event.preventDefault(); openSurveyAllocation(survey.dataset.editSurvey); return; }
     if (apiKey && canCreateApiKey) { event.preventDefault(); openApiKey(apiKey.dataset.editApiKey); return; }
@@ -546,6 +569,13 @@
         .catch((error) => toast(error.message, true));
     }
   }, true);
+  supplierClientAccessModal?.addEventListener('click', (event) => {
+    const client = event.target.closest('[data-edit-client]');
+    if (client && canAllocateClient) {
+      event.preventDefault();
+      closeModal(() => openClientAllocation(client.dataset.editClient));
+    }
+  });
   $$('[data-close-vendor-modal]').forEach((button) => button.addEventListener('click', closeModal));
   backdrop.addEventListener('click', closeModal);
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape' && modal && !modal.hidden) closeModal(); });

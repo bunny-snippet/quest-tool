@@ -66,15 +66,13 @@
           </div>
         </div>
         <section class="reuse-editor">
-          <header><div><h3>Reusable UID policy</h3><p>Client-wise monthly budget; country always matches automatically, with age-band and gender controls.</p></div><label class="mode-switch" title="Enable reusable UIDs"><input id="profileReuseEnabled" type="checkbox"><span></span></label></header>
+          <header><div><h3>Reusable UID policy</h3><p>Client-wise monthly budget. Country, age and gender always match the survey's actual requirements automatically.</p></div><label class="mode-switch" title="Enable reusable UIDs"><input id="profileReuseEnabled" type="checkbox"><span></span></label></header>
           <div class="form-grid">
             <div class="field"><label>First reuse after</label><div class="duration-control"><input id="profileReuseFirstDelayValue" type="number" min="1" value="60"><select id="profileReuseFirstDelayUnit"><option value="1">minutes</option><option value="60">hours</option><option value="1440" selected>days</option></select></div><small>Minimum profile age before it enters this client's queue.</small></div>
             <div class="field"><label>Minimum gap per UID</label><div class="duration-control"><input id="profileReuseIntervalValue" type="number" min="1" value="30"><select id="profileReuseIntervalUnit"><option value="1">minutes</option><option value="60">hours</option><option value="1440" selected>days</option></select></div><small>Example: 30 minutes, 6 hours, or 1 day.</small></div>
             <div class="field"><label for="profileReuseMaxUses">Max uses per window</label><input id="profileReuseMaxUses" type="number" min="1" max="1000" value="1"><small>Hard per-UID limit inside the rolling window.</small></div>
             <div class="field"><label>Rolling window</label><div class="duration-control"><input id="profileReuseWindowValue" type="number" min="1" value="1"><select id="profileReuseWindowUnit"><option value="1">minutes</option><option value="60">hours</option><option value="1440" selected>days</option></select></div><small>Example: max 6 uses in a rolling 24-hour window.</small></div>
             <div class="field"><label for="profileReusePercentage">Monthly reuse traffic (%)</label><input id="profileReusePercentage" type="number" min="0.01" max="100" step="0.01" value="30"><small>Overall reuse budget; unmatched traffic always receives a fresh UID.</small></div>
-            <div class="field full"><label>Age bands</label><div class="reuse-options" id="profileReuseAgeGroups"></div></div>
-            <div class="field full"><label>Genders</label><div class="reuse-options" id="profileReuseGenders"></div></div>
           </div>
         </section>
       </div>
@@ -126,8 +124,6 @@ document.addEventListener('DOMContentLoaded',()=>{
     custom:{inventoryEndpoint:'',authHeader:'Authorization',inventoryKey:'',pagedEndpoint:'',quotaEndpoint:'',quotaKey:'',targetingEndpoint:'',targetingKey:'',transactionEndpoint:'',transactionKey:''}
   };
   const ids=['recordId','client','name','provider','baseUrl','supplierCode','interval','detailBatch','rfgApidEnv','rfgSecretEnv','rfgCountry','rfgCategory','cintCallbackUrl','cintKeyId','cintPublicKey','inventoryEndpoint','authHeader','inventoryKey','apiToken','tokenEnv','authPrefix','pagedEndpoint','quotaEndpoint','quotaKey','targetingEndpoint','targetingKey','transactionEndpoint','transactionKey','fieldMapping'];
-  const reuseAgeGroups=['13-17','18-24','25-29','30-34','35-39','40-44','45-49','50-54'];
-  const reuseGenders=['male','female'];
   const el=id=>document.getElementById(id);
   const cookie=n=>document.cookie.split('; ').find(x=>x.startsWith(n+'='))?.split('=')[1]||'';
   const escapeHtml=value=>String(value??'').replace(/[&<>'"]/g,char=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[char]));
@@ -136,10 +132,6 @@ document.addEventListener('DOMContentLoaded',()=>{
   const providerMeta=code=>providers.find(item=>item.code===code)||fallbackProviders.find(item=>item.code===code)||{code,label:code||'Unknown provider',default_base_url:'',minimum_sync_interval_seconds:60};
 
   function renderReuseEditor(item={}){
-    const selectedAges=item.profile_reuse_age_groups||reuseAgeGroups;
-    el('profileReuseAgeGroups').innerHTML=reuseAgeGroups.map(value=>`<label class="reuse-option"><input type="checkbox" value="${value}" ${selectedAges.includes(value)?'checked':''}>${value}</label>`).join('');
-    const selectedGenders=item.profile_reuse_genders||reuseGenders;
-    el('profileReuseGenders').innerHTML=reuseGenders.map(value=>`<label class="reuse-option"><input type="checkbox" value="${value}" ${selectedGenders.includes(value)?'checked':''}>${value[0].toUpperCase()+value.slice(1)}</label>`).join('');
     el('profileReuseEnabled').checked=item.profile_reuse_enabled===true;
     el('profileReusePercentage').value=item.profile_reuse_monthly_percentage||30;
     setDuration('profileReuseFirstDelayValue','profileReuseFirstDelayUnit',item.profile_reuse_first_delay_minutes||86400);
@@ -156,7 +148,6 @@ document.addEventListener('DOMContentLoaded',()=>{
   function setDuration(valueId,unitId,minutes){const part=splitDuration(minutes);el(valueId).value=part.value;el(unitId).value=String(part.unit)}
   function durationMinutes(valueId,unitId){return Math.max(1,Math.round((Number(el(valueId).value)||1)*(Number(el(unitId).value)||1)))}
   function durationLabel(minutes){const part=splitDuration(minutes);const label=part.unit===1440?'day':part.unit===60?'hour':'minute';return `${part.value} ${label}${part.value===1?'':'s'}`}
-  const checkedValues=id=>[...el(id).querySelectorAll('input:checked')].map(input=>input.value);
 
   async function api(url,options={}){
     options.headers={...(options.headers||{}),'Accept':'application/json','X-CSRFToken':decodeURIComponent(cookie('csrftoken'))};
@@ -307,7 +298,7 @@ document.addEventListener('DOMContentLoaded',()=>{
       const providerCode=el('provider').value;
       let mapping={};
       try{mapping=el('fieldMapping').value.trim()?JSON.parse(el('fieldMapping').value):{}}catch(error){el('formStatus').textContent='Custom field mapping must be valid JSON.';el('formStatus').className='status-line error';return}
-      const payload={client:+el('client').value,name:el('name').value.trim(),provider_code:providerCode,base_url:el('baseUrl').value.trim(),supplier_code:el('supplierCode').value.trim(),sync_interval_seconds:+el('interval').value,detail_refresh_batch:+el('detailBatch').value,scheduled_sync_enabled:el('scheduled').checked,is_active:el('active').checked,profile_reuse_enabled:el('profileReuseEnabled').checked,profile_reuse_monthly_percentage:el('profileReusePercentage').value,profile_reuse_first_delay_minutes:durationMinutes('profileReuseFirstDelayValue','profileReuseFirstDelayUnit'),profile_reuse_min_interval_minutes:durationMinutes('profileReuseIntervalValue','profileReuseIntervalUnit'),profile_reuse_max_uses_per_window:+el('profileReuseMaxUses').value,profile_reuse_window_minutes:durationMinutes('profileReuseWindowValue','profileReuseWindowUnit'),profile_reuse_age_groups:checkedValues('profileReuseAgeGroups'),profile_reuse_genders:checkedValues('profileReuseGenders')};
+      const payload={client:+el('client').value,name:el('name').value.trim(),provider_code:providerCode,base_url:el('baseUrl').value.trim(),supplier_code:el('supplierCode').value.trim(),sync_interval_seconds:+el('interval').value,detail_refresh_batch:+el('detailBatch').value,scheduled_sync_enabled:el('scheduled').checked,is_active:el('active').checked,profile_reuse_enabled:el('profileReuseEnabled').checked,profile_reuse_monthly_percentage:el('profileReusePercentage').value,profile_reuse_first_delay_minutes:durationMinutes('profileReuseFirstDelayValue','profileReuseFirstDelayUnit'),profile_reuse_min_interval_minutes:durationMinutes('profileReuseIntervalValue','profileReuseIntervalUnit'),profile_reuse_max_uses_per_window:+el('profileReuseMaxUses').value,profile_reuse_window_minutes:durationMinutes('profileReuseWindowValue','profileReuseWindowUnit')};
       if(providerCode==='rfg'){
         payload.credential_env_keys={apid:el('rfgApidEnv').value.trim(),secret:el('rfgSecretEnv').value.trim()};
         payload.config={country:el('rfgCountry').value.trim().toUpperCase(),category:el('rfgCategory').value,allow_recontacts:el('rfgRecontacts').checked,enforce_local_targeting:el('rfgStrictTargeting').checked,callback_security_mode:'ip'};

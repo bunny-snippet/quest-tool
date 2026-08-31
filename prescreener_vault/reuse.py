@@ -568,8 +568,6 @@ def maybe_assign_reusable_profile(attempt, answers):
         not signature["country_code"]
         or signature["age_group"] not in AGE_GROUP_RANGES
         or signature["gender"] not in GENDER_ALIASES
-        or signature["age_group"] not in (integration.profile_reuse_age_groups or [])
-        or signature["gender"] not in (integration.profile_reuse_genders or [])
     ):
         return None
 

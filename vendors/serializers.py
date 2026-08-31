@@ -223,18 +223,11 @@ class ClientIntegrationSerializer(serializers.ModelSerializer):
         # Country is never an operator-selected policy dimension. Candidate
         # matching always enforces the survey country automatically.
         attrs["profile_reuse_country_codes"] = []
-        age_groups = attrs.get(
-            "profile_reuse_age_groups", getattr(self.instance, "profile_reuse_age_groups", list(PROFILE_REUSE_AGE_GROUPS))
-        )
-        if not isinstance(age_groups, list) or any(value not in PROFILE_REUSE_AGE_GROUPS for value in age_groups):
-            raise serializers.ValidationError({"profile_reuse_age_groups": "Select only the supported age groups."})
-        attrs["profile_reuse_age_groups"] = [value for value in PROFILE_REUSE_AGE_GROUPS if value in age_groups]
-        genders = attrs.get(
-            "profile_reuse_genders", getattr(self.instance, "profile_reuse_genders", ["male", "female"])
-        )
-        if not isinstance(genders, list) or any(value not in {"male", "female"} for value in genders):
-            raise serializers.ValidationError({"profile_reuse_genders": "Select male, female, or both."})
-        attrs["profile_reuse_genders"] = [value for value in ("male", "female") if value in genders]
+        # Age and gender are determined by the selected survey's current
+        # qualifications. Keep the legacy fields fully open so previous UI
+        # settings cannot silently exclude an otherwise matching respondent.
+        attrs["profile_reuse_age_groups"] = list(PROFILE_REUSE_AGE_GROUPS)
+        attrs["profile_reuse_genders"] = ["male", "female"]
         provider = str(attrs.get("provider_code", getattr(self.instance, "provider_code", ""))).lower()
         provider_key = provider.replace("-", "").replace("_", "")
         base_url = str(attrs.get("base_url", getattr(self.instance, "base_url", ""))).rstrip("/")

@@ -155,6 +155,14 @@ def vendor_management_page(request):
     })
 
 
+def supplier_api_guide(request):
+    """Public, credential-free hand-off documentation for external suppliers."""
+
+    return render(request, "vendors/supplier_api_guide.html", {
+        "base_url": request.build_absolute_uri("/").rstrip("/"),
+    })
+
+
 @function_permission_required("clients.integration.view")
 def client_integrations_page(request):
     return render(request, "vendors/integrations.html", {
