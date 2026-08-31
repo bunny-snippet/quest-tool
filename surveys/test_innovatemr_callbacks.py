@@ -132,7 +132,9 @@ class InnovateMRCallbackTests(TestCase):
     def test_invalid_browser_hash_displays_matching_verified_transaction_result(self):
         self.attempt.status = SurveyAttempt.Status.QUALITY_TERMINATED
         self.attempt.status_source = "innovatemr_transaction"
-        self.attempt.is_verified = True
+        # Older reconciled transactions are authoritative but did not always
+        # populate this flag, so the stored transaction source is the guard.
+        self.attempt.is_verified = False
         self.attempt.callback_at = timezone.now()
         self.attempt.save(update_fields=[
             "status", "status_source", "is_verified", "callback_at", "updated_at",
@@ -156,7 +158,7 @@ class InnovateMRCallbackTests(TestCase):
     def test_invalid_hash_cannot_display_a_different_transaction_result(self):
         self.attempt.status = SurveyAttempt.Status.QUALITY_TERMINATED
         self.attempt.status_source = "innovatemr_transaction"
-        self.attempt.is_verified = True
+        self.attempt.is_verified = False
         self.attempt.save(update_fields=["status", "status_source", "is_verified", "updated_at"])
 
         response = self.client.get(reverse("survey-status"), {

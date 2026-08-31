@@ -3464,7 +3464,6 @@ def survey_status(request):
         if (
             provider_code == "innovatemr"
             and attempt.status_source == "innovatemr_transaction"
-            and attempt.is_verified
             and attempt.status in TERMINAL_ATTEMPT_STATUSES
             and attempt.status == status_code
         ):
