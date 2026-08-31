@@ -215,6 +215,37 @@ class ResearchForGoodIntegrationTests(TestCase):
         self.assertTrue(attempt.is_verified)
         self.assertEqual(attempt.callback_ip, "203.0.113.25")
 
+    @patch("surveys.views.get_provider")
+    def test_result_page_renders_authenticated_rfg_quality_outcome(self, get_provider_mock):
+        now = timezone.now()
+        survey = Survey.objects.create(
+            client=self.client_record,
+            integration=self.integration,
+            source_key="RFG123456-quality-log",
+            country_code="US",
+        )
+        attempt = SurveyAttempt.objects.create(
+            rid="RfgS4Log12",
+            survey=survey,
+            user_id="quality-result-page",
+            status=SurveyAttempt.Status.REDIRECTED,
+            initiated_at=now - timedelta(minutes=4),
+        )
+        get_provider_mock.return_value.project_log.return_value = [{
+            "tid": attempt.rid,
+            "result": 67,
+            "end": (now - timedelta(minutes=1)).isoformat(),
+            "loi": 180,
+        }]
+
+        response = self.client.get("/survey/rfg/result", {"rid": attempt.rid})
+
+        attempt.refresh_from_db()
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, "Quality check unsuccessful")
+        self.assertEqual(attempt.status, SurveyAttempt.Status.QUALITY_TERMINATED)
+        self.assertTrue(attempt.is_verified)
+
     def test_missing_environment_secret_fails_without_storing_secret(self):
         with patch.dict("os.environ", {}, clear=True):
             with self.assertRaises(ProviderConfigurationError):

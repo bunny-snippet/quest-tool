@@ -3063,8 +3063,11 @@ def rfg_result(request):
     browser_parameters = stored.get("rfg_browser_return") or redacted_parameters
     local_parameters = stored.get("rfg_local_outcome") or {}
     callback_parameters = stored.get("rfg_callback") or {}
+    reconciled_parameters = stored.get("rfg_log_reconciliation") or {}
     outcome_parameters = (
-        callback_parameters if attempt.is_verified else local_parameters or browser_parameters
+        reconciled_parameters
+        if attempt.status_source == "rfg_log_reconciliation"
+        else callback_parameters if attempt.is_verified else local_parameters or browser_parameters
     )
     outcome = describe_rfg_outcome(outcome_parameters, attempt=attempt)
     return render(request, "surveys/rfg_result.html", {

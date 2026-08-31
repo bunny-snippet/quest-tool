@@ -37,6 +37,11 @@ RFG_RESULT_DETAILS = {
     "51": (SurveyAttempt.Status.QUALITY_TERMINATED, "Invalid callback hash", "The client callback hash could not be verified.", "danger"),
     "52": (SurveyAttempt.Status.QUALITY_TERMINATED, "Client IP verification failed", "The client callback IP was not on the required allowlist.", "danger"),
     "53": (SurveyAttempt.Status.QUALITY_TERMINATED, "Client verification failed", "The respondent did not pass the client's verification test.", "danger"),
+    # RFG's current LiveAlert deployment emits 67 for a quality result in its
+    # authenticated project log while its browser return carries status=4.
+    # Treat it as S4 only after the log echoes our exact tracking ID; browser
+    # parameters alone remain non-authoritative.
+    "67": (SurveyAttempt.Status.QUALITY_TERMINATED, "Quality check unsuccessful", "The provider did not accept this survey response.", "danger"),
 }
 
 RFG_STATUS_MAP = {code: detail[0] for code, detail in RFG_RESULT_DETAILS.items()}
