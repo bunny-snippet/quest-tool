@@ -670,8 +670,10 @@ state.results = Array.isArray(data.results)
   els.export?.addEventListener('click', () => {
     closeMultiSelects(); closeCpiFilter();
     els.export.classList.add('exporting');
-    window.location.assign(`/api/v1/surveys/export/?${queryString(false)}`);
-    setTimeout(() => els.export.classList.remove('exporting'), 1200);
+    els.export.disabled = true;
+    window.ExportQueue.enqueue('projects', queryString(false))
+      .catch((error) => toast(error.message || 'Could not queue export.', 'error'))
+      .finally(() => { els.export.disabled = false; els.export.classList.remove('exporting'); });
   });
 
   els.sync?.addEventListener('click', async () => {

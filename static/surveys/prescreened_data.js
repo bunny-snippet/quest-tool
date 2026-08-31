@@ -1,6 +1,12 @@
 /* Opens and closes the answer-detail drawer without expanding table columns. */
 
 (() => {
+  document.getElementById('exportPanelistData')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget; button.disabled = true; button.classList.add('exporting');
+    try { await window.ExportQueue.enqueue('panelist', window.location.search); }
+    catch (error) { window.alert(error.message || 'Could not queue export.'); }
+    finally { button.disabled = false; button.classList.remove('exporting'); }
+  });
   const drawer = document.getElementById('vaultAnswerDrawer');
   const backdrop = document.getElementById('vaultAnswerBackdrop');
   const body = document.getElementById('vaultAnswerDrawerBody');

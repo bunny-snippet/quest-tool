@@ -1,7 +1,10 @@
 """Celery task boundary for scheduled provider work and attempt reconciliation."""
 
 import logging
+import os
+import shutil
 from datetime import timedelta, timezone as dt_timezone
+from pathlib import Path
 
 from celery import shared_task
 from django.conf import settings
@@ -9,13 +12,15 @@ from django.db import transaction
 from django.db.models import F, Q
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
+from django.test import RequestFactory
+from rest_framework.test import APIRequestFactory, force_authenticate
 
 from vendors.models import ClientIntegration
 from vendors.credentials import resolve_integration_token
 from vendors.services import finalize_attempt_capacity
 
 from .integrations import InnovateMRAPIError, InnovateMRClient
-from .models import CintWebhookDelivery, Survey, SurveyAttempt, SyncLease
+from .models import CintWebhookDelivery, ExportJob, Survey, SurveyAttempt, SyncLease
 from .services import reconcile_attempt_status, replace_survey_details, sync_surveys
 from .provider_services import (
     refresh_client_integration_details,
@@ -33,6 +38,104 @@ from .supplier_callbacks import (
 
 
 logger = logging.getLogger(__name__)
+
+
+def _queued_export_response(job):
+    """Run existing export builders with a synthetic authenticated request."""
+
+    # Import lazily: views import tasks when a job is enqueued.
+    from .views import (
+        SurveyAttemptViewSet,
+        SurveyViewSet,
+        prescreener_data_export,
+        termination_reasons_export,
+    )
+
+    query = {str(key): [str(item) for item in values] for key, values in (job.query or {}).items()}
+    if job.kind == ExportJob.Kind.PANELIST:
+        request = RequestFactory().get("/prescreened-data/export/", data=query)
+        request.user = job.requested_by
+        return prescreener_data_export(request)
+    if job.kind == ExportJob.Kind.TERMS:
+        request = RequestFactory().get("/termination-reasons/export/", data=query)
+        request.user = job.requested_by
+        return termination_reasons_export(request)
+    factory = APIRequestFactory()
+    if job.kind == ExportJob.Kind.PROJECTS:
+        request = factory.get("/api/v1/surveys/export/", data=query)
+        force_authenticate(request, user=job.requested_by)
+        return SurveyViewSet.as_view({"get": "export"})(request)
+    if job.kind == ExportJob.Kind.TRAFFIC:
+        request = factory.get("/api/v1/survey-attempts/export/", data=query)
+        force_authenticate(request, user=job.requested_by)
+        return SurveyAttemptViewSet.as_view({"get": "export"})(request)
+    raise ValueError(f"Unsupported export job kind: {job.kind}")
+
+
+@shared_task(name="surveys.build_export_job", soft_time_limit=270, time_limit=300)
+def build_export_job(public_id):
+    """Persist a report to protected disk; the browser is no longer involved."""
+
+    try:
+        job = ExportJob.objects.select_related("requested_by").get(public_id=public_id)
+    except ExportJob.DoesNotExist:
+        return {"status": "missing"}
+    if job.expires_at <= timezone.now():
+        return {"status": "expired"}
+    updated = ExportJob.objects.filter(
+        pk=job.pk, status=ExportJob.Status.QUEUED,
+    ).update(status=ExportJob.Status.RUNNING, started_at=timezone.now(), error="")
+    if not updated:
+        return {"status": "already-processed"}
+    job.refresh_from_db()
+    try:
+        response = _queued_export_response(job)
+        if getattr(response, "status_code", 200) != 200:
+            raise RuntimeError(f"Export builder returned HTTP {response.status_code}.")
+        workbook = getattr(response, "_export_workbook", None)
+        if workbook is None:
+            raise RuntimeError("Export builder did not return a workbook.")
+        filename = response.get("Content-Disposition", "").split("filename=")[-1].strip('"') or "export.xlsx"
+        storage_key = f"{job.public_id}.xlsx"
+        directory = Path(settings.EXPORT_JOB_DIR)
+        directory.mkdir(parents=True, exist_ok=True)
+        temporary = directory / f".{storage_key}.tmp-{os.getpid()}"
+        destination = directory / storage_key
+        workbook.seek(0)
+        with temporary.open("wb") as output:
+            shutil.copyfileobj(workbook, output, length=1024 * 1024)
+        temporary.replace(destination)
+        workbook.close()
+        ExportJob.objects.filter(pk=job.pk).update(
+            status=ExportJob.Status.COMPLETED,
+            filename=filename[:255], storage_key=storage_key,
+            finished_at=timezone.now(), error="",
+        )
+        return {"status": "completed", "id": str(job.public_id)}
+    except Exception as exc:
+        logger.exception("Export job %s failed", public_id)
+        ExportJob.objects.filter(pk=job.pk).update(
+            status=ExportJob.Status.FAILED,
+            error=str(exc)[:500], finished_at=timezone.now(),
+        )
+        return {"status": "failed", "id": str(job.public_id)}
+
+
+@shared_task(name="surveys.cleanup_expired_export_jobs")
+def cleanup_expired_export_jobs():
+    """Remove expired protected workbooks without retaining PII on disk."""
+
+    expired = ExportJob.objects.filter(expires_at__lte=timezone.now())
+    keys = list(expired.exclude(storage_key="").values_list("storage_key", flat=True))
+    expired.delete()
+    directory = Path(settings.EXPORT_JOB_DIR)
+    for key in keys:
+        path = directory / key
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            logger.warning("Could not remove expired export file %s", path)
+    return {"deleted": len(keys)}
 
 
 PROVIDER_MINIMUM_SYNC_INTERVAL_SECONDS = {

@@ -8,7 +8,7 @@
     <h1>Panelist Data</h1>
     <p>Explore registered panelist profiles, reusable specifications and exact profile information.</p>
   </div>
-  {% if can_export_vault %}<a class="primary-button export-button" href="{% url 'prescreened-data-export' %}{% if page_query %}?{{ page_query }}{% endif %}"><span aria-hidden="true">↓</span> Export</a>{% endif %}
+  {% if can_export_vault %}<button class="primary-button export-button" id="exportPanelistData" type="button"><span aria-hidden="true">↓</span> Export</button>{% endif %}
 </section>
 
 {% if vault_cards %}<section class="vault-overview" aria-label="Filtered panelist totals">

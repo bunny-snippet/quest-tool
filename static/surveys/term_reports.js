@@ -3,6 +3,13 @@
   const form = document.getElementById('reasonFilters');
   if (!form) return;
 
+  document.getElementById('exportTermReports')?.addEventListener('click', async (event) => {
+    const button = event.currentTarget; button.disabled = true; button.classList.add('exporting');
+    try { await window.ExportQueue.enqueue('terms', new URLSearchParams(new FormData(form)).toString()); }
+    catch (error) { window.alert(error.message || 'Could not queue export.'); }
+    finally { button.disabled = false; button.classList.remove('exporting'); }
+  });
+
   const containers = [...form.querySelectorAll('.multi-select')];
   const byFilter = (name) => form.querySelector(`[data-multi-filter="${name}"]`);
   const fallbackLabels = {

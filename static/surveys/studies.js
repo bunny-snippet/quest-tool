@@ -448,7 +448,12 @@
   elements.first?.addEventListener('click', () => go(1)); elements.prev?.addEventListener('click', () => go(state.page - 1));
   elements.next?.addEventListener('click', () => go(state.page + 1)); elements.last?.addEventListener('click', () => go(state.pages));
   elements.pageInput?.addEventListener('change', () => go(elements.pageInput.value));
-  elements.export?.addEventListener('click', () => { elements.export.classList.add('exporting'); window.location.assign(`/api/v1/survey-attempts/export/?${filterParams(false)}`); setTimeout(() => elements.export.classList.remove('exporting'), 1000); });
+  elements.export?.addEventListener('click', () => {
+    elements.export.classList.add('exporting'); elements.export.disabled = true;
+    window.ExportQueue.enqueue('traffic', filterParams(false))
+      .catch((error) => window.alert(error.message || 'Could not queue export.'))
+      .finally(() => { elements.export.disabled = false; elements.export.classList.remove('exporting'); });
+  });
   document.addEventListener('click', (event) => { if (!event.target.closest('.studies-filters .multi-select')) closeMultiSelects(); });
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') closeMultiSelects(); });
   if (responsiveLayout.addEventListener) responsiveLayout.addEventListener('change', renderAttempts);

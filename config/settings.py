@@ -188,6 +188,10 @@ USE_TZ = True
 
 STATIC_URL = "/static/"
 STATIC_ROOT = BASE_DIR / "staticfiles"
+# Generated report files are never public media.  They are served only through
+# an authenticated, owner-scoped download endpoint and expire automatically.
+EXPORT_JOB_DIR = Path(os.getenv("EXPORT_JOB_DIR", BASE_DIR / "var" / "exports"))
+EXPORT_JOB_RETENTION_HOURS = max(1, int(os.getenv("EXPORT_JOB_RETENTION_HOURS", "24")))
 STATICFILES_DIRS = [BASE_DIR / "static"]
 STORAGES = {
     "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
@@ -468,6 +472,10 @@ VENDOR_API_KEY_LAST_USED_WRITE_INTERVAL_SECONDS = max(
 )
 VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS = int(os.getenv("VENDOR_RESERVATION_CLEANUP_INTERVAL_SECONDS", "60"))
 CELERY_BEAT_SCHEDULE = {
+    "cleanup-expired-export-jobs": {
+        "task": "surveys.cleanup_expired_export_jobs",
+        "schedule": 3600.0,
+    },
     "dispatch-client-integration-syncs": {
         "task": "surveys.dispatch_due_integrations",
         "schedule": float(CLIENT_INTEGRATION_DISPATCH_INTERVAL_SECONDS),

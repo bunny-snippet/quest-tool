@@ -14,6 +14,7 @@ import re
 import secrets
 from datetime import date, timedelta
 from decimal import Decimal
+from pathlib import Path
 from types import SimpleNamespace
 from urllib.parse import quote, urlencode
 
@@ -23,13 +24,13 @@ from django.core import signing
 from django.db import DatabaseError, transaction
 from django.db.models import Count, IntegerField, Max, OuterRef, Q, Subquery, Sum, Value
 from django.db.models.functions import Coalesce
-from django.http import HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
+from django.http import FileResponse, Http404, HttpResponse, HttpResponseRedirect, JsonResponse, StreamingHttpResponse
 from django.core.paginator import Paginator
 from django.shortcuts import render
 from django.urls import reverse
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
-from django.views.decorators.http import require_http_methods
+from django.views.decorators.http import require_GET, require_http_methods, require_POST
 from drf_spectacular.types import OpenApiTypes
 from drf_spectacular.utils import OpenApiExample, OpenApiParameter, extend_schema, extend_schema_view
 from rest_framework import filters, permissions, status, viewsets
@@ -84,7 +85,7 @@ from .entry_tokens import (
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .identifiers import is_valid_platform_pid
 from .innovatemr_callbacks import verify_callback_request
-from .models import CanonicalQuestion, ProviderQuestionMapping, Survey, SurveyAttempt, SyncRun
+from .models import CanonicalQuestion, ExportJob, ProviderQuestionMapping, Survey, SurveyAttempt, SyncRun
 from .outcomes import provider_outcome
 from .report_pricing import (
     apply_percentage,
@@ -1222,6 +1223,103 @@ def termination_reasons_export(request):
         f"term-reports-{local_now:%Y%m%d-%H%M%S}-IST.xlsx",
         [ExcelSheet("Term Reports", headers, rows(), widths)],
     )
+
+
+EXPORT_JOB_PERMISSION = {
+    ExportJob.Kind.PROJECTS: "projects.export",
+    ExportJob.Kind.TRAFFIC: "attempts.export",
+    ExportJob.Kind.TERMS: "termination_reasons.export",
+    ExportJob.Kind.PANELIST: "prescreener_data.export",
+}
+
+
+def _export_job_for_request(request, public_id):
+    try:
+        job = ExportJob.objects.get(public_id=public_id)
+    except (ExportJob.DoesNotExist, ValueError):
+        raise Http404("Export not found.")
+    # A completed export can contain PII. Do not expose job existence or allow
+    # a different privileged account to retrieve somebody else's workbook.
+    if job.requested_by_id != request.user.id:
+        raise Http404("Export not found.")
+    return job
+
+
+@require_POST
+def export_job_create(request, kind):
+    """Queue an export so browser navigation cannot cancel the workbook build."""
+
+    if not request.user.is_authenticated:
+        return JsonResponse({"detail": "Authentication is required."}, status=401)
+    if kind not in EXPORT_JOB_PERMISSION:
+        return JsonResponse({"detail": "Unsupported export type."}, status=404)
+    if not has_function_access(request.user, EXPORT_JOB_PERMISSION[kind]):
+        raise PermissionDenied("Your account cannot export this report.")
+
+    # Preserve repeated filter values exactly, discard pagination (exports are
+    # always the full filtered result), and cap the payload to a normal URL.
+    query = {
+        key: values[:100]
+        for key, values in request.GET.lists()
+        if key not in {"page", "page_size"} and len(key) <= 80
+    }
+    if sum(len(value) for values in query.values() for value in values) > 16_000:
+        return JsonResponse({"detail": "Export filters are too large."}, status=400)
+    now = timezone.now()
+    job = ExportJob.objects.create(
+        requested_by=request.user,
+        kind=kind,
+        query=query,
+        expires_at=now + timedelta(hours=settings.EXPORT_JOB_RETENTION_HOURS),
+    )
+    try:
+        from .tasks import build_export_job
+        transaction.on_commit(lambda: build_export_job.delay(str(job.public_id)))
+    except Exception:
+        logger.exception("Could not queue export job %s", job.public_id)
+        job.status = ExportJob.Status.FAILED
+        job.error = "The export queue is temporarily unavailable. Please retry."
+        job.finished_at = timezone.now()
+        job.save(update_fields=["status", "error", "finished_at"])
+        return JsonResponse({"detail": job.error}, status=503)
+    return JsonResponse({
+        "id": str(job.public_id), "status": job.status,
+        "status_url": reverse("export-job-status", kwargs={"public_id": job.public_id}),
+        "download_url": reverse("export-job-download", kwargs={"public_id": job.public_id}),
+    }, status=202)
+
+
+@require_GET
+def export_job_status(request, public_id):
+    if not request.user.is_authenticated:
+        return JsonResponse({"detail": "Authentication is required."}, status=401)
+    job = _export_job_for_request(request, public_id)
+    payload = {
+        "id": str(job.public_id), "kind": job.kind, "status": job.status,
+        "filename": job.filename, "error": job.error,
+        "expires_at": job.expires_at.isoformat(),
+    }
+    if job.status == ExportJob.Status.COMPLETED and job.storage_key:
+        payload["download_url"] = reverse("export-job-download", kwargs={"public_id": job.public_id})
+    return JsonResponse(payload)
+
+
+@require_GET
+def export_job_download(request, public_id):
+    if not request.user.is_authenticated:
+        return JsonResponse({"detail": "Authentication is required."}, status=401)
+    job = _export_job_for_request(request, public_id)
+    if job.status != ExportJob.Status.COMPLETED or not job.storage_key:
+        return JsonResponse({"detail": "This export is not ready yet."}, status=409)
+    if job.expires_at <= timezone.now():
+        return JsonResponse({"detail": "This export has expired. Please create a new one."}, status=410)
+    path = Path(settings.EXPORT_JOB_DIR) / job.storage_key
+    if not path.is_file():
+        return JsonResponse({"detail": "The export file is no longer available. Please create a new one."}, status=410)
+    response = FileResponse(path.open("rb"), as_attachment=True, filename=job.filename)
+    response["X-Content-Type-Options"] = "nosniff"
+    response["Cache-Control"] = "private, no-store"
+    return response
 
 
 def workspace_home(request):

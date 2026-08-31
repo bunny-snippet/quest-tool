@@ -7,7 +7,7 @@
     <h1>Term Reports</h1>
     <p>Review every terminated, quota-full and quality/security outcome across connected clients.</p>
   </div>
-  {% if can_export_reasons %}<button class="primary-button export-button" type="submit" form="reasonFilters" formaction="{% url 'termination-reasons-export' %}" formmethod="get"><span aria-hidden="true">↓</span> Export</button>{% endif %}
+  {% if can_export_reasons %}<button class="primary-button export-button" id="exportTermReports" type="button"><span aria-hidden="true">↓</span> Export</button>{% endif %}
 </section>
 
 {% if reason_cards %}<section class="reason-overview" aria-label="Filtered outcome totals">
