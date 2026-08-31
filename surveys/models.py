@@ -11,6 +11,12 @@ from django.utils import timezone
 from .identifiers import PLATFORM_PID_MAX_LENGTH, generate_platform_pid
 
 
+def generate_export_storage_key():
+    """Allocate a private filename before a queued export reaches the worker."""
+
+    return f"{uuid.uuid4()}.xlsx"
+
+
 class LocalIdSequence(models.Model):
     """Monthly counter used to issue 14-digit IDs such as 20260800000001."""
 
@@ -789,7 +795,12 @@ class ExportJob(models.Model):
     query = models.JSONField(default=dict, blank=True)
     status = models.CharField(max_length=16, choices=Status.choices, default=Status.QUEUED, db_index=True)
     filename = models.CharField(max_length=255, blank=True)
-    storage_key = models.CharField(max_length=80, blank=True, unique=True)
+    storage_key = models.CharField(
+        max_length=80,
+        default=generate_export_storage_key,
+        unique=True,
+        editable=False,
+    )
     error = models.CharField(max_length=500, blank=True)
     started_at = models.DateTimeField(null=True, blank=True)
     finished_at = models.DateTimeField(null=True, blank=True)
