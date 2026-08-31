@@ -21,6 +21,8 @@
     timer: null,
     controller: null,
     detailController: null,
+    drawerCloseTimer: null,
+    drawerReturnFocus: null,
     loading: false,
     lastLoadedAt: 0,
   };
@@ -47,15 +49,48 @@
     const studyUrl = `/traffic-reports/?internal_id=${encodeURIComponent(survey.local_id)}`;
     return `<span class="id-link project-study-link" role="link" tabindex="0" data-study-url="${escapeHtml(studyUrl)}" title="${escapeHtml(title)}">${projectId}</span>`;
   }
-  const projectDateTimeFormatter = new Intl.DateTimeFormat('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+const projectDateTimeFormatter =
+  new Intl.DateTimeFormat('en-IN', {
+    dateStyle: 'medium',
+    timeStyle: 'short',
+    timeZone: 'Asia/Kolkata',
+  });
   const sourceDateFormatter = new Intl.DateTimeFormat('en-IN', {
     day: '2-digit', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata',
   });
   const sourceTimeFormatter = new Intl.DateTimeFormat('en-IN', {
     hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: true, timeZone: 'Asia/Kolkata',
   });
-  const formatDate = (value) => value ? projectDateTimeFormatter.format(new Date(value)) : '—';
-  const money = (value) => value == null ? '—' : `$${Number(value).toFixed(2)}`;
+  const formatDate = (value) =>
+  value
+    ? projectDateTimeFormatter.format(new Date(value))
+    : '—';
+
+const toFiniteNumber = (value, fallback = 0) => {
+  const number = Number(value);
+
+  return Number.isFinite(number)
+    ? number
+    : fallback;
+};
+
+const formatInteger = (value) => {
+  const number = Number(value);
+
+  return Number.isFinite(number)
+    ? number.toLocaleString()
+    : '—';
+};
+
+const money = (value) => {
+  if (value == null || value === '') return '—';
+
+  const number = Number(value);
+
+  return Number.isFinite(number)
+    ? `$${number.toFixed(2)}`
+    : '—';
+};
   const displaySurveyId = (survey) => {
     const sourceId = String(survey.source_id ?? '').trim();
     if (!sourceId) return '—';
@@ -177,19 +212,48 @@
     });
     const search = menu.querySelector('[data-multi-search]');
     search?.addEventListener('input', () => {
-      const term = search.value.trim().toLocaleLowerCase();
-      const options = [...menu.querySelectorAll('.multi-options label')];
-      let visible = 0;
-      options.forEach((option) => {
-        const matches = option.textContent.toLocaleLowerCase().includes(term);
-        const selectedClients = filter === buyerFilter ? selectedValues(clientFilter) : [];
-        const clientMatches = filter !== buyerFilter || !selectedClients.length || selectedClients.includes(option.dataset.clientValue || '');
-        option.hidden = !(matches && clientMatches);
-        if (!option.hidden) visible += 1;
-      });
-      const noResults = menu.querySelector('.multi-no-results');
-      if (noResults) noResults.hidden = visible > 0;
-    });
+  const term = search.value
+    .trim()
+    .toLocaleLowerCase();
+
+  const options = [
+    ...menu.querySelectorAll('.multi-options label'),
+  ];
+
+  const selectedClients =
+    filter === buyerFilter
+      ? selectedValues(clientFilter)
+      : [];
+
+  const selectedClientSet =
+    new Set(selectedClients);
+
+  let visible = 0;
+
+  options.forEach((option) => {
+    const matches = option.textContent
+      .toLocaleLowerCase()
+      .includes(term);
+
+    const clientMatches =
+      filter !== buyerFilter ||
+      !selectedClientSet.size ||
+      selectedClientSet.has(
+        option.dataset.clientValue || ''
+      );
+
+    option.hidden = !(matches && clientMatches);
+
+    if (!option.hidden) visible += 1;
+  });
+
+  const noResults =
+    menu.querySelector('.multi-no-results');
+
+  if (noResults) {
+    noResults.hidden = visible > 0;
+  }
+});
     updateMultiLabel(filter);
   });
   updateBuyerOptions();
@@ -314,10 +378,24 @@
       els.cards.innerHTML = '<div class="mobile-loading">Fetching surveys…</div>';
     }
     try {
-      const response = await fetch(`/api/v1/surveys/?${queryString()}`, { signal: controller.signal });
-      if (!response.ok) throw new Error(`Request failed (${response.status})`);
-      const data = await response.json();
-      state.results = data.results || [];
+      const response = await fetch(
+  `/api/v1/surveys/?${queryString()}`,
+  { signal: controller.signal },
+);
+
+const data = await response.json().catch(() => ({}));
+
+if (!response.ok) {
+  throw new Error(
+    data.detail ||
+    data.error ||
+    `Request failed (${response.status})`
+  );
+}
+
+state.results = Array.isArray(data.results)
+  ? data.results
+  : [];
       state.pages = Math.max(1, Math.ceil(data.count / state.pageSize));
       if (state.page > state.pages) {
         state.page = state.pages;
@@ -356,13 +434,19 @@
   }
 
   function rowTemplate(survey) {
-    const percent = Math.min(100, Number(survey.progress_percent || 0));
+    const percent = Math.min(
+  100,
+  Math.max(
+    0,
+    toFiniteNumber(survey.progress_percent)
+  ),
+);
     const cells = [];
     const clientName = survey.client_name || survey.display_company_name || survey.company_name || 'Survey client';
     if (projectColumns.has('project_id')) cells.push(`<td><div class="project-id-stack">${projectIdControl(survey)}${canViewProjectClientName ? `<small>${escapeHtml(clientName)}</small>` : ''}</div></td>`);
     if (projectColumns.has('survey')) cells.push(`<td><div class="survey-name"><strong>${escapeHtml(displaySurveyId(survey))}</strong><span>${escapeHtml(displayBuyerId(survey))}</span></div></td>`);
     if (projectColumns.has('market')) cells.push(`<td><span class="market-pill">${escapeHtml(survey.country_code || '—')} <i>${escapeHtml(survey.language_code || '')}</i></span><small class="country-name">${escapeHtml(survey.country || '')}</small></td>`);
-    if (projectColumns.has('completes')) cells.push(`<td><div class="complete-value"><strong>${survey.completes.toLocaleString()} / ${survey.sample_size.toLocaleString()}</strong><span><i style="width:${percent}%"></i></span></div></td>`);
+    if (projectColumns.has('completes')) cells.push(`<td><div class="complete-value"><strong>${formatInteger(survey.completes)}/${formatInteger(survey.sample_size)}</strong><span><i style="width:${percent}%"></i></span></div></td>`);
     if (projectColumns.has('cpi')) cells.push(`<td><strong class="cpi">${money(survey.cpi)}</strong></td>`);
     if (projectColumns.has('loi_ir')) cells.push(`<td><div class="metric-pair"><span><b>${survey.loi ?? '—'}</b> min</span><span><b>${survey.incidence_rate ?? '—'}</b>%</span></div><small class="survey-type-tag">${escapeHtml(survey.survey_type || survey.group_type || 'Type unavailable')}</small></td>`);
     if (projectColumns.has('entry_link')) cells.push(`<td>${survey.start_link ? `<button class="copy-link" data-copy-link="${escapeHtml(survey.start_link)}">Copy link</button>` : '<button class="copy-link" type="button" disabled title="The supplier callback link is still being verified">Preparing link...</button>'}</td>`);
@@ -377,14 +461,21 @@
     const top = `${projectColumns.has('project_id') ? `${projectIdControl(survey)}${canViewProjectClientName ? `<small class="project-card-client">${escapeHtml(clientName)}</small>` : ''}` : ''}${projectColumns.has('modified') ? `<span class="status ${survey.status}"><i></i>${escapeHtml(survey.status)}</span>` : ''}`;
     const metrics = [];
     if (projectColumns.has('market')) metrics.push(`<span><small>Market</small><b>${escapeHtml(survey.country_code || '—')} ${escapeHtml(survey.language_code || '')}</b></span>`);
-    if (projectColumns.has('completes')) metrics.push(`<span><small>Completes</small><b>${survey.completes} / ${survey.sample_size}</b></span>`);
+    if (projectColumns.has('completes')) {
+  metrics.push(
+    `<span>
+      <small>Completes</small>
+      <b>${formatInteger(survey.completes)} / ${formatInteger(survey.sample_size)}</b>
+    </span>`
+  );
+}
     if (projectColumns.has('cpi')) metrics.push(`<span><small>CPI</small><b>${money(survey.cpi)}</b></span>`);
     if (projectColumns.has('loi_ir')) metrics.push(`<span><small>LOI / IR · Type</small><b>${survey.loi ?? '—'}m · ${survey.incidence_rate ?? '—'}% · ${escapeHtml(survey.survey_type || survey.group_type || '—')}</b></span>`);
     const bottom = `${projectColumns.has('modified') ? `<div class="source-timestamp"><small>Updated</small>${sourceTimestamp(survey.source_modified_display, survey.source_modified_at || survey.updated_at)}</div>` : ''}${projectColumns.has('entry_link') ? (survey.start_link ? `<button class="copy-link" data-copy-link="${escapeHtml(survey.start_link)}">Copy link</button>` : '<button class="copy-link" type="button" disabled title="The supplier callback link is still being verified">Preparing link...</button>') : ''}`;
     return `<article class="survey-card"><div class="card-top"><div>${top}</div>${projectColumns.has('actions') ? `<button class="eye-button" data-action="${escapeHtml(survey.local_id)}" aria-label="View survey details">◉</button>` : ''}</div>${projectColumns.has('survey') ? `<h3>${escapeHtml(displaySurveyId(survey))}</h3><p>${escapeHtml(displayBuyerId(survey))}</p>` : ''}${metrics.length ? `<div class="card-grid">${metrics.join('')}</div>` : ''}${bottom ? `<div class="card-bottom">${bottom}</div>` : ''}</article>`;
   }
 
-  function scheduleLoad(delay = 700) {
+  function scheduleLoad(delay = 400) {
     clearTimeout(state.timer);
     state.timer = setTimeout(() => { state.page = 1; loadSurveys(); }, delay);
   }
@@ -471,7 +562,12 @@
   }
 
   function openDrawer(survey) {
-    state.detailController?.abort();
+      clearTimeout(state.drawerCloseTimer);
+  state.drawerCloseTimer = null;
+
+  state.detailController?.abort();
+
+  state.drawerReturnFocus = document.activeElement;
     state.activeSurvey = survey;
     state.details = { targeting: null, quotas: null };
     state.detailErrors = { targeting: null, quotas: null };
@@ -523,10 +619,31 @@
   }
 
   function closeDrawer() {
-    state.detailController?.abort(); state.detailController = null;
-    els.drawer.classList.remove('open'); els.backdrop.classList.remove('open'); document.body.classList.remove('drawer-open');
-    setTimeout(() => { els.drawer.hidden = els.backdrop.hidden = true; state.activeSurvey = null; }, 220);
-  }
+  state.detailController?.abort();
+  state.detailController = null;
+
+  els.drawer.classList.remove('open');
+  els.backdrop.classList.remove('open');
+  document.body.classList.remove('drawer-open');
+
+  clearTimeout(state.drawerCloseTimer);
+
+  state.drawerCloseTimer = setTimeout(() => {
+    els.drawer.hidden = true;
+    els.backdrop.hidden = true;
+    state.activeSurvey = null;
+    state.drawerCloseTimer = null;
+
+    if (
+      state.drawerReturnFocus &&
+      document.contains(state.drawerReturnFocus)
+    ) {
+      state.drawerReturnFocus.focus();
+    }
+
+    state.drawerReturnFocus = null;
+  }, 220);
+}
 
   els.tabs.forEach((tab) => tab.addEventListener('click', () => setActiveTab(tab.dataset.tab)));
   els.closeDrawer.addEventListener('click', closeDrawer);
@@ -567,17 +684,25 @@
     } catch (error) { toast(error.message, 'error'); }
     finally { els.sync.disabled = false; els.sync.classList.remove('syncing'); els.sync.lastChild.textContent = ' Sync now'; }
   });
-
+const AUTO_REFRESH_MS = 120000;
   updateCpiControl();
   loadSurveys();
-  window.setInterval(() => {
-    if (!document.hidden && !state.loading && Date.now() - state.lastLoadedAt >= 60000) {
-      loadSurveys({ silent: true });
-    }
-  }, 60000);
+ window.setInterval(() => {
+  if (
+    !document.hidden &&
+    !state.loading &&
+    Date.now() - state.lastLoadedAt >= AUTO_REFRESH_MS
+  ) {
+    loadSurveys({ silent: true });
+  }
+}, AUTO_REFRESH_MS);
   document.addEventListener('visibilitychange', () => {
-    if (!document.hidden && !state.loading && Date.now() - state.lastLoadedAt >= 60000) {
-      loadSurveys({ silent: true });
-    }
-  });
+  if (
+    !document.hidden &&
+    !state.loading &&
+    Date.now() - state.lastLoadedAt >= AUTO_REFRESH_MS
+  ) {
+    loadSurveys({ silent: true });
+  }
+});
 })();

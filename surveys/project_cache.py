@@ -23,6 +23,7 @@ _COUNT_VERSION_KEY = "projects:count-version"
 _INVALIDATION_THROTTLE_KEY = "projects:invalidate-throttle"
 _MISSING = object()
 _SINGLEFLIGHT_LOCK_SECONDS = 30
+_SINGLEFLIGHT_WAIT_SECONDS = 2
 
 
 def _singleflight_get_or_set(key, factory, *, timeout, jitter_seconds):
@@ -70,7 +71,7 @@ def _singleflight_get_or_set(key, factory, *, timeout, jitter_seconds):
     # The indexed rebuild should normally complete well inside this bound. A
     # bounded wait avoids a cache miss stampede without leaving a request stuck
     # behind a failed worker indefinitely.
-    deadline = time.monotonic() + _SINGLEFLIGHT_LOCK_SECONDS
+    deadline = time.monotonic() + _SINGLEFLIGHT_WAIT_SECONDS
     while time.monotonic() < deadline:
         time.sleep(0.05)
         cached = safe_cache_get(key, _MISSING, alias=CACHE_ALIAS)

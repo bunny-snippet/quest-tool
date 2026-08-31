@@ -371,34 +371,29 @@ class SurveyListSerializer(serializers.ModelSerializer):
         return self._project_permission_codes
 
     def get_fields(self):
-        """Project column grants are an API boundary, not a CSS preference."""
-
         fields = super().get_fields()
         permission_codes = self._permission_codes()
+
         if permission_codes is None:
             return fields
-        allowed = set().union(*(
-            field_names
-            for permission, field_names in PROJECT_API_FIELDS_BY_PERMISSION.items()
-            if permission in permission_codes
-        )) if permission_codes else set()
+
+        allowed = (
+            set().union(
+                *(
+                    field_names
+                    for permission, field_names
+                    in PROJECT_API_FIELDS_BY_PERMISSION.items()
+                    if permission in permission_codes
+                )
+            )
+            if permission_codes
+            else set()
+        )
+
         for field_name in PROJECT_API_PROTECTED_FIELDS - allowed:
             fields.pop(field_name, None)
-        return fields
 
-    def to_representation(self, instance):
-        data = super().to_representation(instance)
-        request = self.context.get("request")
-        if request:
-            permission_codes = self._permission_codes()
-            allowed = set().union(*(
-                field_names
-                for permission, field_names in PROJECT_API_FIELDS_BY_PERMISSION.items()
-                if permission in permission_codes
-            )) if permission_codes else set()
-            for field_name in PROJECT_API_PROTECTED_FIELDS - allowed:
-                data.pop(field_name, None)
-        return data
+        return fields
 
     def get_country_label(self, obj) -> str:
         return " ".join(part for part in [obj.country_code, obj.language_code] if part) or obj.country
@@ -443,7 +438,25 @@ class SurveyListSerializer(serializers.ModelSerializer):
 
     def _pricing(self, obj):
         request = self.context.get("request")
-        return survey_pricing_for_user(request.user, obj) if request and request.user.is_authenticated else (obj.cpi, None)
+
+        if not request or not request.user.is_authenticated:
+            return obj.cpi, None
+
+        cache = getattr(self, "_pricing_cache", None)
+
+        if cache is None:
+            cache = {}
+            self._pricing_cache = cache
+
+        key = obj.pk
+
+        if key not in cache:
+            cache[key] = survey_pricing_for_user(
+                request.user,
+                obj,
+            )
+
+        return cache[key]
 
     @extend_schema_field(serializers.DecimalField(max_digits=12, decimal_places=2, allow_null=True))
     def get_cpi(self, obj):

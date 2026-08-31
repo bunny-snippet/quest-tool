@@ -3541,7 +3541,43 @@ class SurveySearchFilter(filters.SearchFilter):
                 return exact_queryset
         return super().filter_queryset(request, queryset, view)
 
+PROJECT_ORDERING_PERMISSIONS = {
+    "source_modified_at": "projects.column.modified",
+    "source_created_at": "projects.column.modified",
+    "created_at": "projects.column.modified",
+    "cpi": "projects.filter.cpi",
+    "sample_size": "projects.column.completes",
+    "completes": "projects.column.completes",
+}
 
+
+def _enforce_project_ordering_permission(request):
+    ordering = str(
+        request.query_params.get("ordering") or ""
+    ).strip()
+
+    if not ordering:
+        return
+
+    fields = {
+        item.strip().lstrip("-")
+        for item in ordering.split(",")
+        if item.strip()
+    }
+
+    codes = effective_permission_codes(request.user)
+
+    for field in fields:
+        permission = PROJECT_ORDERING_PERMISSIONS.get(field)
+
+        if (
+            permission
+            and not request.user.is_superuser
+            and permission not in codes
+        ):
+            raise PermissionDenied(
+                f"Your account cannot order projects by {field}."
+            )
 @extend_schema_view(
     list=extend_schema(
         tags=["Surveys"],
@@ -3700,6 +3736,7 @@ class SurveyViewSet(viewsets.ReadOnlyModelViewSet):
             "projects.filter.survey_type": ("survey_type",),
             "projects.filter.date": ("created_from", "created_to", "modified_from", "modified_to"),
         })
+        _enforce_project_ordering_permission(self.request)
         cpi_ordering = self.request.query_params.get("ordering", "").lstrip("-") == "cpi"
         cpi_filtering = any(self.request.query_params.get(name) not in {None, ""} for name in ("min_cpi", "max_cpi"))
         if (cpi_ordering or cpi_filtering) and not has_function_access(self.request.user, "projects.filter.cpi"):
