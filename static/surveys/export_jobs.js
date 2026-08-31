@@ -2,6 +2,7 @@
 (() => {
   const storageKey = 'exchange-export-jobs-v1';
   const dismissedKey = 'exchange-export-dismissed-status-v1';
+  let activeStatusJobId = null;
   const read = () => {
     try { return JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch (_) { return []; }
   };
@@ -24,8 +25,11 @@
     document.body.append(node);
     return node;
   };
-  const renderStatus = (jobs = read()) => {
-    const job = [...jobs].reverse()[0];
+  const renderStatus = (jobs = read(), focusId = null) => {
+    if (focusId) activeStatusJobId = focusId;
+    const job = activeStatusJobId
+      ? jobs.find((item) => item.id === activeStatusJobId)
+      : [...jobs].reverse()[0];
     if (!job || job.downloaded) {
       const existing = document.getElementById('exportQueueStatus');
       if (existing) existing.style.display = 'none';
@@ -116,7 +120,7 @@
     const jobs = read();
     const duplicate = [...jobs].reverse().find((job) => job.kind === kind && job.query === suffix && !job.downloaded && job.status !== 'failed');
     if (duplicate) {
-      renderStatus(jobs);
+      renderStatus(jobs, duplicate.id);
       notify(duplicate.status === 'completed' ? 'Your earlier export is ready to download.' : 'This export is already being prepared.', 'success');
       return { id: duplicate.id, status: duplicate.status, reused: true };
     }
@@ -131,7 +135,7 @@
     } else {
       jobs.push({ id: data.id, status: data.status, status_url: data.status_url, download_url: data.download_url || '', kind, query: suffix, downloaded: false, notified: false });
     }
-    write(jobs); renderStatus(jobs); notify(data.reused ? 'Existing export is already in progress.' : 'Export queued. You can safely continue working.', 'success'); poll();
+    write(jobs); renderStatus(jobs, data.id); notify(data.reused ? 'Existing export is already in progress.' : 'Export queued. You can safely continue working.', 'success'); poll();
     return data;
   }
   window.ExportQueue = { enqueue, poll };
