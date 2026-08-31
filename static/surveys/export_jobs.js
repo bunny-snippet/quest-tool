@@ -1,11 +1,13 @@
 /* Persistent, server-side report export queue. */
 (() => {
   const storageKey = 'exchange-export-jobs-v1';
+  const dismissedKey = 'exchange-export-dismissed-status-v1';
   const read = () => {
     try { return JSON.parse(localStorage.getItem(storageKey) || '[]'); } catch (_) { return []; }
   };
   const write = (jobs) => localStorage.setItem(storageKey, JSON.stringify(jobs.slice(-12)));
   const csrf = () => document.cookie.match(/csrftoken=([^;]+)/)?.[1] || '';
+  const statusToken = (job) => `${job.id}:${job.status}`;
   const statusNode = () => {
     let node = document.getElementById('exportQueueStatus');
     if (node) return node;
@@ -26,12 +28,17 @@
     const job = [...jobs].reverse()[0];
     if (!job) return;
     const node = statusNode();
+    if (sessionStorage.getItem(dismissedKey) === statusToken(job)) {
+      node.style.display = 'none';
+      return;
+    }
     node.replaceChildren();
     const copy = document.createElement('div'); copy.style.flex = '1';
     const heading = document.createElement('strong'); heading.style.display = 'block';
     const detail = document.createElement('span'); detail.style.opacity = '.8'; detail.style.fontSize = '11px';
     if (job.status === 'completed') {
       heading.textContent = 'Export is ready'; detail.textContent = 'Your file is ready to download.';
+      node.style.background = '#17233f';
       const download = document.createElement('a');
       download.href = job.download_url; download.textContent = 'Download';
       Object.assign(download.style, { color: '#fff', background: '#16b9dc', padding: '8px 11px', borderRadius: '8px', textDecoration: 'none', fontWeight: '700', whiteSpace: 'nowrap' });
@@ -47,7 +54,10 @@
     const close = document.createElement('button'); close.type = 'button'; close.textContent = '×';
     close.setAttribute('aria-label', 'Dismiss export status');
     Object.assign(close.style, { border: '0', background: 'transparent', color: '#fff', fontSize: '22px', cursor: 'pointer', padding: '0 0 0 4px', lineHeight: '1' });
-    close.addEventListener('click', () => { node.style.display = 'none'; });
+    close.addEventListener('click', () => {
+      sessionStorage.setItem(dismissedKey, statusToken(job));
+      node.style.display = 'none';
+    });
     node.append(close); node.style.display = 'flex';
   };
   const notify = (message, kind = 'success', action = null) => {
