@@ -1266,6 +1266,28 @@ def export_job_create(request, kind):
     if sum(len(value) for values in query.values() for value in values) > 16_000:
         return JsonResponse({"detail": "Export filters are too large."}, status=400)
     now = timezone.now()
+    # Reusing a pending or ready workbook prevents accidental double-clicks
+    # (and direct duplicate API calls) from creating costly duplicate exports.
+    active_statuses = [
+        ExportJob.Status.QUEUED,
+        ExportJob.Status.RUNNING,
+        ExportJob.Status.COMPLETED,
+    ]
+    candidates = ExportJob.objects.filter(
+        requested_by=request.user,
+        kind=kind,
+        status__in=active_statuses,
+        downloaded_at__isnull=True,
+        expires_at__gt=now,
+    ).order_by("-created_at")
+    existing = next((item for item in candidates if item.query == query), None)
+    if existing:
+        return JsonResponse({
+            "id": str(existing.public_id), "status": existing.status,
+            "status_url": reverse("export-job-status", kwargs={"public_id": existing.public_id}),
+            "download_url": reverse("export-job-download", kwargs={"public_id": existing.public_id}),
+            "reused": True,
+        })
     job = ExportJob.objects.create(
         requested_by=request.user,
         kind=kind,
@@ -1286,6 +1308,7 @@ def export_job_create(request, kind):
         "id": str(job.public_id), "status": job.status,
         "status_url": reverse("export-job-status", kwargs={"public_id": job.public_id}),
         "download_url": reverse("export-job-download", kwargs={"public_id": job.public_id}),
+        "reused": False,
     }, status=202)
 
 
@@ -1297,7 +1320,7 @@ def export_job_status(request, public_id):
     payload = {
         "id": str(job.public_id), "kind": job.kind, "status": job.status,
         "filename": job.filename, "error": job.error,
-        "expires_at": job.expires_at.isoformat(),
+        "expires_at": job.expires_at.isoformat(), "downloaded": bool(job.downloaded_at),
     }
     if job.status == ExportJob.Status.COMPLETED and job.storage_key:
         payload["download_url"] = reverse("export-job-download", kwargs={"public_id": job.public_id})
@@ -1316,6 +1339,9 @@ def export_job_download(request, public_id):
     path = Path(settings.EXPORT_JOB_DIR) / job.storage_key
     if not path.is_file():
         return JsonResponse({"detail": "The export file is no longer available. Please create a new one."}, status=410)
+    # A completed export is reusable until its first download begins.  Mark it
+    # before streaming so a double click cannot start another export job.
+    ExportJob.objects.filter(pk=job.pk, downloaded_at__isnull=True).update(downloaded_at=timezone.now())
     response = FileResponse(path.open("rb"), as_attachment=True, filename=job.filename)
     response["X-Content-Type-Options"] = "nosniff"
     response["Cache-Control"] = "private, no-store"

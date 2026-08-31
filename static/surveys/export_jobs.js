@@ -26,7 +26,11 @@
   };
   const renderStatus = (jobs = read()) => {
     const job = [...jobs].reverse()[0];
-    if (!job) return;
+    if (!job || job.downloaded) {
+      const existing = document.getElementById('exportQueueStatus');
+      if (existing) existing.style.display = 'none';
+      return;
+    }
     const node = statusNode();
     if (sessionStorage.getItem(dismissedKey) === statusToken(job)) {
       node.style.display = 'none';
@@ -42,6 +46,11 @@
       const download = document.createElement('a');
       download.href = job.download_url; download.textContent = 'Download';
       Object.assign(download.style, { color: '#fff', background: '#16b9dc', padding: '8px 11px', borderRadius: '8px', textDecoration: 'none', fontWeight: '700', whiteSpace: 'nowrap' });
+      download.addEventListener('click', () => {
+        job.downloaded = true; write(jobs);
+        sessionStorage.setItem(dismissedKey, statusToken(job));
+        window.setTimeout(() => { node.style.display = 'none'; }, 0);
+      });
       node.append(copy, download);
     } else if (job.status === 'failed') {
       heading.textContent = 'Export could not be created'; detail.textContent = job.error || 'Please try again.';
@@ -89,7 +98,7 @@
       }
       try {
         const data = await check(job);
-        job.status = data.status; job.download_url = data.download_url || job.download_url; job.error = data.error || '';
+        job.status = data.status; job.download_url = data.download_url || job.download_url; job.error = data.error || ''; job.downloaded = Boolean(data.downloaded);
         changed = true;
         if (data.status === 'completed' && !job.notified) {
           job.notified = true;
@@ -104,14 +113,25 @@
   }
   async function enqueue(kind, query = '') {
     const suffix = query ? `?${String(query).replace(/^\?/, '')}` : '';
+    const jobs = read();
+    const duplicate = [...jobs].reverse().find((job) => job.kind === kind && job.query === suffix && !job.downloaded && job.status !== 'failed');
+    if (duplicate) {
+      renderStatus(jobs);
+      notify(duplicate.status === 'completed' ? 'Your earlier export is ready to download.' : 'This export is already being prepared.', 'success');
+      return { id: duplicate.id, status: duplicate.status, reused: true };
+    }
     const response = await fetch(`/api/v1/export-jobs/${encodeURIComponent(kind)}/${suffix}`, {
       method: 'POST', credentials: 'same-origin', headers: { 'X-CSRFToken': csrf() },
     });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.detail || 'Could not queue export.');
-    const jobs = read();
-    jobs.push({ id: data.id, status: data.status, status_url: data.status_url, download_url: data.download_url || '', notified: false });
-    write(jobs); renderStatus(jobs); notify('Export queued. You can safely continue working.', 'success'); poll();
+    const matching = jobs.find((job) => job.id === data.id);
+    if (matching) {
+      Object.assign(matching, { status: data.status, status_url: data.status_url, download_url: data.download_url || matching.download_url, kind, query: suffix, downloaded: false });
+    } else {
+      jobs.push({ id: data.id, status: data.status, status_url: data.status_url, download_url: data.download_url || '', kind, query: suffix, downloaded: false, notified: false });
+    }
+    write(jobs); renderStatus(jobs); notify(data.reused ? 'Existing export is already in progress.' : 'Export queued. You can safely continue working.', 'success'); poll();
     return data;
   }
   window.ExportQueue = { enqueue, poll };
