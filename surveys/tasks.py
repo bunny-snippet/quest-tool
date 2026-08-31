@@ -40,6 +40,15 @@ from .supplier_callbacks import (
 logger = logging.getLogger(__name__)
 
 
+def _internal_request_host():
+    """Use a configured host when rendering an export outside HTTP middleware."""
+
+    return next(
+        (host for host in settings.ALLOWED_HOSTS if host and host != "*"),
+        "localhost",
+    )
+
+
 def _queued_export_response(job):
     """Run existing export builders with a synthetic authenticated request."""
 
@@ -52,21 +61,30 @@ def _queued_export_response(job):
     )
 
     query = {str(key): [str(item) for item in values] for key, values in (job.query or {}).items()}
+    request_host = _internal_request_host()
     if job.kind == ExportJob.Kind.PANELIST:
-        request = RequestFactory().get("/prescreened-data/export/", data=query)
+        request = RequestFactory().get(
+            "/prescreened-data/export/", data=query, HTTP_HOST=request_host,
+        )
         request.user = job.requested_by
         return prescreener_data_export(request)
     if job.kind == ExportJob.Kind.TERMS:
-        request = RequestFactory().get("/termination-reasons/export/", data=query)
+        request = RequestFactory().get(
+            "/termination-reasons/export/", data=query, HTTP_HOST=request_host,
+        )
         request.user = job.requested_by
         return termination_reasons_export(request)
     factory = APIRequestFactory()
     if job.kind == ExportJob.Kind.PROJECTS:
-        request = factory.get("/api/v1/surveys/export/", data=query)
+        request = factory.get(
+            "/api/v1/surveys/export/", data=query, HTTP_HOST=request_host,
+        )
         force_authenticate(request, user=job.requested_by)
         return SurveyViewSet.as_view({"get": "export"})(request)
     if job.kind == ExportJob.Kind.TRAFFIC:
-        request = factory.get("/api/v1/survey-attempts/export/", data=query)
+        request = factory.get(
+            "/api/v1/survey-attempts/export/", data=query, HTTP_HOST=request_host,
+        )
         force_authenticate(request, user=job.requested_by)
         return SurveyAttemptViewSet.as_view({"get": "export"})(request)
     raise ValueError(f"Unsupported export job kind: {job.kind}")
