@@ -3456,6 +3456,20 @@ def survey_status(request):
                 f"{reverse('rfg-result')}?{request.GET.urlencode()}"
             )
 
+        # Innovate's transaction API may verify and finalize an outcome just
+        # before the browser reaches its signed return URL. A stale/incorrect
+        # browser hash must never change data, but it also should not hide the
+        # already verified, identical result from the respondent. Send only
+        # that exact stored result to the clean PID display URL.
+        if (
+            provider_code == "innovatemr"
+            and attempt.status_source == "innovatemr_transaction"
+            and attempt.is_verified
+            and attempt.status in TERMINAL_ATTEMPT_STATUSES
+            and attempt.status == status_code
+        ):
+            return HttpResponseRedirect(_recorded_status_url(attempt, status_code))
+
         innovate_callback_verified = False
         if (
             provider_code == "innovatemr"

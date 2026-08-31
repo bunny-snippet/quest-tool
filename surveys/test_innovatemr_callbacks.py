@@ -3,6 +3,7 @@ from urllib.parse import urlencode
 from django.contrib.auth import get_user_model
 from django.test import TestCase, override_settings
 from django.urls import reverse
+from django.utils import timezone
 
 from vendors.models import Client, ClientIntegration
 
@@ -127,6 +128,44 @@ class InnovateMRCallbackTests(TestCase):
         self.assertIsNone(self.attempt.callback_at)
         self.assertEqual(self.attempt.callback_count, 0)
         self.assertNotIn("innovatemr_callback", self.attempt.exit_client_data)
+
+    def test_invalid_browser_hash_displays_matching_verified_transaction_result(self):
+        self.attempt.status = SurveyAttempt.Status.QUALITY_TERMINATED
+        self.attempt.status_source = "innovatemr_transaction"
+        self.attempt.is_verified = True
+        self.attempt.callback_at = timezone.now()
+        self.attempt.save(update_fields=[
+            "status", "status_source", "is_verified", "callback_at", "updated_at",
+        ])
+
+        response = self.client.get(reverse("survey-status"), {
+            "status": "4",
+            "rid": self.attempt.rid,
+            "hash": "incorrect-provider-hash",
+        })
+
+        self.assertRedirects(
+            response,
+            f"{reverse('survey-status')}?status=4&pid={self.attempt.pid}",
+            fetch_redirect_response=False,
+        )
+        self.attempt.refresh_from_db()
+        self.assertEqual(self.attempt.callback_count, 0)
+        self.assertEqual(self.attempt.status_source, "innovatemr_transaction")
+
+    def test_invalid_hash_cannot_display_a_different_transaction_result(self):
+        self.attempt.status = SurveyAttempt.Status.QUALITY_TERMINATED
+        self.attempt.status_source = "innovatemr_transaction"
+        self.attempt.is_verified = True
+        self.attempt.save(update_fields=["status", "status_source", "is_verified", "updated_at"])
+
+        response = self.client.get(reverse("survey-status"), {
+            "status": "1",
+            "rid": self.attempt.rid,
+            "hash": "incorrect-provider-hash",
+        })
+
+        self.assertEqual(response.status_code, 403)
 
     def test_missing_hash_is_rejected_without_recording_result(self):
         response = self.client.get(reverse("survey-status"), {
