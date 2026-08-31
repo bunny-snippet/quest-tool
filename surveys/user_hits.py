@@ -164,7 +164,7 @@ def _user_metadata(user, visible_ids: set[int]) -> dict[int, dict]:
     from .report_cache import cached_user_metadata
 
     return cached_user_metadata(
-        "user-hits-users-v1",
+        "user-hits-users-v2",
         user,
         lambda: _build_user_metadata(visible_ids),
     )
@@ -215,11 +215,39 @@ def user_hit_filter_options(user) -> dict:
         item["branch_value"] = option_value(item, "branch")
         item["sub_branch_value"] = option_value(item, "sub_branch")
         item["shift_value"] = option_value(item, "shift")
+
+    # Supplier choices must follow the same activity scope as the aggregate;
+    # do not expose a supplier merely because it exists elsewhere in the tool.
+    legacy_identifiers = tuple(_legacy_identifier_user_map(metadata))
+    supplier_attempts = SurveyAttempt.objects.filter(vendor__isnull=False)
+    if not is_super_admin_account(user):
+        supplier_attempts = supplier_attempts.filter(
+            Q(platform_user_id__in=visible_ids)
+            | Q(platform_user_id__isnull=True, user_id__in=legacy_identifiers)
+        )
+    supplier_rows = supplier_attempts.values(
+        "vendor_id", "vendor__first_name", "vendor__last_name",
+        "vendor__username", "vendor__email",
+    ).distinct().order_by(
+        "vendor__first_name", "vendor__last_name", "vendor__username",
+    )
+    suppliers = []
+    for row in supplier_rows:
+        name = " ".join(
+            part for part in (row["vendor__first_name"], row["vendor__last_name"])
+            if part
+        ).strip()
+        suppliers.append({
+            "value": str(row["vendor_id"]),
+            "name": name or row["vendor__username"] or row["vendor__email"] or f"Supplier {row['vendor_id']}",
+            "email": row["vendor__email"] or "",
+        })
     return {
         "users": visible_users,
         "branches": unique_options("branch"),
         "sub_branches": unique_options("sub_branch", ("branch",)),
         "shifts": unique_options("shift", ("branch", "sub_branch")),
+        "suppliers": suppliers,
     }
 
 
@@ -242,6 +270,11 @@ def _aggregate_user_hit_payload(user, params) -> dict:
     selected_user_ids = {int(value) for value in selected_user_values}
     if selected_user_ids:
         visible_ids &= selected_user_ids
+
+    selected_supplier_values = _csv_values(params.get("supplier", ""))
+    if any(not value.isdigit() for value in selected_supplier_values):
+        raise ValueError("Supplier filters must contain numeric IDs.")
+    selected_supplier_ids = {int(value) for value in selected_supplier_values}
 
     selected_branches = _csv_values(params.get("branch", ""))
     selected_sub_branches = _csv_values(params.get("sub_branch", ""))
@@ -346,6 +379,11 @@ def _aggregate_user_hit_payload(user, params) -> dict:
     if upper:
         attempt_querysets = [
             queryset.filter(initiated_at__lte=upper)
+            for queryset in attempt_querysets
+        ]
+    if selected_supplier_ids:
+        attempt_querysets = [
+            queryset.filter(vendor_id__in=selected_supplier_ids)
             for queryset in attempt_querysets
         ]
 

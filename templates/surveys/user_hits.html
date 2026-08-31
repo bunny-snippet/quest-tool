@@ -54,6 +54,13 @@
       <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search user…" aria-label="Search users" autocomplete="off"></div><div class="multi-options">{% for tracked_user in users %}<label data-branch-value="{{ tracked_user.branch_value }}" data-sub-branch-value="{{ tracked_user.sub_branch_value }}" data-shift-value="{{ tracked_user.shift_value }}"><input type="checkbox" value="{{ tracked_user.user_id }}"><span>{{ tracked_user.user_name }}</span></label>{% empty %}<span class="filter-empty">No authorized users available</span>{% endfor %}</div><p class="multi-no-results" hidden>No matching user</p></div>
     </div>
   </div>{% endif %}
+  {% if hit_filters.supplier %}<div class="field multi-field">
+    <label id="hitSupplierLabel">Supplier</label>
+    <div class="multi-select" data-hit-filter="supplier">
+      <button class="multi-trigger" type="button" aria-labelledby="hitSupplierLabel" aria-expanded="false"><span>All suppliers</span><i>⌄</i></button>
+      <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search supplier…" aria-label="Search suppliers" autocomplete="off"></div><div class="multi-options">{% for supplier in suppliers %}<label><input type="checkbox" value="{{ supplier.value }}"><span>{{ supplier.name }}{% if supplier.email %} · {{ supplier.email }}{% endif %}</span></label>{% empty %}<span class="filter-empty">No supplier activity available</span>{% endfor %}</div><p class="multi-no-results" hidden>No matching supplier</p></div>
+    </div>
+  </div>{% endif %}
   {% if hit_filters.date %}<div class="field datetime-field">
     <label for="hitFromDateTime">From date &amp; time</label>
     <div class="datetime-control"><input id="hitFromDateTime" type="datetime-local" step="60" aria-label="From date and time in IST"></div>
@@ -96,4 +103,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/user_hits.js' %}?v=10" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/user_hits.js' %}?v=11" defer></script>{% endblock %}

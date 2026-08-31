@@ -2332,6 +2332,8 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(summary["completed_devices"], {"desktop": 1, "mobile": 1, "tablet": 1, "unclassified": 0})
 
     def test_filtered_excel_uses_exact_operational_columns(self):
+        self.complete.prescreener_uid = "TRAFFIC-UID-01"
+        self.complete.save(update_fields=["prescreener_uid"])
         response = self.api.get(reverse("survey-attempt-export"), {
             "user": self.kanik.pk,
             "status": SurveyAttempt.Status.COMPLETED,
@@ -2343,7 +2345,7 @@ class StudiesTrackingTests(TestCase):
         self.assertEqual(rows[0], [
             "Project id", "Client name", "Cleint survey id", "Country",
             "Current Client CPI", "Client entry link CPI", "Vendor CPI", "Vendor name",
-            "PID", "User name", "Device", "OS", "Browser", "User agent",
+            "RID", "UID", "PID", "User name", "Device", "OS", "Browser", "User agent",
             "Entry IP", "Exit IP", "Actual LOI (minutes)", "Status",
             "Provider status", "Term reason", "Term category", "Status source",
             "Inisitate at", "Presecreent at", "Redirect at", "entry date time",
@@ -2351,7 +2353,8 @@ class StudiesTrackingTests(TestCase):
         ])
         self.assertIn("Kanik Sharma", rows[1])
         self.assertIn(self.complete.pid, rows[1])
-        self.assertNotIn(self.complete.rid, rows[1])
+        self.assertIn(self.complete.rid, rows[1])
+        self.assertIn(self.complete.prescreener_uid, rows[1])
         self.assertNotIn("Pre-screener answers", rows[0])
         self.assertNotIn("Outbound supplier URL", rows[0])
         self.assertNotIn("Ee4Ff5Gg6H", str(rows))
@@ -2400,6 +2403,7 @@ class StudiesTrackingTests(TestCase):
         self.assertNotIn("Exit IP", rows[0])
         self.assertNotIn("Client name", rows[0])
         self.assertIn("RID", rows[0])
+        self.assertIn("UID", rows[0])
 
         attempt_list = scoped_api.get(reverse("survey-attempt-list"))
         self.assertEqual(attempt_list.status_code, 200)
@@ -3003,7 +3007,8 @@ class TerminationReasonPageTests(TestCase):
             "status": "Pre Survey Termination",
             "termReason": "Off hours",
         }
-        self.attempt.save(update_fields=["upstream_transaction_data"])
+        self.attempt.prescreener_uid = "TERM-UID-0001"
+        self.attempt.save(update_fields=["upstream_transaction_data", "prescreener_uid"])
         self.client.force_login(self.owner)
 
         response = self.client.get(
@@ -3016,6 +3021,10 @@ class TerminationReasonPageTests(TestCase):
         self.assertIn("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", response["Content-Type"])
         self.assertIn("Platform status", rows[0])
         self.assertIn("Provider status", rows[0])
+        self.assertEqual(
+            [rows[1][rows[0].index(column)] for column in ("RID", "PID", "UID")],
+            [self.attempt.rid, self.attempt.pid, self.attempt.prescreener_uid],
+        )
         self.assertIn("Terminated", rows[1])
         self.assertIn("Pre Survey Termination", rows[1])
         self.assertIn("Off hours", rows[1])
@@ -3055,8 +3064,25 @@ class TerminationReasonPageTests(TestCase):
         export = self.client.get(reverse("termination-reasons-export"))
         rows = xlsx_rows(export)
         self.assertEqual(export.status_code, 200)
-        self.assertEqual(rows[0], ["RID"])
-        self.assertEqual(rows[1], [own_attempt.rid])
+        self.assertEqual(rows[0], ["RID", "PID", "UID"])
+        self.assertEqual(rows[1], [own_attempt.rid, own_attempt.pid, ""])
+
+    def test_supplier_filter_limits_unsuccessful_outcomes(self):
+        supplier = get_user_model().objects.create_user(
+            username="reason-filter-supplier", first_name="Reason", last_name="Supplier"
+        )
+        self.attempt.vendor = supplier
+        self.attempt.save(update_fields=["vendor"])
+        self.client.force_login(self.owner)
+
+        response = self.client.get(
+            reverse("termination-reasons"), {"supplier": str(supplier.pk)}
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.context["summary"]["total"], 1)
+        self.assertContains(response, self.attempt.rid)
+        self.assertContains(response, "Supplier")
 
     def test_external_supplier_can_be_granted_scoped_term_reports(self):
         supplier = get_user_model().objects.create_user(
@@ -3298,6 +3324,25 @@ class UserHitsTests(TestCase):
         self.assertEqual(response.data["count"], 2)
         self.assertTrue(all(row["user_id"] == self.kanik.pk for row in response.data["results"]))
         self.assertEqual(response.data["summary"]["hits"]["tablet"], 1)
+
+    def test_supplier_filter_limits_user_hit_aggregates(self):
+        supplier = get_user_model().objects.create_user(
+            username="hits-filter-supplier", first_name="Hit", last_name="Supplier"
+        )
+        SurveyAttempt.objects.filter(
+            platform_user=self.kanik, initiated_at__date=self.today,
+        ).update(vendor=supplier)
+
+        response = self.api.get(reverse("user-hits-api"), {
+            "supplier": str(supplier.pk),
+            "from_date": self.today.isoformat(),
+            "to_date": self.today.isoformat(),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["user_id"], self.kanik.pk)
+        self.assertEqual(response.data["results"][0]["hits"]["total"], 2)
 
     def test_super_admin_user_filter_uses_narrow_attempt_index_scope(self):
         from .user_hits import aggregate_user_hit_payload

@@ -256,6 +256,7 @@ USER_HIT_COLUMN_PERMISSIONS = {
 USER_HIT_FILTER_PERMISSIONS = {
     "search": "user_hits.filter.search", "branch": "user_hits.filter.branch",
     "sub_branch": "user_hits.filter.sub_branch", "shift": "user_hits.filter.shift", "user": "user_hits.filter.user",
+    "supplier": "user_hits.filter.supplier",
     "date": "user_hits.filter.date", "clear": "user_hits.filters.clear",
 }
 
@@ -290,6 +291,7 @@ TERM_REASON_FILTER_PERMISSIONS = {
     "sub_branch": "termination_reasons.filter.sub_branch",
     "shift": "termination_reasons.filter.shift",
     "user": "termination_reasons.filter.user",
+    "supplier": "termination_reasons.filter.supplier",
     "status": "termination_reasons.filter.status",
     "country": "termination_reasons.filter.country",
     "client": "termination_reasons.filter.client",
@@ -761,6 +763,7 @@ def _term_report_filter_state(request, filters_access):
         "sub_branch": _term_report_values(request, "sub_branch"),
         "shift": _term_report_values(request, "shift"),
         "user": _term_report_values(request, "user"),
+        "supplier": _term_report_values(request, "supplier"),
         "status": _term_report_values(request, "status"),
         "country": _term_report_values(request, "country"),
         "client": _term_report_values(request, "client"),
@@ -775,6 +778,7 @@ def _term_report_filter_state(request, filters_access):
         "sub_branch": selected["sub_branch"],
         "shift": selected["shift"],
         "user": selected["user"],
+        "supplier": selected["supplier"],
         "status": selected["status"],
         "country": selected["country"],
         "client": selected["client"],
@@ -837,7 +841,9 @@ def _project_term_report_queryset(
     }
     relations = {"survey"}
 
-    if columns & {"rid", "actions"} or include_provider_outcome:
+    if "rid" in columns:
+        fields.update({"rid", "pid", "prescreener_uid"})
+    elif "actions" in columns or include_provider_outcome:
         fields.add("rid")
     if "survey" in columns:
         fields.update({"survey__local_id", "survey__source_key"})
@@ -910,7 +916,7 @@ def _filtered_term_report_queryset(request, filters_access):
 
     filter_data = {
         name: ",".join(selected[name])
-        for name in ("branch", "sub_branch", "shift", "user", "status", "country", "client", "buyer_id")
+        for name in ("branch", "sub_branch", "shift", "user", "supplier", "status", "country", "client", "buyer_id")
         if selected[name]
     }
     if filter_data:
@@ -1054,6 +1060,7 @@ def termination_reasons_page(request):
         "term_sub_branches": filter_options["sub_branches"],
         "term_shifts": filter_options["shifts"],
         "term_users": filter_options["users"],
+        "term_suppliers": filter_options["suppliers"],
         "term_countries": filter_options["countries"],
         "term_buyers": filter_options["buyers"],
         "attempt_statuses": list(UNSUCCESSFUL_STATUS_LABELS.items()),
@@ -1092,7 +1099,7 @@ def termination_reasons_export(request):
 
     permitted = set(_permitted_columns(codes, TERM_REASON_COLUMN_PERMISSIONS))
     specs = {
-        "rid": (["RID"], [15]),
+        "rid": (["RID", "PID", "UID"], [15, 15, 21]),
         "survey": (["Project ID", "Client survey ID"], [19, 20]),
         "client": (["Client", "Provider"], [22, 18]),
         "respondent": (["Respondent", "Email", "Entry IP", "Exit IP"], [22, 30, 17, 17]),
@@ -1147,7 +1154,9 @@ def termination_reasons_export(request):
             outcome = provider_outcome(attempt) if include_provider_outcome else {}
             values_by_column = {}
             if "rid" in ordered_columns:
-                values_by_column["rid"] = [attempt.rid]
+                values_by_column["rid"] = [
+                    attempt.rid, attempt.pid, attempt.prescreener_uid or "",
+                ]
             if "survey" in ordered_columns:
                 values_by_column["survey"] = [attempt.survey.local_id, attempt.survey.source_key]
             if "client" in ordered_columns:
@@ -4389,6 +4398,7 @@ class UserHitsAPIView(APIView):
             "user_hits.filter.branch": ("branch",),
             "user_hits.filter.sub_branch": ("sub_branch",),
             "user_hits.filter.shift": ("shift",),
+            "user_hits.filter.supplier": ("supplier",),
             "user_hits.filter.date": ("from_date", "from_time", "to_date", "to_time"),
         })
         codes = effective_permission_codes(request.user)
@@ -4413,7 +4423,7 @@ class UserHitsAPIView(APIView):
 
         try:
             payload = cached_report_payload(
-                "user-hits-v4",
+                "user-hits-v5",
                 request,
                 load_user_hits,
             )
@@ -4556,8 +4566,6 @@ def _attempt_excel_rows(queryset, requesting_user=None):
     permitted = set(_permitted_columns(
         effective_permission_codes(requesting_user), STUDY_COLUMN_PERMISSIONS
     ))
-    if "pid" in permitted:
-        permitted.discard("respondent_id")
     specs = {
         "project_id": (
             ["Project id"] + (["Client name"] if can_view_client_name else []),
@@ -4565,7 +4573,7 @@ def _attempt_excel_rows(queryset, requesting_user=None):
         ),
         "survey_id": (["Cleint survey id"], [18]),
         "pid": (["PID"], [12]),
-        "respondent_id": (["RID"], [14]),
+        "respondent_id": (["RID", "UID"], [14, 21]),
         "status": (
             ["Status"]
             + (["Provider status", "Term reason", "Term category"] if can_view_provider_status else [])
@@ -4613,7 +4621,7 @@ def _attempt_excel_rows(queryset, requesting_user=None):
     if "pid" in ordered_columns:
         selected_fields.add("pid")
     if "respondent_id" in ordered_columns:
-        selected_fields.add("rid")
+        selected_fields.update({"rid", "prescreener_uid"})
     if "status" in ordered_columns:
         selected_fields.add("status")
         if can_view_provider_status:
@@ -4710,7 +4718,9 @@ def _attempt_excel_rows(queryset, requesting_user=None):
             if "pid" in ordered_columns:
                 values_by_column["pid"] = [attempt.pid]
             if "respondent_id" in ordered_columns:
-                values_by_column["respondent_id"] = [attempt.rid]
+                values_by_column["respondent_id"] = [
+                    attempt.rid, attempt.prescreener_uid or "",
+                ]
             if "status" in ordered_columns:
                 status_label = (
                     "Initiated"

@@ -17,6 +17,7 @@
     subBranchFilters: document.querySelector('[data-hit-filter="sub_branch"]'),
     shiftFilters: document.querySelector('[data-hit-filter="shift"]'),
     userFilters: document.querySelector('[data-hit-filter="user"]'),
+    supplierFilters: document.querySelector('[data-hit-filter="supplier"]'),
   };
   if (!elements.rows) return;
   document.querySelector('.user-hits-table').style.minWidth = `${Math.max(520, columnCount * 145)}px`;
@@ -39,7 +40,7 @@
 
   function updateMultiLabel(container) {
     const checked = [...container.querySelectorAll('input:checked')]; const button = container.querySelector('.multi-trigger');
-    const fallback = { branch: 'All branches', sub_branch: 'All sub-branches', shift: 'All shifts', user: 'All users' }[container.dataset.hitFilter];
+    const fallback = { branch: 'All branches', sub_branch: 'All sub-branches', shift: 'All shifts', user: 'All users', supplier: 'All suppliers' }[container.dataset.hitFilter];
     button.querySelector('span').textContent = checked.length === 0 ? fallback : checked.length === 1 ? checked[0].closest('label').innerText.trim() : `${checked.length} selected`;
     button.classList.toggle('has-value', checked.length > 0);
   }

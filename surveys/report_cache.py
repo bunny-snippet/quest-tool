@@ -358,7 +358,28 @@ def term_filter_metadata(user, base_queryset) -> dict:
         return user_hit_filter_options(user)
 
     def load_attempt_dimensions():
+        supplier_rows = list(
+            base_queryset.filter(vendor__isnull=False)
+            .values(
+                "vendor_id", "vendor__first_name", "vendor__last_name",
+                "vendor__username", "vendor__email",
+            )
+            .distinct()
+            .order_by("vendor__first_name", "vendor__last_name", "vendor__username")
+        )
+        suppliers = []
+        for row in supplier_rows:
+            name = " ".join(
+                part for part in (row["vendor__first_name"], row["vendor__last_name"])
+                if part
+            ).strip()
+            suppliers.append({
+                "value": str(row["vendor_id"]),
+                "name": name or row["vendor__username"] or row["vendor__email"] or f"Supplier {row['vendor_id']}",
+                "email": row["vendor__email"] or "",
+            })
         return {
+            "suppliers": suppliers,
             "countries": list(
                 base_queryset.exclude(survey__country_code="")
                 .values("survey__country_code", "survey__country")
@@ -385,7 +406,7 @@ def term_filter_metadata(user, base_queryset) -> dict:
     return {
         **cached_user_metadata("report-hierarchy-v1", user, load_hierarchy),
         **cached_user_metadata(
-            "term-attempt-dimensions-v1",
+            "term-attempt-dimensions-v2",
             user,
             load_attempt_dimensions,
             timeout=settings.REPORT_CACHE_DYNAMIC_METADATA_TTL_SECONDS,

@@ -7,7 +7,7 @@
   const byFilter = (name) => form.querySelector(`[data-multi-filter="${name}"]`);
   const fallbackLabels = {
     branch: 'All branches', sub_branch: 'All sub-branches', shift: 'All shifts',
-    user: 'All users', status: 'All unsuccessful', country: 'All countries',
+    user: 'All users', supplier: 'All suppliers', status: 'All unsuccessful', country: 'All countries',
     client: 'All clients', buyer_id: 'All buyer IDs',
   };
 
