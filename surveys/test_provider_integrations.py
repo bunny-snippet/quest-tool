@@ -1,11 +1,15 @@
 from types import SimpleNamespace
 
-from django.test import SimpleTestCase, TestCase, override_settings
+from django.contrib.auth import get_user_model
+from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
+from django.urls import reverse
+from django.utils import timezone
 
+from vendors.models import Client, ClientIntegration
 from .integrations import InnovateMRAPIError, InnovateMRClient
-from .models import Survey, TargetingQuestion
+from .models import Survey, SurveyAttempt, TargetingQuestion
 from .survey_flow import build_biobrain_outbound_url
-from .views import _prescreener_questions
+from .views import _collect_prescreener_answers, _prescreener_questions
 
 
 class FakeResponse:
@@ -167,6 +171,39 @@ class ConfigurableProviderClientTests(SimpleTestCase):
 
 
 class BioBrainPrescreenerCompatibilityTests(TestCase):
+    def test_biobrain_passes_age_and_postal_to_provider_without_local_quota_rejection(self):
+        client = Client.objects.create(
+            code="biobrain-bypass-test", name="BioBrain", provider_code="biobrain"
+        )
+        integration = ClientIntegration.objects.create(
+            client=client,
+            name="BioBrain validation test",
+            provider_code="biobrain",
+            base_url="https://partner-api.voqall.com/api/v1/surveys",
+        )
+        survey = Survey.objects.create(
+            source_id=45, source_key="45", client=client, integration=integration,
+            company_name="BioBrain",
+        )
+        age = TargetingQuestion.objects.create(
+            survey=survey, question_id=60, key="AGE", text="What is your age?",
+            question_type="Numeric", options=[{"OptionId": 1, "OptionText": "18-24", "ageStart": 18, "ageEnd": 24}],
+        )
+        postal = TargetingQuestion.objects.create(
+            survey=survey, question_id=61, key="POSTAL_CODE", text="What is your postal code?",
+            question_type="Text", raw_data={"targeting_choices": ["10001"]},
+        )
+
+        request = RequestFactory().post("/", {
+            f"question_{age.pk}": "65",
+            f"question_{postal.pk}": "99999",
+        })
+        answers, errors = _collect_prescreener_answers(request, survey)
+
+        self.assertEqual(errors, [])
+        self.assertEqual(answers[str(age.pk)]["upstream_values"], ["65"])
+        self.assertEqual(answers[str(postal.pk)]["upstream_values"], ["99999"])
+
     def test_legacy_numeric_options_render_without_server_error(self):
         survey = Survey.objects.create(
             source_id=44,
@@ -195,3 +232,57 @@ class BioBrainPrescreenerCompatibilityTests(TestCase):
                 {"value": "200", "label": "200", "selected": False},
             ],
         )
+
+
+class BioBrainDataPageTests(TestCase):
+    def setUp(self):
+        self.owner = get_user_model().objects.create_superuser(
+            username="biobrain-owner", email="owner@example.test", password="test-password"
+        )
+        self.employee = get_user_model().objects.create_user(
+            username="biobrain-employee", password="test-password"
+        )
+        client = Client.objects.create(
+            code="biobrain-data-test", name="BioBrain", provider_code="biobrain"
+        )
+        integration = ClientIntegration.objects.create(
+            client=client,
+            name="BioBrain Data test",
+            provider_code="biobrain",
+            base_url="https://partner-api.voqall.com/api/v1/surveys",
+        )
+        survey = Survey.objects.create(
+            source_id=998811, source_key="998811", client=client,
+            integration=integration, company_name="BioBrain",
+        )
+        question = TargetingQuestion.objects.create(
+            survey=survey, question_id=59, key="Gender",
+            text="What is your gender?", question_type="Single",
+            options=[{"OptionId": 2, "OptionText": "Female"}],
+        )
+        self.attempt = SurveyAttempt.objects.create(
+            rid="Bi0DataP1g", survey=survey, platform_user=self.employee,
+            user_id=str(self.employee.pk), submitted_at=timezone.now(),
+            answers={str(question.pk): {
+                "question_id": question.question_id,
+                "question_text": question.text,
+                "question_category": "BioBrain targeting",
+                "values": ["2"],
+            }},
+        )
+
+    def test_super_admin_can_view_filled_biobrain_answers(self):
+        self.client.force_login(self.owner)
+
+        response = self.client.get(reverse("biobrain-data"), {"search": self.attempt.rid})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertContains(response, self.attempt.rid)
+        self.assertContains(response, "What is your gender?")
+        self.assertContains(response, "Female")
+        self.assertContains(response, "Data")
+
+    def test_regular_user_cannot_open_biobrain_data(self):
+        self.client.force_login(self.employee)
+
+        self.assertEqual(self.client.get(reverse("biobrain-data")).status_code, 403)

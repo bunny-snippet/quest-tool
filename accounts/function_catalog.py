@@ -128,6 +128,8 @@ FUNCTION_CATALOG = (
     ("prescreener_data.column.usage_count", "Show Visits column", "Panelist Data - Table columns", "Display the original visit plus policy-approved profile reuses for this UID.", ADMIN_ROLES),
     ("prescreener_data.column.captured", "Show Registered at column", "Panelist Data - Table columns", "Display when the panelist profile was registered.", ADMIN_ROLES),
 
+    ("biobrain_data.view", "View BioBrain prescreener data", "BioBrain Data - Page & navigation", "Open the Super Admin-only audit of BioBrain prescreener submissions.", SUPER_ADMIN_ROLES),
+
     ("termination_reasons.view", "View Term Reports page and sidebar", "Term Reports - Page & navigation", "Open the permission-scoped provider outcome page and display its sidebar item.", ADMIN_ROLES),
     ("termination_reasons.filter.rid", "Use Term Reports search", "Term Reports - Filters", "Search final unsuccessful attempts by RID, PID, UID, project, survey, buyer, user or network address.", ADMIN_ROLES),
     ("termination_reasons.filter.branch", "Filter by branch", "Term Reports - Filters", "Filter unsuccessful outcomes by one or more organization branches.", ADMIN_ROLES),

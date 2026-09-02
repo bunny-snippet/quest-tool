@@ -1,0 +1,32 @@
+{% extends 'surveys/base.html' %}
+{% block title %}BioBrain Data · Exchange Hub{% endblock %}
+{% block content %}
+<section class="page-intro">
+  <div>
+    <p class="eyebrow">Super Admin audit</p>
+    <h1>BioBrain Data</h1>
+    <p>Read-only record of each BioBrain / Voqall pre-screener submission.</p>
+  </div>
+</section>
+
+<form class="filter-panel biobrain-data-filters" method="get" action="{% url 'biobrain-data' %}" aria-label="BioBrain data search">
+  <div class="field search-field"><label for="biobrainDataSearch">Search</label><div class="field-control"><span aria-hidden="true">⌕</span><input id="biobrainDataSearch" name="search" type="search" value="{{ search }}" placeholder="RID, UID, survey ID, user…" autocomplete="off"></div></div>
+  <button class="primary-button" type="submit">Search</button>
+  {% if search %}<a class="clear-button" href="{% url 'biobrain-data' %}">Clear</a>{% endif %}
+</form>
+
+<section class="survey-panel biobrain-data-panel">
+  <div class="panel-head"><div><h2>Pre-screener submissions</h2><p>{% if page_obj.paginator.count %}Showing {{ page_obj.start_index }}–{{ page_obj.end_index }} of <strong>{{ page_obj.paginator.count }}</strong> submissions{% else %}No BioBrain pre-screener submissions found{% endif %}</p></div></div>
+  <div class="table-wrap biobrain-data-table-wrap"><table class="survey-table biobrain-data-table"><thead><tr><th>Survey ID</th><th>User</th><th>RID / UID</th><th>Data filled at</th><th>Status</th><th>Filled data</th></tr></thead><tbody>
+    {% for attempt in page_obj %}<tr>
+      <td><div class="vault-market"><strong>{{ attempt.survey.source_key|default:attempt.survey.local_id }}</strong><span>Project {{ attempt.survey.local_id }}</span></div></td>
+      <td><div class="vault-market"><strong>{{ attempt.platform_user.get_full_name|default:attempt.platform_user.username|default:"Unknown user" }}</strong><span>{{ attempt.platform_user.email|default:attempt.user_id }}</span></div></td>
+      <td><div class="vault-id"><strong>{{ attempt.rid }}</strong><span>{{ attempt.prescreener_uid|default:"UID unavailable" }}</span></div></td>
+      <td><time class="vault-time"><strong>{{ attempt.submitted_at|date:"d M Y" }}</strong><span>{{ attempt.submitted_at|date:"h:i:s A T" }}</span></time></td>
+      <td><span class="attempt-status {% if attempt.status == '1' %}success{% elif attempt.status == '2' or attempt.status == '3' or attempt.status == '4' %}danger{% else %}info{% endif %}"><i></i>{{ attempt.get_status_display }}</span></td>
+      <td><details class="biobrain-answer-details"><summary>View {{ attempt.display_answers|length }} answer{{ attempt.display_answers|length|pluralize }}</summary><div>{% for answer in attempt.display_answers %}<article><span>{{ answer.position|stringformat:"02d" }}</span><p><small>{{ answer.category }}</small><strong>{{ answer.question }}</strong><em>{{ answer.answer }}</em></p></article>{% endfor %}</div></details></td>
+    </tr>{% empty %}<tr><td colspan="6"><div class="empty-state"><span>○</span><strong>No BioBrain data found</strong><small>Try another search or wait for a new pre-screener submission.</small></div></td></tr>{% endfor %}
+  </tbody></table></div>
+  <div class="panel-foot"><span>Page {{ page_obj.number }} of {{ page_obj.paginator.num_pages }}</span>{% if page_obj.paginator.num_pages > 1 %}<nav class="pagination" aria-label="BioBrain data pages">{% if page_obj.has_previous %}<a href="?{% if page_query %}{{ page_query }}&amp;{% endif %}page=1" aria-label="First page">«</a><a href="?{% if page_query %}{{ page_query }}&amp;{% endif %}page={{ page_obj.previous_page_number }}" aria-label="Previous page">‹</a>{% endif %}<span>{{ page_obj.number }}</span>{% if page_obj.has_next %}<a href="?{% if page_query %}{{ page_query }}&amp;{% endif %}page={{ page_obj.next_page_number }}" aria-label="Next page">›</a><a href="?{% if page_query %}{{ page_query }}&amp;{% endif %}page={{ page_obj.paginator.num_pages }}" aria-label="Last page">»</a>{% endif %}</nav>{% endif %}</div>
+</section>
+{% endblock %}
