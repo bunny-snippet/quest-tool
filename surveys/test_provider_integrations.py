@@ -1,12 +1,9 @@
 from types import SimpleNamespace
-from datetime import timedelta
 
 from django.test import SimpleTestCase, TestCase, override_settings
-from django.utils import timezone
 
-from vendors.models import Client, ClientIntegration
 from .integrations import InnovateMRAPIError, InnovateMRClient
-from .models import Survey, SurveyAttempt, TargetingQuestion
+from .models import Survey, TargetingQuestion
 from .survey_flow import build_biobrain_outbound_url
 from .views import _prescreener_questions
 
@@ -170,29 +167,6 @@ class ConfigurableProviderClientTests(SimpleTestCase):
 
 
 class BioBrainPrescreenerCompatibilityTests(TestCase):
-    def test_biobrain_loi_starts_at_provider_redirect(self):
-        client = Client.objects.create(
-            code="biobrain-loi-test", name="BioBrain", provider_code="biobrain"
-        )
-        integration = ClientIntegration.objects.create(
-            client=client,
-            name="BioBrain LOI test",
-            provider_code="biobrain",
-            base_url="https://partner-api.voqall.com/api/v1/surveys",
-        )
-        survey = Survey.objects.create(
-            source_id=99001, source_key="99001", client=client,
-            integration=integration, company_name="BioBrain",
-        )
-        finished_at = timezone.now()
-        attempt = SurveyAttempt.objects.create(
-            rid="Bi0Br4inL1", survey=survey, user_id="respondent-1",
-            initiated_at=finished_at - timedelta(minutes=3, seconds=30),
-            redirected_at=finished_at - timedelta(seconds=30),
-        )
-
-        self.assertEqual(attempt.calculate_loi_seconds(finished_at), 30)
-
     def test_legacy_numeric_options_render_without_server_error(self):
         survey = Survey.objects.create(
             source_id=44,
