@@ -58,7 +58,7 @@ from vendors.services import (
     scope_surveys_for_user,
 )
 from vendors.access import is_external_vendor_scope, vendor_scope_user_id
-from vendors.models import ClientIntegration, VerisoulAssessment, VendorAPIKey
+from vendors.models import VerisoulAssessment, VendorAPIKey
 from vendors.security import decode_delivery_token
 from vendors.verisoul import (
     VerisoulError,
@@ -713,59 +713,6 @@ def prescreener_data_export(request):
         f"panelist-data-{local_now:%Y%m%d-%H%M%S}-IST.xlsx",
         sheets,
     )
-
-
-@function_permission_required("biobrain_data.view")
-def biobrain_data_page(request):
-    """Super Admin audit trail for BioBrain/Voqall pre-screener submissions."""
-
-    search = (request.GET.get("search") or "").strip()
-    client_codes = list(ClientIntegration.objects.filter(
-        provider_code__in=("biobrain", "voqall")
-    ).values_list("client__code", flat=True).distinct())
-    queryset = PrescreenerSubmission.objects.using("prescreener_vault").filter(
-        source_client_code__in=client_codes,
-    ).prefetch_related("question_answers")
-    if search:
-        matching_rids = list(SurveyAttempt.objects.filter(
-            survey__integration__provider_code__in=("biobrain", "voqall"),
-        ).filter(
-            Q(rid__icontains=search)
-            | Q(pid__icontains=search)
-            | Q(prescreener_uid__icontains=search)
-            | Q(survey__local_id__icontains=search)
-            | Q(survey__source_key__icontains=search)
-            | Q(platform_user__username__icontains=search)
-            | Q(platform_user__first_name__icontains=search)
-            | Q(platform_user__last_name__icontains=search)
-            | Q(platform_user__email__icontains=search)
-        ).values_list("rid", flat=True))
-        queryset = queryset.filter(
-            Q(rid__icontains=search)
-            | Q(uid__icontains=search)
-            | Q(rid__in=matching_rids)
-        )
-    page_obj = Paginator(queryset.order_by("-submitted_at", "-uid"), 25).get_page(
-        request.GET.get("page", 1)
-    )
-    attempts_by_rid = {
-        attempt.rid: attempt
-        for attempt in SurveyAttempt.objects.filter(
-            rid__in=[submission.rid for submission in page_obj.object_list],
-            survey__integration__provider_code__in=("biobrain", "voqall"),
-        ).select_related("survey", "platform_user")
-    }
-    for submission in page_obj.object_list:
-        submission.attempt = attempts_by_rid.get(submission.rid)
-
-    page_params = request.GET.copy()
-    page_params.pop("page", None)
-    return render(request, "surveys/biobrain_data.html", {
-        "active_page": "biobrain-data",
-        "page_obj": page_obj,
-        "search": search,
-        "page_query": page_params.urlencode(),
-    })
 
 
 def _refresh_provider_outcome(attempt, integration):

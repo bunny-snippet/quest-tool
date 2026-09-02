@@ -1,13 +1,9 @@
 from types import SimpleNamespace
 
-from django.contrib.auth import get_user_model
 from django.test import RequestFactory, SimpleTestCase, TestCase, override_settings
-from django.urls import reverse
 from django.utils import timezone
 
 from vendors.models import Client, ClientIntegration
-from prescreener_vault.constants import DATABASE_ALIAS
-from prescreener_vault.models import PrescreenerAnswer, PrescreenerSubmission
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .models import Survey, SurveyAttempt, TargetingQuestion
 from .survey_flow import build_biobrain_outbound_url
@@ -234,63 +230,3 @@ class BioBrainPrescreenerCompatibilityTests(TestCase):
                 {"value": "200", "label": "200", "selected": False},
             ],
         )
-
-
-class BioBrainDataPageTests(TestCase):
-    databases = {"default", DATABASE_ALIAS}
-
-    def setUp(self):
-        self.owner = get_user_model().objects.create_superuser(
-            username="biobrain-owner", email="owner@example.test", password="test-password"
-        )
-        self.employee = get_user_model().objects.create_user(
-            username="biobrain-employee", password="test-password"
-        )
-        client = Client.objects.create(
-            code="biobrain-data-test", name="BioBrain", provider_code="biobrain"
-        )
-        integration = ClientIntegration.objects.create(
-            client=client,
-            name="BioBrain Data test",
-            provider_code="biobrain",
-            base_url="https://partner-api.voqall.com/api/v1/surveys",
-        )
-        survey = Survey.objects.create(
-            source_id=998811, source_key="998811", client=client,
-            integration=integration, company_name="BioBrain",
-        )
-        question = TargetingQuestion.objects.create(
-            survey=survey, question_id=59, key="Gender",
-            text="What is your gender?", question_type="Single",
-            options=[{"OptionId": 2, "OptionText": "Female"}],
-        )
-        self.attempt = SurveyAttempt.objects.create(
-            rid="Bi0DataP1g", survey=survey, platform_user=self.employee,
-            user_id=str(self.employee.pk), submitted_at=timezone.now(),
-        )
-        submission = PrescreenerSubmission.objects.using(DATABASE_ALIAS).create(
-            uid="Biob-rain-Data-Test", rid=self.attempt.rid,
-            source_client_code=client.code, submitted_at=self.attempt.submitted_at,
-            raw_answers={"stored_only_in_vault": True}, answer_count=1,
-        )
-        PrescreenerAnswer.objects.using(DATABASE_ALIAS).create(
-            submission=submission, position=1, question_id=str(question.question_id),
-            question_text=question.text, question_category="BioBrain targeting",
-            answer_values=["2"], answer_labels=["Female"],
-        )
-
-    def test_super_admin_can_view_filled_biobrain_answers(self):
-        self.client.force_login(self.owner)
-
-        response = self.client.get(reverse("biobrain-data"), {"search": self.attempt.rid})
-
-        self.assertEqual(response.status_code, 200)
-        self.assertContains(response, self.attempt.rid)
-        self.assertContains(response, "What is your gender?")
-        self.assertContains(response, "Female")
-        self.assertContains(response, "Data")
-
-    def test_regular_user_cannot_open_biobrain_data(self):
-        self.client.force_login(self.employee)
-
-        self.assertEqual(self.client.get(reverse("biobrain-data")).status_code, 403)
