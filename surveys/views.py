@@ -86,7 +86,7 @@ from .integrations import InnovateMRAPIError, InnovateMRClient
 from .identifiers import is_valid_platform_pid
 from .innovatemr_callbacks import verify_callback_request
 from .models import CanonicalQuestion, ExportJob, ProviderQuestionMapping, Survey, SurveyAttempt, SyncRun
-from .outcomes import provider_outcome
+from .outcomes import provider_outcome, termination_origin
 from .report_pricing import (
     apply_percentage,
     can_view_report_commercials,
@@ -877,7 +877,11 @@ def _project_term_report_queryset(
             "survey__integration__field_mapping",
         })
     if include_status_source:
-        fields.add("status_source")
+        relations.add("survey__integration")
+        fields.update({
+            "status_source", "survey__integration_id", "survey__integration__id",
+            "survey__integration__provider_code",
+        })
 
     return queryset.select_related(None).select_related(*sorted(relations)).only(*sorted(fields))
 
@@ -992,12 +996,14 @@ def termination_reasons_page(request):
         queryset,
         columns=columns,
         include_provider_outcome=include_table_outcome,
+        include_status_source=True,
     )
     paginator = Paginator(queryset.order_by("-callback_at", "-initiated_at"), 20)
     page_obj = paginator.get_page(request.GET.get("page", 1))
     for row in page_obj.object_list:
         row.reason_outcome = provider_outcome(row) if include_table_outcome else {}
         row.reason_status_label = UNSUCCESSFUL_STATUS_LABELS.get(row.status, row.get_status_display())
+        row.termination_origin = termination_origin(row)
 
     if detail_rid:
         if len(detail_rid) != 10 or not detail_rid.isalnum():
@@ -1022,6 +1028,7 @@ def termination_reasons_page(request):
             detail_attempt.reason_status_label = UNSUCCESSFUL_STATUS_LABELS.get(
                 detail_attempt.status, detail_attempt.get_status_display()
             )
+            detail_attempt.termination_origin = termination_origin(detail_attempt)
             detail_outcome = provider_outcome(detail_attempt)
             integration = detail_attempt.survey.integration if detail_attempt.survey.integration_id else None
             provider_code = (integration.provider_code if integration else "innovatemr").lower()
@@ -1118,7 +1125,7 @@ def termination_reasons_export(request):
             ("category", "Term category", 22),
         ])
     if TERM_REASON_STATUS_SOURCE_EXPORT_PERMISSION in codes:
-        extra_status_fields.append(("status_source", "Status source", 20))
+        extra_status_fields.append(("status_source", "Termination location", 24))
     export_fields = []
     for name in ordered_columns:
         export_fields.append(("column", name))
@@ -1209,7 +1216,7 @@ def termination_reasons_export(request):
                     "category": outcome.get("category") or "",
                 })
             if TERM_REASON_STATUS_SOURCE_EXPORT_PERMISSION in codes:
-                status_detail_values["status_source"] = attempt.status_source
+                status_detail_values["status_source"] = termination_origin(attempt)["label"]
             values = []
             for field_type, name in export_fields:
                 if field_type == "column":

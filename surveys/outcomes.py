@@ -3,6 +3,53 @@
 from .rfg_outcomes import describe_rfg_outcome
 
 
+def termination_origin(attempt):
+    """Describe where an unsuccessful journey stopped without exposing raw audit data."""
+
+    source = str(getattr(attempt, "status_source", "") or "").strip().lower()
+    integration = getattr(getattr(attempt, "survey", None), "integration", None)
+    provider = str(getattr(integration, "provider_code", "") or "client").strip()
+    provider_label = provider.replace("_", " ").replace("-", " ").title()
+
+    local_origins = {
+        "local_prescreener": (
+            "Pre-screener ended",
+            "Our pre-screener qualification stopped this journey before the client survey.",
+        ),
+        "local_country_guard": (
+            "Pre-screener ended",
+            "Our pre-screener location check stopped this journey before the client survey.",
+        ),
+        "local_duplicate_ip_guard": (
+            "Pre-screener ended",
+            "Our pre-screener duplicate-IP check stopped this journey before the client survey.",
+        ),
+    }
+    if source in local_origins:
+        label, detail = local_origins[source]
+        return {"label": label, "detail": detail, "location": "prescreener"}
+
+    client_origins = {
+        "browser_callback": "browser return",
+        "innovatemr_signed_redirect": "verified browser return",
+        "innovatemr_transaction": "status API",
+        "rfg_log_reconciliation": "provider reconciliation",
+        "toluna_notification": "provider notification",
+    }
+    if source in client_origins:
+        return {
+            "label": "Client / provider ended",
+            "detail": f"{provider_label} reported this outcome through {client_origins[source]}.",
+            "location": "client",
+        }
+
+    return {
+        "label": "Termination source unavailable",
+        "detail": "The recorded journey does not contain enough audit evidence to identify where it ended.",
+        "location": "unknown",
+    }
+
+
 def _nested_value(payload, path):
     if not path:
         return ""
