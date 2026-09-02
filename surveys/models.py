@@ -579,8 +579,19 @@ class SurveyAttempt(models.Model):
 
     @property
     def loi_started_at(self):
-        """Measure the full respondent journey, including our pre-screener."""
+        """Return the appropriate start of the measured respondent journey.
 
+        Most providers define actual LOI as the complete journey from our
+        entry/pre-screener.  BioBrain/Voqall reports are specifically used to
+        measure the provider-survey portion, so their timer begins only after
+        the respondent is redirected upstream.  This keeps a slow
+        pre-screener submission from inflating BioBrain's actual LOI.
+        """
+
+        integration = getattr(getattr(self, "survey", None), "integration", None)
+        provider_code = str(getattr(integration, "provider_code", "") or "").lower()
+        if provider_code in {"biobrain", "voqall"} and self.redirected_at:
+            return self.redirected_at
         return self.initiated_at
 
     def calculate_loi_seconds(self, ended_at) -> int:
