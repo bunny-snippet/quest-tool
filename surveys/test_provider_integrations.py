@@ -6,6 +6,8 @@ from django.urls import reverse
 from django.utils import timezone
 
 from vendors.models import Client, ClientIntegration
+from prescreener_vault.constants import DATABASE_ALIAS
+from prescreener_vault.models import PrescreenerAnswer, PrescreenerSubmission
 from .integrations import InnovateMRAPIError, InnovateMRClient
 from .models import Survey, SurveyAttempt, TargetingQuestion
 from .survey_flow import build_biobrain_outbound_url
@@ -235,6 +237,8 @@ class BioBrainPrescreenerCompatibilityTests(TestCase):
 
 
 class BioBrainDataPageTests(TestCase):
+    databases = {"default", DATABASE_ALIAS}
+
     def setUp(self):
         self.owner = get_user_model().objects.create_superuser(
             username="biobrain-owner", email="owner@example.test", password="test-password"
@@ -263,12 +267,16 @@ class BioBrainDataPageTests(TestCase):
         self.attempt = SurveyAttempt.objects.create(
             rid="Bi0DataP1g", survey=survey, platform_user=self.employee,
             user_id=str(self.employee.pk), submitted_at=timezone.now(),
-            answers={str(question.pk): {
-                "question_id": question.question_id,
-                "question_text": question.text,
-                "question_category": "BioBrain targeting",
-                "values": ["2"],
-            }},
+        )
+        submission = PrescreenerSubmission.objects.using(DATABASE_ALIAS).create(
+            uid="Biob-rain-Data-Test", rid=self.attempt.rid,
+            source_client_code=client.code, submitted_at=self.attempt.submitted_at,
+            raw_answers={"stored_only_in_vault": True}, answer_count=1,
+        )
+        PrescreenerAnswer.objects.using(DATABASE_ALIAS).create(
+            submission=submission, position=1, question_id=str(question.question_id),
+            question_text=question.text, question_category="BioBrain targeting",
+            answer_values=["2"], answer_labels=["Female"],
         )
 
     def test_super_admin_can_view_filled_biobrain_answers(self):

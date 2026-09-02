@@ -58,7 +58,7 @@ from vendors.services import (
     scope_surveys_for_user,
 )
 from vendors.access import is_external_vendor_scope, vendor_scope_user_id
-from vendors.models import VerisoulAssessment, VendorAPIKey
+from vendors.models import ClientIntegration, VerisoulAssessment, VendorAPIKey
 from vendors.security import decode_delivery_token
 from vendors.verisoul import (
     VerisoulError,
@@ -715,50 +715,21 @@ def prescreener_data_export(request):
     )
 
 
-def _biobrain_answer_rows(attempt):
-    """Prepare a human-readable, read-only answer audit for one journey."""
-
-    questions = {
-        str(question.pk): question
-        for question in attempt.survey.targeting_questions.all()
-    }
-    rows = []
-    for position, (record_id, payload) in enumerate((attempt.answers or {}).items(), start=1):
-        payload = payload if isinstance(payload, dict) else {}
-        question = questions.get(str(record_id))
-        option_labels = {}
-        for option in (question.options if question else []) or []:
-            if not isinstance(option, dict):
-                continue
-            label = str(option.get("OptionText") or option.get("OptionId") or "").strip()
-            for key in ("OptionId", "OptionCode", "OptionValue", "Value"):
-                value = option.get(key)
-                if value not in (None, "") and label:
-                    option_labels[str(value)] = label
-        values = [str(value) for value in payload.get("values") or []]
-        labels = [option_labels.get(value, value) for value in values]
-        rows.append({
-            "position": position,
-            "question": str(payload.get("question_text") or getattr(question, "text", "") or "Question"),
-            "category": str(payload.get("question_category") or getattr(question, "category", "") or "Prescreener"),
-            "answer": ", ".join(labels) if labels else "No answer captured",
-        })
-    return rows
-
-
 @function_permission_required("biobrain_data.view")
 def biobrain_data_page(request):
     """Super Admin audit trail for BioBrain/Voqall pre-screener submissions."""
 
     search = (request.GET.get("search") or "").strip()
-    queryset = SurveyAttempt.objects.filter(
-        survey__integration__provider_code__in=("biobrain", "voqall"),
-        submitted_at__isnull=False,
-    ).exclude(answers={}).select_related(
-        "survey", "survey__integration", "platform_user"
-    ).prefetch_related("survey__targeting_questions")
+    client_codes = list(ClientIntegration.objects.filter(
+        provider_code__in=("biobrain", "voqall")
+    ).values_list("client__code", flat=True).distinct())
+    queryset = PrescreenerSubmission.objects.using("prescreener_vault").filter(
+        source_client_code__in=client_codes,
+    ).prefetch_related("question_answers")
     if search:
-        queryset = queryset.filter(
+        matching_rids = list(SurveyAttempt.objects.filter(
+            survey__integration__provider_code__in=("biobrain", "voqall"),
+        ).filter(
             Q(rid__icontains=search)
             | Q(pid__icontains=search)
             | Q(prescreener_uid__icontains=search)
@@ -768,12 +739,24 @@ def biobrain_data_page(request):
             | Q(platform_user__first_name__icontains=search)
             | Q(platform_user__last_name__icontains=search)
             | Q(platform_user__email__icontains=search)
+        ).values_list("rid", flat=True))
+        queryset = queryset.filter(
+            Q(rid__icontains=search)
+            | Q(uid__icontains=search)
+            | Q(rid__in=matching_rids)
         )
-    page_obj = Paginator(queryset.order_by("-submitted_at", "-id"), 25).get_page(
+    page_obj = Paginator(queryset.order_by("-submitted_at", "-uid"), 25).get_page(
         request.GET.get("page", 1)
     )
-    for attempt in page_obj.object_list:
-        attempt.display_answers = _biobrain_answer_rows(attempt)
+    attempts_by_rid = {
+        attempt.rid: attempt
+        for attempt in SurveyAttempt.objects.filter(
+            rid__in=[submission.rid for submission in page_obj.object_list],
+            survey__integration__provider_code__in=("biobrain", "voqall"),
+        ).select_related("survey", "platform_user")
+    }
+    for submission in page_obj.object_list:
+        submission.attempt = attempts_by_rid.get(submission.rid)
 
     page_params = request.GET.copy()
     page_params.pop("page", None)
