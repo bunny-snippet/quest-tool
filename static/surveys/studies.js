@@ -39,7 +39,12 @@
     cancel: byId('cancelFinalIdImport'), form: byId('finalIdImportForm'),
     error: byId('finalIdImportError'), submit: byId('submitFinalIdImport'),
   };
-  document.querySelector('.studies-table').style.minWidth = `${Math.max(980, columnCount * 96)}px`;
+  // Keep every permitted column in the desktop table.  The wrapper scrolls
+  // horizontally when the viewport is narrower than the complete column set.
+  document.querySelector('.studies-table').style.setProperty(
+    '--studies-table-min-width',
+    `${Math.max(1560, columnCount * 132)}px`,
+  );
 
   const responsiveLayout = window.matchMedia('(max-width: 900px)');
   const state = {
