@@ -606,6 +606,42 @@ def user_dashboard_page(request):
     })
 
 
+@function_permission_required("user_dashboard.view")
+def user_dashboard_export(request):
+    """Export every employee row matching the current dashboard filters."""
+
+    try:
+        payload = build_user_dashboard_payload(request.user, request.GET)
+    except ValueError as exc:
+        return JsonResponse({"detail": str(exc)}, status=400)
+
+    period_label = payload["period"]["label"]
+    headers = [
+        "Employee", "Email", "Username", "Employee ID", "Branch", "Sub-branch",
+        "Completes", "Accepted", "Rejected", "Pending", "Accepted %", "Rejected %",
+        "Pending %", "Reviewed %", "Period",
+    ]
+
+    def rows():
+        for row in payload["rows"]:
+            yield [
+                row.get("user_name", ""), row.get("user_email", ""), row.get("username", ""),
+                row.get("employee_id", ""), row.get("branch", ""), row.get("sub_branch", ""),
+                row.get("completes", 0), row.get("accepted", 0), row.get("rejected", 0),
+                row.get("pending", 0), row.get("acceptance_rate", 0), row.get("rejection_rate", 0),
+                row.get("pending_rate", 0), row.get("reviewed_rate", 0), period_label,
+            ]
+
+    local_now = timezone.localtime()
+    return build_excel_response(
+        f"user-dashboard-{local_now:%Y%m%d-%H%M%S}-IST.xlsx",
+        [ExcelSheet(
+            "User Performance", headers, rows(),
+            [24, 30, 22, 18, 22, 24, 12, 12, 12, 12, 14, 14, 14, 14, 30],
+        )],
+    )
+
+
 @function_permission_required("prescreener_data.view")
 def prescreener_data_page(request):
     """Read-only, permission-scoped Panelist Data browser for the isolated vault."""
@@ -1324,6 +1360,7 @@ EXPORT_JOB_PERMISSION = {
     ExportJob.Kind.TRAFFIC: "attempts.export",
     ExportJob.Kind.TERMS: "termination_reasons.export",
     ExportJob.Kind.PANELIST: "prescreener_data.export",
+    ExportJob.Kind.USER_DASHBOARD: "user_dashboard.view",
 }
 
 

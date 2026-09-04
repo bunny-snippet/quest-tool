@@ -8,6 +8,7 @@
     <h1>User Dashboard</h1>
     <p>Monthly employee completes and their latest client acceptance status.</p>
   </div>
+  <button class="primary-button export-button" id="exportUserDashboard" type="button"><span aria-hidden="true">↓</span> Export</button>
 </section>
 
 <section class="user-performance-overview" aria-label="Filtered user performance totals">
@@ -118,4 +119,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/user_dashboard.js' %}?v=3" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/user_dashboard.js' %}?v=4" defer></script>{% endblock %}

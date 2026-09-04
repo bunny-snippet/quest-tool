@@ -168,6 +168,30 @@ class UserDashboardTests(TestCase):
         self.assertContains(page, "data-user-dashboard-filter=\"client\"")
         self.assertContains(page, "data-user-dashboard-filter=\"final_status\"")
         self.assertNotContains(page, "userDashboardShift")
+        self.assertContains(page, 'id="exportUserDashboard"')
+
+    def test_filtered_dashboard_export_builds_an_excel_workbook(self):
+        self.client.force_login(self.admin)
+        response = self.client.get(reverse("user-dashboard-export"), {
+            "user": self.employee.pk,
+            "client": self.client_record.pk,
+            "country": "US",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("user-dashboard-", response["Content-Disposition"])
+        self.assertIn(".xlsx", response["Content-Disposition"])
+        self.assertIsNotNone(getattr(response, "_export_workbook", None))
+
+    def test_user_dashboard_export_can_be_queued(self):
+        self.client.force_login(self.admin)
+        response = self.client.post(
+            reverse("export-job-create", kwargs={"kind": "user_dashboard"}),
+            {"user": self.employee.pk},
+        )
+
+        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.json()["status"], "queued")
 
     def test_client_country_buyer_and_final_status_filters_are_applied(self):
         api = APIClient()

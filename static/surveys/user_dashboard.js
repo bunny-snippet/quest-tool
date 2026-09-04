@@ -14,6 +14,7 @@
     pageInput: $('#userDashboardPageInput'), totalPages: $('#userDashboardTotalPages'),
     first: $('#userDashboardFirstPage'), prev: $('#userDashboardPrevPage'),
     next: $('#userDashboardNextPage'), last: $('#userDashboardLastPage'), clear: $('#clearUserDashboardFilters'),
+    export: $('#exportUserDashboard'),
   };
   const defaults = {
     dateField: elements.dateField.value,
@@ -226,6 +227,19 @@
   elements.next.addEventListener('click', () => load(currentPage + 1));
   elements.last.addEventListener('click', () => load(totalPages));
   elements.pageInput.addEventListener('change', () => load(Math.min(totalPages, Math.max(1, Number(elements.pageInput.value) || 1))));
+  elements.export?.addEventListener('click', () => {
+    const params = query(1);
+    params.delete('page');
+    params.delete('page_size');
+    elements.export.disabled = true;
+    elements.export.classList.add('exporting');
+    window.ExportQueue.enqueue('user_dashboard', params.toString())
+      .catch((error) => window.alert(error.message || 'Could not queue User Dashboard export.'))
+      .finally(() => {
+        elements.export.disabled = false;
+        elements.export.classList.remove('exporting');
+      });
+  });
   elements.clear.addEventListener('click', () => {
     elements.search.value = '';
     elements.dateField.value = defaults.dateField;

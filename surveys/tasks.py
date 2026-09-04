@@ -58,6 +58,7 @@ def _queued_export_response(job):
         SurveyViewSet,
         prescreener_data_export,
         termination_reasons_export,
+        user_dashboard_export,
     )
 
     query = {str(key): [str(item) for item in values] for key, values in (job.query or {}).items()}
@@ -74,6 +75,12 @@ def _queued_export_response(job):
         )
         request.user = job.requested_by
         return termination_reasons_export(request)
+    if job.kind == ExportJob.Kind.USER_DASHBOARD:
+        request = RequestFactory().get(
+            "/user-dashboard/export/", data=query, HTTP_HOST=request_host,
+        )
+        request.user = job.requested_by
+        return user_dashboard_export(request)
     factory = APIRequestFactory()
     if job.kind == ExportJob.Kind.PROJECTS:
         request = factory.get(

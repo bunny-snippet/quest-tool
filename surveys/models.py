@@ -884,6 +884,7 @@ class ExportJob(models.Model):
         TRAFFIC = "traffic", "Traffic reports"
         TERMS = "terms", "Term reports"
         PANELIST = "panelist", "Panelist data"
+        USER_DASHBOARD = "user_dashboard", "User dashboard"
 
     class Status(models.TextChoices):
         QUEUED = "queued", "Queued"
