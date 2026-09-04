@@ -2,7 +2,6 @@
 
 from dataclasses import dataclass
 from decimal import Decimal, InvalidOperation
-import math
 
 import requests
 from django.conf import settings
@@ -52,9 +51,6 @@ def validate_verisoul_configuration() -> None:
     verisoul_sdk_url()
     if not settings.VERISOUL_PROJECT_ID or not settings.VERISOUL_API_KEY:
         raise VerisoulError("Verisoul credentials are not configured.")
-    threshold = float(settings.VERISOUL_ACCOUNT_SCORE_THRESHOLD)
-    if not math.isfinite(threshold) or threshold < 0 or threshold > 1:
-        raise VerisoulError("Verisoul account-score threshold must be between 0 and 1.")
 
 
 def effective_verisoul_policy(attempt) -> EffectiveVerisoulPolicy:
@@ -187,14 +183,14 @@ def authenticate_verisoul_session(*, session_id: str, attempt) -> VerisoulDecisi
 
     decision = str(payload.get("decision") or "").strip()
     score = _decimal_score(payload.get("account_score"))
-    threshold = Decimal(str(settings.VERISOUL_ACCOUNT_SCORE_THRESHOLD))
-    passed = decision.lower() == "real" and score < threshold
+    # Verisoul owns the Real/Fake decision.  The account score is retained for
+    # audit and reporting only; applying another local cut-off can contradict
+    # the provider's decision and incorrectly stop a respondent marked Real.
+    passed = decision.lower() == "real"
     if decision.lower() != "real":
         reason = f"Verisoul classified the session as {decision or 'unknown'}."
-    elif score >= threshold:
-        reason = f"Verisoul account score {score} met or exceeded the allowed threshold {threshold}."
     else:
-        reason = "Verisoul classified the session as real within the allowed risk threshold."
+        reason = "Verisoul classified the session as real."
 
     return VerisoulDecision(
         passed=passed,

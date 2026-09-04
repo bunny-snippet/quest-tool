@@ -27,7 +27,6 @@ from .verisoul import (
     VERISOUL_ENV="sandbox",
     VERISOUL_PROJECT_ID="project-test",
     VERISOUL_API_KEY="private-test-key",
-    VERISOUL_ACCOUNT_SCORE_THRESHOLD=Decimal("0.70"),
 )
 class VerisoulPolicyTests(TestCase):
     def setUp(self):
@@ -163,10 +162,10 @@ class VerisoulPolicyTests(TestCase):
         self.assertEqual(sibling.scope, "client")
 
     @patch("vendors.verisoul.requests.post")
-    def test_only_real_below_threshold_passes(self, post):
+    def test_real_decision_passes_and_preserves_score(self, post):
         response = Mock(status_code=200)
         response.json.return_value = {
-            "decision": "Real", "account_score": 0.69,
+            "decision": "Real", "account_score": 0.99,
             "request_id": "request-1", "project_id": "project-test", "session": {},
         }
         post.return_value = response
@@ -174,6 +173,8 @@ class VerisoulPolicyTests(TestCase):
         result = authenticate_verisoul_session(session_id="session-1", attempt=self.attempt)
 
         self.assertTrue(result.passed)
+        self.assertEqual(result.account_score, Decimal("0.99"))
+        self.assertEqual(result.reason, "Verisoul classified the session as real.")
         self.assertEqual(post.call_args.kwargs["headers"]["x-api-key"], "private-test-key")
         self.assertNotIn("private-test-key", str(post.call_args.kwargs["json"]))
         self.assertEqual(
@@ -192,10 +193,10 @@ class VerisoulPolicyTests(TestCase):
         )
 
     @patch("vendors.verisoul.requests.post")
-    def test_threshold_boundary_fails_closed(self, post):
+    def test_non_real_decision_fails_even_with_a_low_score(self, post):
         response = Mock(status_code=200)
         response.json.return_value = {
-            "decision": "Real", "account_score": 0.70,
+            "decision": "Fake", "account_score": 0.01,
             "request_id": "request-2", "project_id": "project-test", "session": {},
         }
         post.return_value = response
@@ -203,6 +204,7 @@ class VerisoulPolicyTests(TestCase):
         result = authenticate_verisoul_session(session_id="session-2", attempt=self.attempt)
 
         self.assertFalse(result.passed)
+        self.assertEqual(result.reason, "Verisoul classified the session as Fake.")
 
     @patch("vendors.verisoul.requests.post")
     def test_provider_error_keeps_safe_diagnostic_message(self, post):
