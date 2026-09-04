@@ -128,8 +128,36 @@ def _report_datetime(value: str, label: str):
     return parsed
 
 
-def _selected_period(params) -> tuple[int, int, datetime, datetime, str, str]:
+def _selected_period(params) -> tuple[int | None, int | None, datetime | None, datetime | None, str, str]:
     local_today = timezone.localdate()
+    date_field = str(params.get("date_field") or "initiated").strip().lower()
+    if date_field not in {"initiated", "callback"}:
+        raise ValueError("Date column must be entry date or exit date.")
+
+    from_value = str(params.get("from_datetime") or "").strip()
+    to_value = str(params.get("to_datetime") or "").strip()
+    legacy_month_filter = "month" in params or "year" in params
+    if not from_value and not to_value and not legacy_month_filter:
+        return None, None, None, None, date_field, "Overall"
+
+    if from_value or to_value:
+        lower = _report_datetime(from_value, "From date and time") if from_value else None
+        upper = _report_datetime(to_value, "To date and time") if to_value else None
+        if lower and upper and lower > upper:
+            raise ValueError("From date and time cannot be after To date and time.")
+        anchor = lower or upper
+        label = "Overall"
+        if lower and upper:
+            label = (
+                f"{timezone.localtime(lower).strftime('%d %b %Y, %I:%M %p')} – "
+                f"{timezone.localtime(upper).strftime('%d %b %Y, %I:%M %p')}"
+            )
+        elif lower:
+            label = f"From {timezone.localtime(lower).strftime('%d %b %Y, %I:%M %p')}"
+        elif upper:
+            label = f"Until {timezone.localtime(upper).strftime('%d %b %Y, %I:%M %p')}"
+        return anchor.year, anchor.month, lower, upper, date_field, label
+
     try:
         year = int(params.get("year") or local_today.year)
         month = int(params.get("month") or local_today.month)
@@ -144,20 +172,8 @@ def _selected_period(params) -> tuple[int, int, datetime, datetime, str, str]:
     current_timezone = timezone.get_current_timezone()
     lower = timezone.make_aware(datetime(year, month, 1), current_timezone)
     upper = timezone.make_aware(datetime(next_year, next_month, 1), current_timezone)
-    date_field = str(params.get("date_field") or "initiated").strip().lower()
-    if date_field not in {"initiated", "callback"}:
-        raise ValueError("Date column must be entry date or exit date.")
-    if params.get("from_datetime"):
-        lower = _report_datetime(params.get("from_datetime"), "From date and time")
-    if params.get("to_datetime"):
-        upper = _report_datetime(params.get("to_datetime"), "To date and time")
-    else:
-        # The legacy month/year API treated the next month boundary as
-        # exclusive. Preserve that contract while exact date-time controls
-        # remain inclusive.
-        upper -= timedelta(microseconds=1)
-    if lower > upper:
-        raise ValueError("From date and time cannot be after To date and time.")
+    # Legacy month/year consumers receive the complete calendar month.
+    upper -= timedelta(microseconds=1)
     local_lower = timezone.localtime(lower)
     local_upper = timezone.localtime(upper)
     label = (
@@ -286,10 +302,12 @@ def build_user_dashboard_payload(user, params) -> dict:
             bucket["accepted"] += aggregate["accepted"]
             bucket["rejected"] += aggregate["rejected"]
 
-    timestamp_filter = {
-        f"{'initiated_at' if date_field == 'initiated' else 'callback_at'}__gte": lower,
-        f"{'initiated_at' if date_field == 'initiated' else 'callback_at'}__lte": upper,
-    }
+    timestamp_field = "initiated_at" if date_field == "initiated" else "callback_at"
+    timestamp_filter = {}
+    if lower is not None:
+        timestamp_filter[f"{timestamp_field}__gte"] = lower
+    if upper is not None:
+        timestamp_filter[f"{timestamp_field}__lte"] = upper
     current_attempts = SurveyAttempt.objects.filter(
         platform_user_id__in=visible_ids,
         status=SurveyAttempt.Status.COMPLETED,

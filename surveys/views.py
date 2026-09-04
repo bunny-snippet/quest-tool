@@ -585,9 +585,7 @@ def user_hits_page(request):
 
 @function_permission_required("user_dashboard.view")
 def user_dashboard_page(request):
-    local_now = timezone.localtime().replace(second=0, microsecond=0)
-    local_today = local_now.date()
-    month_start = local_now.replace(day=1, hour=0, minute=0)
+    local_today = timezone.localdate()
     filter_options = cached_user_metadata(
         "user-dashboard-filters-v2",
         request.user,
@@ -597,8 +595,8 @@ def user_dashboard_page(request):
         "active_page": "user-dashboard",
         "selected_month": local_today.month,
         "selected_year": local_today.year,
-        "selected_from_datetime": month_start.strftime("%Y-%m-%dT%H:%M"),
-        "selected_to_datetime": local_now.strftime("%Y-%m-%dT%H:%M"),
+        "selected_from_datetime": "",
+        "selected_to_datetime": "",
         "month_options": [
             {"value": month, "label": date(2000, month, 1).strftime("%B")}
             for month in range(1, 13)

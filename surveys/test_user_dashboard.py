@@ -128,6 +128,24 @@ class UserDashboardTests(TestCase):
         self.assertEqual(row["pending_rate"], 33.3)
         self.assertEqual(row["reviewed_rate"], 66.7)
 
+    def test_dashboard_defaults_to_overall_instead_of_partial_current_month(self):
+        older = timezone.now().replace(year=timezone.now().year - 1)
+        SurveyAttempt.objects.create(
+            rid="OlderRID01",
+            survey=self.survey,
+            platform_user=self.employee,
+            user_id=str(self.employee.pk),
+            status=SurveyAttempt.Status.COMPLETED,
+            initiated_at=older,
+        )
+        api = APIClient()
+        api.force_authenticate(self.admin)
+        response = api.get(reverse("user-dashboard-api"), {"user": self.employee.pk})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["period"]["label"], "Overall")
+        self.assertEqual(response.data["results"][0]["completes"], 4)
+
     def test_hierarchy_filter_and_page_are_available_to_super_admin(self):
         api = APIClient()
         api.force_authenticate(self.admin)

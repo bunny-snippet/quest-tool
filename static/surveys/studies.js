@@ -409,8 +409,6 @@
       cells.push(`<td class="study-col-project"><div class="study-id-stack"><strong class="study-project-id" title="${escapeAttr(attempt.survey_local_id)}">${escapeHtml(attempt.survey_local_id)}</strong>${canViewClientName ? `<small class="study-secondary" title="${escapeAttr(clientName)}">${escapeHtml(clientName)}</small>` : ''}</div></td>`);
     }
     if (columns.has('survey_id')) cells.push(`<td class="study-col-survey"><div class="study-id-stack"><strong class="study-survey-id" title="${escapeAttr(attempt.survey_source_id)}">${escapeHtml(attempt.survey_source_id)}</strong><small class="study-secondary" title="${escapeAttr(attempt.buyer_id ? `Buyer ${attempt.buyer_id}` : 'Buyer ID unavailable')}">${attempt.buyer_id ? `Buyer ${escapeHtml(attempt.buyer_id)}` : 'Buyer ID unavailable'}</small></div></td>`);
-    if (columns.has('status')) cells.push(`<td class="study-col-status">${statusPill(attempt)}</td>`);
-    if (columns.has('final_status')) cells.push(`<td class="study-col-final-status">${finalStatusPill(attempt)}</td>`);
     if (columns.has('country')) cells.push(`<td class="study-col-country"><span class="study-country"><b>${escapeHtml(attempt.country_code || '—')}</b><small>${escapeHtml(attempt.country || attempt.country_code || 'Unknown')}</small></span></td>`);
     if (columns.has('cpi')) cells.push(`<td class="study-col-cpi"><span class="study-cpi"><b>${attempt.source_cpi_snapshot == null ? '—' : formatMoney(attempt.source_cpi_snapshot, attempt.cpi_currency_snapshot || 'USD')}</b><small>${attempt.cpi_snapshot_source === 'legacy_survey' ? 'Legacy recovered' : 'At hit time'}</small></span></td>`);
     if (columns.has('respondent_id')) {
@@ -422,6 +420,8 @@
     if (columns.has('device')) cells.push(`<td class="study-col-device">${deviceBadge(attempt)}</td>`);
     if (columns.has('ip')) cells.push(`<td class="study-col-ip">${ipPair(attempt)}</td>`);
     if (columns.has('loi')) cells.push(`<td class="study-col-loi"><strong class="study-loi">${formatLoi(attempt.loi_seconds)}</strong><small class="study-secondary">${attempt.loi_seconds == null ? 'Awaiting callback' : 'Actual duration'}</small></td>`);
+    if (columns.has('status')) cells.push(`<td class="study-col-status">${statusPill(attempt)}</td>`);
+    if (columns.has('final_status')) cells.push(`<td class="study-col-final-status">${finalStatusPill(attempt)}</td>`);
     if (columns.has('start')) cells.push(`<td class="study-col-start">${timestampCell(attempt.initiated_at)}</td>`);
     if (columns.has('end')) cells.push(`<td class="study-col-end">${timestampCell(endTimestamp(attempt))}</td>`);
     return `<tr>${cells.length ? cells.join('') : '<td><div class="column-denied">No Traffic Report columns are assigned to your account.</div></td>'}</tr>`;
