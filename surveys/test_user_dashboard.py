@@ -58,6 +58,9 @@ class UserDashboardTests(TestCase):
             source_id=9001,
             source_key="9001",
             company_name="Performance Client",
+            country_code="US",
+            country="United States",
+            buyer_id="buyer-9001",
         )
         now = timezone.now()
         self.attempts = []
@@ -143,6 +146,29 @@ class UserDashboardTests(TestCase):
         self.assertContains(page, "User Dashboard")
         self.assertContains(page, "user_dashboard.js")
         self.assertContains(page, "Quantish Noida")
+        self.assertContains(page, "userDashboardFromDateTime")
+        self.assertContains(page, "data-user-dashboard-filter=\"client\"")
+        self.assertContains(page, "data-user-dashboard-filter=\"final_status\"")
+        self.assertNotContains(page, "userDashboardShift")
+
+    def test_client_country_buyer_and_final_status_filters_are_applied(self):
+        api = APIClient()
+        api.force_authenticate(self.admin)
+        today = timezone.localdate()
+        response = api.get(reverse("user-dashboard-api"), {
+            "month": today.month,
+            "year": today.year,
+            "client": self.client_record.pk,
+            "country": "US",
+            "buyer_id": "buyer-9001",
+            "final_status": "accepted",
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.data["count"], 1)
+        self.assertEqual(response.data["results"][0]["completes"], 1)
+        self.assertEqual(response.data["results"][0]["accepted"], 1)
+        self.assertEqual(response.data["results"][0]["rejected"], 0)
 
     def test_employee_without_permission_cannot_open_dashboard(self):
         api = APIClient()

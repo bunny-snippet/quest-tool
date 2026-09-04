@@ -7,14 +7,19 @@
   const filters = [...document.querySelectorAll('[data-user-dashboard-filter]')];
   const filterByName = (name) => filters.find((item) => item.dataset.userDashboardFilter === name);
   const elements = {
-    search: $('#userDashboardSearch'), month: $('#userDashboardMonth'), year: $('#userDashboardYear'),
+    search: $('#userDashboardSearch'), dateField: $('#userDashboardDateField'),
+    fromDateTime: $('#userDashboardFromDateTime'), toDateTime: $('#userDashboardToDateTime'),
     pageSize: $('#userDashboardPageSize'), rows: $('#userDashboardRows'), cards: $('#userDashboardCards'),
     summary: $('#userDashboardSummary'), pageStatus: $('#userDashboardPageStatus'),
     pageInput: $('#userDashboardPageInput'), totalPages: $('#userDashboardTotalPages'),
     first: $('#userDashboardFirstPage'), prev: $('#userDashboardPrevPage'),
     next: $('#userDashboardNextPage'), last: $('#userDashboardLastPage'), clear: $('#clearUserDashboardFilters'),
   };
-  const defaults = { month: elements.month.value, year: elements.year.value };
+  const defaults = {
+    dateField: elements.dateField.value,
+    fromDateTime: elements.fromDateTime.value,
+    toDateTime: elements.toDateTime.value,
+  };
   let currentPage = 1;
   let totalPages = 1;
   let requestController = null;
@@ -31,7 +36,9 @@
   function updateTrigger(container) {
     const values = selectedValues(container);
     const fallback = {
-      branch: 'All branches', sub_branch: 'All sub-branches', shift: 'All shifts', user: 'All users',
+      branch: 'All branches', sub_branch: 'All sub-branches', user: 'All users',
+      supplier: 'All suppliers', country: 'All countries', client: 'All clients',
+      buyer_id: 'All buyer IDs', final_status: 'All final statuses',
     }[container.dataset.userDashboardFilter];
     const label = container.querySelector('.multi-trigger span');
     if (!values.length) label.textContent = fallback;
@@ -72,15 +79,13 @@
       !branches.size || branches.has(option.dataset.branchValue || '')
     ));
     const subBranches = new Set(selectedValues(filterByName('sub_branch')));
-    setHierarchyVisibility(filterByName('shift'), (option) => (
-      (!branches.size || branches.has(option.dataset.branchValue || ''))
-      && (!subBranches.size || subBranches.has(option.dataset.subBranchValue || ''))
-    ));
-    const shifts = new Set(selectedValues(filterByName('shift')));
     setHierarchyVisibility(filterByName('user'), (option) => (
       (!branches.size || branches.has(option.dataset.branchValue || ''))
       && (!subBranches.size || subBranches.has(option.dataset.subBranchValue || ''))
-      && (!shifts.size || shifts.has(option.dataset.shiftValue || ''))
+    ));
+    const clients = new Set(selectedValues(filterByName('client')));
+    setHierarchyVisibility(filterByName('buyer_id'), (option) => (
+      !clients.size || clients.has(option.dataset.clientId || '')
     ));
   }
 
@@ -108,7 +113,7 @@
     container.addEventListener('change', (event) => {
       if (!event.target.matches('input[type="checkbox"]')) return;
       updateTrigger(container);
-      if (['branch', 'sub_branch', 'shift'].includes(container.dataset.userDashboardFilter)) {
+      if (['branch', 'sub_branch', 'client'].includes(container.dataset.userDashboardFilter)) {
         updateHierarchyOptions();
       }
       load(1);
@@ -120,8 +125,10 @@
   function query(page) {
     const params = new URLSearchParams({
       page: String(page), page_size: elements.pageSize.value,
-      month: elements.month.value, year: elements.year.value,
+      date_field: elements.dateField.value,
     });
+    if (elements.fromDateTime.value) params.set('from_datetime', elements.fromDateTime.value);
+    if (elements.toDateTime.value) params.set('to_datetime', elements.toDateTime.value);
     if (elements.search.value.trim()) params.set('search', elements.search.value.trim());
     filters.forEach((container) => {
       const values = selectedValues(container);
@@ -141,13 +148,13 @@
 
   function renderRows(rows) {
     if (!rows.length) {
-      elements.rows.innerHTML = '<tr><td colspan="9"><div class="empty-state">No employees match these filters.</div></td></tr>';
+      elements.rows.innerHTML = '<tr><td colspan="8"><div class="empty-state">No employees match these filters.</div></td></tr>';
       elements.cards.innerHTML = '<div class="empty-state">No employees match these filters.</div>';
       return;
     }
     elements.rows.innerHTML = rows.map((row) => `<tr>
       <td><div class="user-performance-person"><strong>${escapeHtml(row.user_name)}</strong><small>${escapeHtml(row.user_email || row.username || '—')}</small></div></td>
-      <td>${escapeHtml(row.branch || '—')}</td><td>${escapeHtml(row.sub_branch || '—')}</td><td>${escapeHtml(row.shift || '—')}</td>
+      <td>${escapeHtml(row.branch || '—')}</td><td>${escapeHtml(row.sub_branch || '—')}</td>
       <td><strong class="user-performance-count">${number(row.completes)}</strong></td>
       <td><span class="user-performance-status accepted">${number(row.accepted)}</span></td>
       <td><span class="user-performance-status rejected">${number(row.rejected)}</span></td>
@@ -155,7 +162,7 @@
       <td>${performanceCell(row)}</td>
     </tr>`).join('');
     elements.cards.innerHTML = rows.map((row) => `<article class="survey-card user-performance-card">
-      <header><div><small>${escapeHtml([row.branch, row.sub_branch, row.shift].filter(Boolean).join(' / ') || 'No hierarchy')}</small><h3>${escapeHtml(row.user_name)}</h3><p>${escapeHtml(row.user_email || row.username || '')}</p></div>${performanceCell(row)}</header>
+      <header><div><small>${escapeHtml([row.branch, row.sub_branch].filter(Boolean).join(' / ') || 'No hierarchy')}</small><h3>${escapeHtml(row.user_name)}</h3><p>${escapeHtml(row.user_email || row.username || '')}</p></div>${performanceCell(row)}</header>
       <div class="user-performance-card-counts"><span><small>Completes</small><strong>${number(row.completes)}</strong></span><span class="accepted"><small>Accepted</small><strong>${number(row.accepted)}</strong></span><span class="rejected"><small>Rejected</small><strong>${number(row.rejected)}</strong></span><span class="pending"><small>Pending</small><strong>${number(row.pending)}</strong></span></div>
     </article>`).join('');
   }
@@ -187,7 +194,7 @@
     currentPage = Math.max(1, page);
     if (requestController) requestController.abort();
     requestController = new AbortController();
-    elements.rows.innerHTML = '<tr><td colspan="9"><div class="table-loader"><i></i><span>Building user performance…</span></div></td></tr>';
+    elements.rows.innerHTML = '<tr><td colspan="8"><div class="table-loader"><i></i><span>Building user performance…</span></div></td></tr>';
     try {
       const response = await fetch(`${panel.dataset.apiUrl}?${query(currentPage)}`, {
         credentials: 'same-origin', signal: requestController.signal,
@@ -200,7 +207,7 @@
       updatePagination(payload.count || 0);
     } catch (error) {
       if (error.name === 'AbortError') return;
-      elements.rows.innerHTML = `<tr><td colspan="9"><div class="empty-state error">${escapeHtml(error.message)}</div></td></tr>`;
+      elements.rows.innerHTML = `<tr><td colspan="8"><div class="empty-state error">${escapeHtml(error.message)}</div></td></tr>`;
       elements.cards.innerHTML = '';
       elements.summary.textContent = error.message;
     }
@@ -210,8 +217,9 @@
     clearTimeout(searchTimer);
     searchTimer = setTimeout(() => load(1), 280);
   });
-  elements.month.addEventListener('change', () => load(1));
-  elements.year.addEventListener('change', () => load(1));
+  elements.dateField.addEventListener('change', () => load(1));
+  elements.fromDateTime.addEventListener('change', () => load(1));
+  elements.toDateTime.addEventListener('change', () => load(1));
   elements.pageSize.addEventListener('change', () => load(1));
   elements.first.addEventListener('click', () => load(1));
   elements.prev.addEventListener('click', () => load(currentPage - 1));
@@ -220,8 +228,9 @@
   elements.pageInput.addEventListener('change', () => load(Math.min(totalPages, Math.max(1, Number(elements.pageInput.value) || 1))));
   elements.clear.addEventListener('click', () => {
     elements.search.value = '';
-    elements.month.value = defaults.month;
-    elements.year.value = defaults.year;
+    elements.dateField.value = defaults.dateField;
+    elements.fromDateTime.value = defaults.fromDateTime;
+    elements.toDateTime.value = defaults.toDateTime;
     filters.forEach((container) => {
       container.querySelectorAll('input[type="checkbox"]:checked').forEach((input) => { input.checked = false; });
       const search = container.querySelector('[data-multi-search]');

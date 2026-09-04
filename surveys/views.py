@@ -585,9 +585,11 @@ def user_hits_page(request):
 
 @function_permission_required("user_dashboard.view")
 def user_dashboard_page(request):
-    local_today = timezone.localdate()
+    local_now = timezone.localtime().replace(second=0, microsecond=0)
+    local_today = local_now.date()
+    month_start = local_now.replace(day=1, hour=0, minute=0)
     filter_options = cached_user_metadata(
-        "user-dashboard-filters-v1",
+        "user-dashboard-filters-v2",
         request.user,
         lambda: user_dashboard_filter_options(request.user),
     )
@@ -595,6 +597,8 @@ def user_dashboard_page(request):
         "active_page": "user-dashboard",
         "selected_month": local_today.month,
         "selected_year": local_today.year,
+        "selected_from_datetime": month_start.strftime("%Y-%m-%dT%H:%M"),
+        "selected_to_datetime": local_now.strftime("%Y-%m-%dT%H:%M"),
         "month_options": [
             {"value": month, "label": date(2000, month, 1).strftime("%B")}
             for month in range(1, 13)
@@ -4799,7 +4803,14 @@ class UserDashboardAPIView(APIView):
             OpenApiParameter("user", OpenApiTypes.STR, description="Comma-separated platform user IDs."),
             OpenApiParameter("branch", OpenApiTypes.STR, description="Comma-separated branch IDs or labels."),
             OpenApiParameter("sub_branch", OpenApiTypes.STR, description="Comma-separated sub-branch IDs or labels."),
-            OpenApiParameter("shift", OpenApiTypes.STR, description="Comma-separated shift IDs or labels."),
+            OpenApiParameter("supplier", OpenApiTypes.STR, description="Comma-separated external supplier user IDs."),
+            OpenApiParameter("country", OpenApiTypes.STR, description="Comma-separated survey country codes."),
+            OpenApiParameter("client", OpenApiTypes.STR, description="Comma-separated internal client IDs."),
+            OpenApiParameter("buyer_id", OpenApiTypes.STR, description="Comma-separated buyer/sub-client IDs."),
+            OpenApiParameter("final_status", OpenApiTypes.STR, description="Accepted, rejected or pending client decision."),
+            OpenApiParameter("date_field", OpenApiTypes.STR, description="initiated or callback."),
+            OpenApiParameter("from_datetime", OpenApiTypes.DATETIME, description="Inclusive range start in IST."),
+            OpenApiParameter("to_datetime", OpenApiTypes.DATETIME, description="Inclusive range end in IST."),
             OpenApiParameter("month", OpenApiTypes.INT, description="IST calendar month, 1-12."),
             OpenApiParameter("year", OpenApiTypes.INT, description="IST calendar year."),
             OpenApiParameter("page", OpenApiTypes.INT, description="1-based employee page."),
@@ -4809,16 +4820,20 @@ class UserDashboardAPIView(APIView):
     )
     def get(self, request):
         latest_upload_id = FinalIDUpload.objects.order_by("-id").values_list("id", flat=True).first()
+        latest_attempt_change = SurveyAttempt.objects.order_by("-id").values_list("id", flat=True).first()
 
         def load_dashboard():
             return build_user_dashboard_payload(request.user, request.query_params)
 
         try:
             payload = cached_report_payload(
-                "user-dashboard-v1",
+                "user-dashboard-v2",
                 request,
                 load_dashboard,
-                extra_scope={"latest_final_id_upload": latest_upload_id},
+                extra_scope={
+                    "latest_final_id_upload": latest_upload_id,
+                    "latest_attempt_change": latest_attempt_change,
+                },
             )
         except ValueError as exc:
             return Response({"detail": str(exc)}, status=status.HTTP_400_BAD_REQUEST)

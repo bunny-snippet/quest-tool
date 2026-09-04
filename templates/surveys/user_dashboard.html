@@ -42,23 +42,56 @@
   </div>
 
   <div class="field multi-field">
-    <label id="userDashboardShiftLabel">Shift</label>
-    <div class="multi-select" data-user-dashboard-filter="shift">
-      <button class="multi-trigger" type="button" aria-labelledby="userDashboardShiftLabel" aria-expanded="false"><span>All shifts</span><i>⌄</i></button>
-      <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search shift…" autocomplete="off"></div><div class="multi-options">{% for shift in shifts %}<label data-branch-value="{{ shift.branch_value }}" data-sub-branch-value="{{ shift.sub_branch_value }}"><input type="checkbox" value="{{ shift.value }}"><span>{{ shift.name }}</span></label>{% empty %}<span class="filter-empty">No shifts available</span>{% endfor %}</div><p class="multi-no-results" hidden>No matching shift</p></div>
+    <label id="userDashboardUserLabel">Users</label>
+    <div class="multi-select" data-user-dashboard-filter="user">
+      <button class="multi-trigger" type="button" aria-labelledby="userDashboardUserLabel" aria-expanded="false"><span>All users</span><i>⌄</i></button>
+      <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search user…" autocomplete="off"></div><div class="multi-options">{% for tracked_user in users %}<label data-branch-value="{{ tracked_user.branch_value }}" data-sub-branch-value="{{ tracked_user.sub_branch_value }}"><input type="checkbox" value="{{ tracked_user.user_id }}"><span>{{ tracked_user.user_name }}</span></label>{% empty %}<span class="filter-empty">No users available</span>{% endfor %}</div><p class="multi-no-results" hidden>No matching user</p></div>
     </div>
   </div>
 
   <div class="field multi-field">
-    <label id="userDashboardUserLabel">Users</label>
-    <div class="multi-select" data-user-dashboard-filter="user">
-      <button class="multi-trigger" type="button" aria-labelledby="userDashboardUserLabel" aria-expanded="false"><span>All users</span><i>⌄</i></button>
-      <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search user…" autocomplete="off"></div><div class="multi-options">{% for tracked_user in users %}<label data-branch-value="{{ tracked_user.branch_value }}" data-sub-branch-value="{{ tracked_user.sub_branch_value }}" data-shift-value="{{ tracked_user.shift_value }}"><input type="checkbox" value="{{ tracked_user.user_id }}"><span>{{ tracked_user.user_name }}</span></label>{% empty %}<span class="filter-empty">No users available</span>{% endfor %}</div><p class="multi-no-results" hidden>No matching user</p></div>
+    <label id="userDashboardSupplierLabel">Supplier</label>
+    <div class="multi-select" data-user-dashboard-filter="supplier">
+      <button class="multi-trigger" type="button" aria-labelledby="userDashboardSupplierLabel" aria-expanded="false"><span>All suppliers</span><i>⌄</i></button>
+      <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search supplier…" autocomplete="off"></div><div class="multi-options">{% for supplier in suppliers %}<label><input type="checkbox" value="{{ supplier.value }}"><span>{{ supplier.name }}{% if supplier.email %} · {{ supplier.email }}{% endif %}</span></label>{% empty %}<span class="filter-empty">No supplier activity available</span>{% endfor %}</div><p class="multi-no-results" hidden>No matching supplier</p></div>
     </div>
   </div>
 
-  <div class="field"><label for="userDashboardMonth">Month</label><select id="userDashboardMonth">{% for option in month_options %}<option value="{{ option.value }}"{% if option.value == selected_month %} selected{% endif %}>{{ option.label }}</option>{% endfor %}</select></div>
-  <div class="field"><label for="userDashboardYear">Year</label><select id="userDashboardYear">{% for year in year_options %}<option value="{{ year }}"{% if year == selected_year %} selected{% endif %}>{{ year }}</option>{% endfor %}</select></div>
+  <div class="field multi-field">
+    <label id="userDashboardCountryLabel">Country</label>
+    <div class="multi-select" data-user-dashboard-filter="country">
+      <button class="multi-trigger" type="button" aria-labelledby="userDashboardCountryLabel" aria-expanded="false"><span>All countries</span><i>⌄</i></button>
+      <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search country…" autocomplete="off"></div><div class="multi-options">{% for country in countries %}<label><input type="checkbox" value="{{ country.survey__country_code }}"><span>{{ country.survey__country|default:country.survey__country_code }} · {{ country.survey__country_code }}</span></label>{% empty %}<span class="filter-empty">No countries available</span>{% endfor %}</div><p class="multi-no-results" hidden>No matching country</p></div>
+    </div>
+  </div>
+
+  <div class="field multi-field">
+    <label id="userDashboardClientLabel">Client</label>
+    <div class="multi-select" data-user-dashboard-filter="client">
+      <button class="multi-trigger" type="button" aria-labelledby="userDashboardClientLabel" aria-expanded="false"><span>All clients</span><i>⌄</i></button>
+      <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search client…" autocomplete="off"></div><div class="multi-options">{% for client in clients %}<label><input type="checkbox" value="{{ client.survey__client_id }}"><span>{{ client.survey__client__name }}</span></label>{% empty %}<span class="filter-empty">No clients available</span>{% endfor %}</div><p class="multi-no-results" hidden>No matching client</p></div>
+    </div>
+  </div>
+
+  <div class="field multi-field">
+    <label id="userDashboardBuyerLabel">Sub-client / Buyer ID</label>
+    <div class="multi-select" data-user-dashboard-filter="buyer_id">
+      <button class="multi-trigger" type="button" aria-labelledby="userDashboardBuyerLabel" aria-expanded="false"><span>All buyer IDs</span><i>⌄</i></button>
+      <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search buyer ID…" autocomplete="off"></div><div class="multi-options">{% for buyer in buyers %}<label data-client-id="{{ buyer.survey__client_id|default:'' }}"><input type="checkbox" value="{{ buyer.survey__buyer_id }}"><span>{{ buyer.survey__buyer_id }}</span></label>{% empty %}<span class="filter-empty">No buyer IDs available</span>{% endfor %}</div><p class="multi-no-results" hidden>No matching buyer ID</p></div>
+    </div>
+  </div>
+
+  <div class="field multi-field">
+    <label id="userDashboardFinalStatusLabel">Final status</label>
+    <div class="multi-select" data-user-dashboard-filter="final_status">
+      <button class="multi-trigger" type="button" aria-labelledby="userDashboardFinalStatusLabel" aria-expanded="false"><span>All final statuses</span><i>⌄</i></button>
+      <div class="multi-menu" hidden><div class="multi-menu-search"><span aria-hidden="true">⌕</span><input type="search" data-multi-search placeholder="Search final status…" autocomplete="off"></div><div class="multi-options"><label><input type="checkbox" value="accepted"><span>Accepted</span></label><label><input type="checkbox" value="rejected"><span>Rejected</span></label><label><input type="checkbox" value="pending"><span>Pending</span></label></div><p class="multi-no-results" hidden>No matching final status</p></div>
+    </div>
+  </div>
+
+  <div class="field"><label for="userDashboardDateField">Date column</label><select id="userDashboardDateField"><option value="initiated">Entry date</option><option value="callback">Exit date</option></select></div>
+  <div class="field datetime-field"><label for="userDashboardFromDateTime">From date &amp; time</label><div class="datetime-control"><input id="userDashboardFromDateTime" type="datetime-local" step="60" value="{{ selected_from_datetime }}"></div></div>
+  <div class="field datetime-field"><label for="userDashboardToDateTime">To date &amp; time</label><div class="datetime-control"><input id="userDashboardToDateTime" type="datetime-local" step="60" value="{{ selected_to_datetime }}"></div></div>
   <button class="clear-button" id="clearUserDashboardFilters" type="button">Clear filters</button>
 </section>
 
@@ -69,8 +102,8 @@
   </div>
   <div class="table-wrap user-performance-table-wrap">
     <table class="survey-table user-performance-table">
-      <thead><tr><th>User</th><th>Branch</th><th>Sub-branch</th><th>Shift</th><th>Completes</th><th>Accepted</th><th>Rejected</th><th>Pending</th><th>Performance</th></tr></thead>
-      <tbody id="userDashboardRows"><tr><td colspan="9"><div class="table-loader"><i></i><span>Building user performance…</span></div></td></tr></tbody>
+      <thead><tr><th>User</th><th>Branch</th><th>Sub-branch</th><th>Completes</th><th>Accepted</th><th>Rejected</th><th>Pending</th><th>Performance</th></tr></thead>
+      <tbody id="userDashboardRows"><tr><td colspan="8"><div class="table-loader"><i></i><span>Building user performance…</span></div></td></tr></tbody>
     </table>
   </div>
   <div class="mobile-cards user-performance-cards" id="userDashboardCards"></div>
@@ -85,4 +118,4 @@
   </div>
 </section>
 {% endblock %}
-{% block scripts %}<script src="{% static 'surveys/user_dashboard.js' %}?v=2" defer></script>{% endblock %}
+{% block scripts %}<script src="{% static 'surveys/user_dashboard.js' %}?v=3" defer></script>{% endblock %}

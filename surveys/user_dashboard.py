@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from django.db.models import Count, Q
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 
 from accounts.models import EmployeeProfile
 
@@ -38,7 +39,7 @@ def _employee_metadata(user) -> dict[int, dict]:
 
 
 def user_dashboard_filter_options(user) -> dict:
-    """Return deduplicated hierarchy options for employee accounts."""
+    """Return live report dimensions available to employee performance."""
 
     users = [dict(item) for item in _employee_metadata(user).values()]
     users.sort(key=lambda item: (item["user_name"].casefold(), item["user_id"]))
@@ -69,17 +70,65 @@ def user_dashboard_filter_options(user) -> dict:
     for item in users:
         item["branch_value"] = option_value(item, "branch")
         item["sub_branch_value"] = option_value(item, "sub_branch")
-        item["shift_value"] = option_value(item, "shift")
+
+    employee_ids = [item["user_id"] for item in users]
+    attempts = SurveyAttempt.objects.filter(platform_user_id__in=employee_ids)
+    suppliers = []
+    for row in (
+        attempts.filter(vendor__isnull=False)
+        .values(
+            "vendor_id", "vendor__first_name", "vendor__last_name",
+            "vendor__username", "vendor__email",
+        )
+        .distinct()
+        .order_by("vendor__first_name", "vendor__last_name", "vendor__username")
+    ):
+        full_name = " ".join(
+            part for part in (row["vendor__first_name"], row["vendor__last_name"])
+            if part
+        ).strip()
+        suppliers.append({
+            "value": str(row["vendor_id"]),
+            "name": full_name or row["vendor__username"] or row["vendor__email"] or f"Supplier {row['vendor_id']}",
+            "email": row["vendor__email"] or "",
+        })
 
     return {
         "users": users,
         "branches": unique_options("branch"),
         "sub_branches": unique_options("sub_branch", ("branch",)),
-        "shifts": unique_options("shift", ("branch", "sub_branch")),
+        "suppliers": suppliers,
+        "countries": list(
+            attempts.exclude(survey__country_code="")
+            .values("survey__country_code", "survey__country")
+            .distinct()
+            .order_by("survey__country_code")
+        ),
+        "clients": list(
+            attempts.filter(survey__client__isnull=False)
+            .values("survey__client_id", "survey__client__name")
+            .distinct()
+            .order_by("survey__client__name", "survey__client_id")
+        ),
+        "buyers": list(
+            attempts.exclude(survey__buyer_id="")
+            .values("survey__buyer_id", "survey__client_id")
+            .distinct()
+            .order_by("survey__buyer_id")
+        ),
     }
 
 
-def _selected_period(params) -> tuple[int, int, datetime, datetime]:
+def _report_datetime(value: str, label: str):
+    parsed = parse_datetime(str(value or "").strip())
+    if parsed is None:
+        raise ValueError(f"{label} must be a valid date and time.")
+    if timezone.is_naive(parsed):
+        parsed = timezone.make_aware(parsed, timezone.get_current_timezone())
+    return parsed
+
+
+def _selected_period(params) -> tuple[int, int, datetime, datetime, str, str]:
     local_today = timezone.localdate()
     try:
         year = int(params.get("year") or local_today.year)
@@ -95,7 +144,68 @@ def _selected_period(params) -> tuple[int, int, datetime, datetime]:
     current_timezone = timezone.get_current_timezone()
     lower = timezone.make_aware(datetime(year, month, 1), current_timezone)
     upper = timezone.make_aware(datetime(next_year, next_month, 1), current_timezone)
-    return year, month, lower, upper
+    date_field = str(params.get("date_field") or "initiated").strip().lower()
+    if date_field not in {"initiated", "callback"}:
+        raise ValueError("Date column must be entry date or exit date.")
+    if params.get("from_datetime"):
+        lower = _report_datetime(params.get("from_datetime"), "From date and time")
+    if params.get("to_datetime"):
+        upper = _report_datetime(params.get("to_datetime"), "To date and time")
+    else:
+        # The legacy month/year API treated the next month boundary as
+        # exclusive. Preserve that contract while exact date-time controls
+        # remain inclusive.
+        upper -= timedelta(microseconds=1)
+    if lower > upper:
+        raise ValueError("From date and time cannot be after To date and time.")
+    local_lower = timezone.localtime(lower)
+    local_upper = timezone.localtime(upper)
+    label = (
+        f"{local_lower.strftime('%d %b %Y, %I:%M %p')} – "
+        f"{local_upper.strftime('%d %b %Y, %I:%M %p')}"
+    )
+    return year, month, lower, upper, date_field, label
+
+
+def _filter_attempt_dimensions(queryset, params):
+    """Apply Traffic Report-style dimensions without altering lifecycle data."""
+
+    exact_filters = {
+        "supplier": "vendor_id",
+        "country": "survey__country_code",
+        "buyer_id": "survey__buyer_id",
+    }
+    for parameter, field_name in exact_filters.items():
+        selected = _csv_values(params.get(parameter, ""))
+        if selected:
+            queryset = queryset.filter(**{f"{field_name}__in": selected})
+
+    selected_clients = _csv_values(params.get("client", ""))
+    if selected_clients:
+        if any(not value.isdigit() for value in selected_clients):
+            raise ValueError("Client filters must contain numeric IDs.")
+        client_ids = {int(value) for value in selected_clients}
+        queryset = queryset.filter(
+            Q(survey__client_id__in=client_ids) | Q(client_id__in=client_ids)
+        )
+
+    selected_final_statuses = _csv_values(params.get("final_status", ""))
+    allowed_final_statuses = {
+        FinalIDUpload.Decision.ACCEPTED,
+        FinalIDUpload.Decision.REJECTED,
+        "pending",
+    }
+    if not selected_final_statuses <= allowed_final_statuses:
+        raise ValueError("Final status contains an unsupported value.")
+    if selected_final_statuses:
+        status_query = Q(pk__in=[])
+        decided = selected_final_statuses - {"pending"}
+        if decided:
+            status_query |= Q(final_id_status__status__in=decided)
+        if "pending" in selected_final_statuses:
+            status_query |= Q(final_id_status__isnull=True)
+        queryset = queryset.filter(status_query)
+    return queryset
 
 
 def build_user_dashboard_payload(user, params) -> dict:
@@ -119,7 +229,6 @@ def build_user_dashboard_payload(user, params) -> dict:
     for parameter, level in (
         ("branch", "branch"),
         ("sub_branch", "sub_branch"),
-        ("shift", "shift"),
     ):
         selected = _csv_values(params.get(parameter, ""))
         if selected:
@@ -138,12 +247,12 @@ def build_user_dashboard_payload(user, params) -> dict:
                 search in str(metadata.get(user_id, {}).get(field, "")).casefold()
                 for field in (
                     "user_name", "username", "user_email", "employee_id",
-                    "branch", "sub_branch", "shift",
+                    "branch", "sub_branch",
                 )
             )
         }
 
-    year, month, lower, upper = _selected_period(params)
+    year, month, lower, upper, date_field, period_label = _selected_period(params)
     visible_metadata = {
         user_id: metadata[user_id]
         for user_id in visible_ids
@@ -177,12 +286,16 @@ def build_user_dashboard_payload(user, params) -> dict:
             bucket["accepted"] += aggregate["accepted"]
             bucket["rejected"] += aggregate["rejected"]
 
+    timestamp_filter = {
+        f"{'initiated_at' if date_field == 'initiated' else 'callback_at'}__gte": lower,
+        f"{'initiated_at' if date_field == 'initiated' else 'callback_at'}__lte": upper,
+    }
     current_attempts = SurveyAttempt.objects.filter(
         platform_user_id__in=visible_ids,
         status=SurveyAttempt.Status.COMPLETED,
-        initiated_at__gte=lower,
-        initiated_at__lt=upper,
+        **timestamp_filter,
     )
+    current_attempts = _filter_attempt_dimensions(current_attempts, params)
     merge_rows(current_attempts, "platform_user_id", lambda value: value)
 
     if legacy_user_map:
@@ -190,9 +303,9 @@ def build_user_dashboard_payload(user, params) -> dict:
             platform_user_id__isnull=True,
             user_id__in=tuple(legacy_user_map),
             status=SurveyAttempt.Status.COMPLETED,
-            initiated_at__gte=lower,
-            initiated_at__lt=upper,
+            **timestamp_filter,
         )
+        legacy_attempts = _filter_attempt_dimensions(legacy_attempts, params)
         merge_rows(
             legacy_attempts,
             "user_id",
@@ -200,8 +313,14 @@ def build_user_dashboard_payload(user, params) -> dict:
         )
 
     rows = []
+    activity_filter_applied = any(
+        _csv_values(params.get(parameter, ""))
+        for parameter in ("supplier", "country", "client", "buyer_id", "final_status")
+    )
     for user_id in visible_ids:
         counts = aggregates[user_id]
+        if activity_filter_applied and not counts["completes"]:
+            continue
         reviewed = counts["accepted"] + counts["rejected"]
         pending = max(0, counts["completes"] - reviewed)
         rows.append({
@@ -265,6 +384,7 @@ def build_user_dashboard_payload(user, params) -> dict:
         "period": {
             "year": year,
             "month": month,
-            "label": lower.strftime("%B %Y"),
+            "date_field": date_field,
+            "label": period_label,
         },
     }
