@@ -552,7 +552,8 @@ def final_ids_import(request):
             f"{result['applied']:,} RID(s) marked {decision}. "
             f"{result['not_found']:,} not found, "
             f"{result['client_mismatch']:,} client mismatch, "
-            f"{result['not_completed']:,} not completed."
+            f"{result['not_completed']:,} not completed, "
+            f"{result['invalid']:,} invalid row(s) skipped."
         ),
         "result": result,
     })

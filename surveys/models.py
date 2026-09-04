@@ -613,6 +613,7 @@ class FinalIDUpload(models.Model):
     )
     submitted_count = models.PositiveIntegerField(default=0)
     unique_rid_count = models.PositiveIntegerField(default=0)
+    invalid_count = models.PositiveIntegerField(default=0)
     applied_count = models.PositiveIntegerField(default=0)
     not_found_count = models.PositiveIntegerField(default=0)
     client_mismatch_count = models.PositiveIntegerField(default=0)

@@ -90,6 +90,7 @@ class FinalIDImportTests(TestCase):
             "upload_id": 1,
             "submitted": 3,
             "unique": 2,
+            "invalid": 0,
             "applied": 1,
             "not_found": 1,
             "client_mismatch": 0,
@@ -106,6 +107,41 @@ class FinalIDImportTests(TestCase):
             set(upload.items.values_list("outcome", flat=True)),
             {FinalIDUploadItem.Outcome.APPLIED, FinalIDUploadItem.Outcome.NOT_FOUND},
         )
+
+    def test_mixed_invalid_rows_are_skipped_while_valid_rids_are_applied(self):
+        response = self.client.post(reverse("final-ids-import"), {
+            "client": self.client_record.pk,
+            "month": "9",
+            "year": "2026",
+            "status": "accepted",
+            "file": self.upload(
+                "RID\nFinalRID01\ntoo-short\n12345678901\nbad value!\n'FinalRID01\n"
+            ),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        result = response.json()["result"]
+        self.assertEqual(result["submitted"], 5)
+        self.assertEqual(result["unique"], 1)
+        self.assertEqual(result["invalid"], 3)
+        self.assertEqual(result["applied"], 1)
+        self.assertEqual(FinalIDStatus.objects.get(attempt=self.completed).status, "accepted")
+        upload = FinalIDUpload.objects.get()
+        self.assertEqual(upload.invalid_count, 3)
+        self.assertEqual(upload.items.count(), 1)
+
+    def test_all_invalid_rows_still_return_a_clear_error(self):
+        response = self.client.post(reverse("final-ids-import"), {
+            "client": self.client_record.pk,
+            "month": "9",
+            "year": "2026",
+            "status": "accepted",
+            "file": self.upload("RID\ntoo-short\n12345678901\n"),
+        })
+
+        self.assertEqual(response.status_code, 400)
+        self.assertIn("No valid 10-character RIDs", response.json()["detail"])
+        self.assertFalse(FinalIDUpload.objects.exists())
 
     def test_later_file_updates_current_status_and_selected_invoice_month(self):
         first = self.client.post(reverse("final-ids-import"), {

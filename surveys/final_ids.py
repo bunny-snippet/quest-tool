@@ -31,7 +31,12 @@ def _normalise_header(value) -> str:
 
 
 def _normalise_rid(value) -> str:
-    return str(value or "").strip()
+    rid = str(value or "").strip()
+    # Excel users commonly prefix identifiers with an apostrophe to force text
+    # formatting. The apostrophe is not part of the platform RID.
+    if rid.startswith("'") and len(rid) == 11:
+        rid = rid[1:]
+    return rid
 
 
 def _csv_values(uploaded_file) -> Iterable[object]:
@@ -92,8 +97,8 @@ def _xlsx_values(uploaded_file) -> Iterable[object]:
         workbook.close()
 
 
-def read_uploaded_rids(uploaded_file) -> tuple[list[str], int, str]:
-    """Return distinct, valid RIDs while retaining the original row count."""
+def read_uploaded_rids(uploaded_file) -> tuple[list[str], int, int, str]:
+    """Return distinct valid RIDs, row counts and the immutable file digest."""
 
     filename = Path(str(uploaded_file.name or "")).name
     suffix = Path(filename).suffix.lower()
@@ -127,13 +132,13 @@ def read_uploaded_rids(uploaded_file) -> tuple[list[str], int, str]:
             rids.append(rid)
         if len(rids) > MAX_UNIQUE_RIDS:
             raise FinalIDImportError("One upload can contain at most 50,000 unique RIDs.")
-    if invalid_rows:
-        raise FinalIDImportError(
-            f"{invalid_rows} row(s) do not contain a valid 10-character RID. Correct the file and try again."
-        )
     if not rids:
+        if invalid_rows:
+            raise FinalIDImportError(
+                f"No valid 10-character RIDs were found; {invalid_rows} invalid row(s) were skipped."
+            )
         raise FinalIDImportError("No RID values were found in the uploaded file.")
-    return rids, submitted_count, hasher.hexdigest()
+    return rids, submitted_count, invalid_rows, hasher.hexdigest()
 
 
 def _attempt_matches_client(attempt: SurveyAttempt, client_id: int) -> bool:
@@ -166,7 +171,7 @@ def import_final_ids(
     if accounting_month.day != 1:
         raise FinalIDImportError("Accounting month must use the first day of the month.")
 
-    rids, submitted_count, file_sha256 = read_uploaded_rids(uploaded_file)
+    rids, submitted_count, invalid_count, file_sha256 = read_uploaded_rids(uploaded_file)
     filename = Path(str(uploaded_file.name or "")).name
     now = timezone.now()
 
@@ -180,6 +185,7 @@ def import_final_ids(
             uploaded_by=uploaded_by,
             submitted_count=submitted_count,
             unique_rid_count=len(rids),
+            invalid_count=invalid_count,
         )
         attempts = {
             attempt.rid: attempt
@@ -277,5 +283,6 @@ def import_final_ids(
         "upload_id": upload.pk,
         "submitted": submitted_count,
         "unique": len(rids),
+        "invalid": invalid_count,
         **counters,
     }
