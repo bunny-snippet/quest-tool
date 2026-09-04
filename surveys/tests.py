@@ -2348,6 +2348,7 @@ class StudiesTrackingTests(TestCase):
             "RID", "UID", "PID", "User name", "Device", "OS", "Browser", "User agent",
             "Entry IP", "Exit IP", "Actual LOI (minutes)", "Status",
             "Provider status", "Term reason", "Term category", "Status source",
+            "Final status", "Invoice month",
             "Inisitate at", "Presecreent at", "Redirect at", "entry date time",
             "Exit date time",
         ])

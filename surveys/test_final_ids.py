@@ -1,10 +1,11 @@
-from datetime import date
+from datetime import date, datetime
 from io import BytesIO
 
 from django.contrib.auth import get_user_model
 from django.core.files.uploadedfile import SimpleUploadedFile
 from django.test import TestCase
 from django.urls import reverse
+from django.utils import timezone
 
 from vendors.models import Client, ClientIntegration
 from openpyxl import Workbook
@@ -95,6 +96,7 @@ class FinalIDImportTests(TestCase):
             "not_found": 1,
             "client_mismatch": 0,
             "not_completed": 0,
+            "auto_rejected": 0,
         })
         status = FinalIDStatus.objects.get(attempt=self.completed)
         self.assertEqual(status.status, "accepted")
@@ -146,29 +148,71 @@ class FinalIDImportTests(TestCase):
     def test_later_file_updates_current_status_and_selected_invoice_month(self):
         first = self.client.post(reverse("final-ids-import"), {
             "client": self.client_record.pk, "month": "8", "year": "2026",
-            "status": "accepted", "file": self.upload("RID\nFinalRID01\n"),
+            "status": "rejected", "file": self.upload("RID\nFinalRID01\n"),
         })
         second = self.client.post(reverse("final-ids-import"), {
             "client": self.client_record.pk, "month": "10", "year": "2026",
-            "status": "rejected", "file": self.upload("RID\nFinalRID01\n"),
+            "status": "accepted", "file": self.upload("RID\nFinalRID01\n"),
         })
 
         self.assertEqual(first.status_code, 200)
         self.assertEqual(second.status_code, 200)
         status = FinalIDStatus.objects.get(attempt=self.completed)
-        self.assertEqual(status.status, "rejected")
+        self.assertEqual(status.status, "accepted")
         self.assertEqual(status.accounting_month, date(2026, 10, 1))
         self.assertEqual(FinalIDUpload.objects.count(), 2)
         second_item = FinalIDUploadItem.objects.filter(upload=status.upload).get()
-        self.assertEqual(second_item.previous_status, "accepted")
-        self.assertEqual(second_item.applied_status, "rejected")
+        self.assertEqual(second_item.previous_status, "rejected")
+        self.assertEqual(second_item.applied_status, "accepted")
+
+    def test_accepted_file_auto_rejects_other_completes_in_selected_activity_month(self):
+        selected_month = date(2026, 8, 1)
+        included = self.completed
+        included.initiated_at = timezone.make_aware(datetime(2026, 8, 10, 12, 0))
+        included.save(update_fields=["initiated_at"])
+        omitted = SurveyAttempt.objects.create(
+            rid="FinalRID03", survey=self.survey, user_id="1",
+            status=SurveyAttempt.Status.COMPLETED,
+            initiated_at=timezone.make_aware(datetime(2026, 8, 12, 12, 0)),
+        )
+        outside_month = SurveyAttempt.objects.create(
+            rid="FinalRID04", survey=self.survey, user_id="1",
+            status=SurveyAttempt.Status.COMPLETED,
+            initiated_at=timezone.make_aware(datetime(2026, 7, 12, 12, 0)),
+        )
+
+        response = self.client.post(reverse("final-ids-import"), {
+            "client": self.client_record.pk, "month": selected_month.month,
+            "year": selected_month.year, "status": "accepted",
+            "file": self.upload("RID\nFinalRID01\n"),
+        })
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["result"]["auto_rejected"], 1)
+        self.assertEqual(FinalIDStatus.objects.get(attempt=included).status, "accepted")
+        omitted_status = FinalIDStatus.objects.get(attempt=omitted)
+        self.assertEqual(omitted_status.status, "rejected")
+        self.assertEqual(omitted_status.accounting_month, selected_month)
+        self.assertFalse(FinalIDStatus.objects.filter(attempt=outside_month).exists())
+
+    def test_terminal_lifecycle_rid_can_receive_a_client_final_status(self):
+        terminated = SurveyAttempt.objects.create(
+            rid="FinalRID05", survey=self.survey, user_id="1",
+            status=SurveyAttempt.Status.TERMINATED,
+        )
+        response = self.client.post(reverse("final-ids-import"), {
+            "client": self.client_record.pk, "month": "9", "year": "2026",
+            "status": "accepted", "file": self.upload("RID\nFinalRID05\n"),
+        })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(FinalIDStatus.objects.get(attempt=terminated).status, "accepted")
 
     def test_import_does_not_update_wrong_client_or_noncompleted_rids(self):
         response = self.client.post(reverse("final-ids-import"), {
             "client": self.client_record.pk,
             "month": "9",
             "year": "2026",
-            "status": "accepted",
+            "status": "rejected",
             "file": self.upload("RID\nFinalRID02\nOtherRID01\n"),
         })
 

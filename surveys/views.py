@@ -198,7 +198,8 @@ STUDY_COLUMN_PERMISSIONS = {
     "respondent_id": "studies.column.respondent_id", "pid": "studies.column.pid",
     "user": "studies.column.user",
     "device": "studies.column.device", "ip": "studies.column.ip", "loi": "studies.column.loi",
-    "status": "studies.column.status", "start": "studies.column.start", "end": "studies.column.end",
+    "status": "studies.column.status", "final_status": "studies.column.final_status",
+    "start": "studies.column.start", "end": "studies.column.end",
 }
 
 STUDY_CLIENT_NAME_PERMISSION = "studies.column.client_name"
@@ -248,6 +249,7 @@ STUDY_CARD_PERMISSIONS = {
     "conversion": "studies.card.conversion", "desktop": "studies.card.desktop",
     "mobile": "studies.card.mobile", "tablet": "studies.card.tablet",
     "revenue": "studies.card.revenue",
+    "invoiced_revenue": "studies.card.invoiced_revenue",
     "ir": "studies.card.ir",
 }
 
@@ -553,6 +555,7 @@ def final_ids_import(request):
             f"{result['not_found']:,} not found, "
             f"{result['client_mismatch']:,} client mismatch, "
             f"{result['not_completed']:,} not completed, "
+            f"{result['auto_rejected']:,} other monthly complete(s) marked rejected, "
             f"{result['invalid']:,} invalid row(s) skipped."
         ),
         "result": result,
@@ -4281,7 +4284,10 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
         survey_termination_filter = Q(status=SurveyAttempt.Status.TERMINATED) & ~Q(
             status_source="local_prescreener"
         )
-        summary = queryset.aggregate(
+        card_access = _component_access(
+            effective_permission_codes(self.request.user), STUDY_CARD_PERMISSIONS
+        )
+        aggregate_fields = dict(
             total=Count("id"),
             initiated=Count("id", filter=Q(status__in=[SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED])),
             completed=Count("id", filter=completed_filter),
@@ -4300,6 +4306,13 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             ),
             revenue_currency=Max("cpi_currency_snapshot", filter=completed_filter),
         )
+        if card_access["invoiced_revenue"]:
+            aggregate_fields["invoiced_revenue"] = Sum(
+                "source_cpi_snapshot",
+                filter=Q(final_id_status__status=FinalIDUpload.Decision.ACCEPTED),
+                default=Decimal("0.00"),
+            )
+        summary = queryset.aggregate(**aggregate_fields)
         completed = summary["completed"]
         ir_denominator = completed + summary["survey_terminated"]
         classified = summary["desktop"] + summary["mobile"] + summary["tablet"]
@@ -4313,9 +4326,6 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
                 revenue,
                 role_visibility_percent(self.request.user),
             )
-        card_access = _component_access(
-            effective_permission_codes(self.request.user), STUDY_CARD_PERMISSIONS
-        )
         visible = lambda card, value: value if card_access[card] else None
         response_summary = {
             "total": visible("total", summary["total"]),
@@ -4332,6 +4342,9 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
                 "ir", round((completed / ir_denominator * 100), 2) if ir_denominator else 0.0,
             ),
             "total_revenue": visible("revenue", summary["total_revenue"]),
+            "invoiced_revenue": visible(
+                "invoiced_revenue", summary.get("invoiced_revenue")
+            ),
             "revenue_currency": visible(
                 "revenue", summary["revenue_currency"] or "USD"
             ),
@@ -4370,6 +4383,7 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             "traffic-summary",
             request,
             lambda: self._filtered_summary(queryset),
+            extra_scope={"latest_final_id_upload": self._latest_final_id_upload_id()},
         )
         # Pagination membership stays authoritative even while KPI aggregates
         # use a short stale-while-revalidate cache. Reusing the cached summary
@@ -4394,11 +4408,16 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
             "traffic-summary",
             request,
             lambda: self._filtered_summary(queryset),
+            extra_scope={"latest_final_id_upload": self._latest_final_id_upload_id()},
         )
         return Response({"count": total_count, "summary": summary})
 
     def get_required_function_permission(self):
         return "attempts.export" if self.action == "export" else "attempts.view"
+
+    @staticmethod
+    def _latest_final_id_upload_id():
+        return FinalIDUpload.objects.order_by("-id").values_list("id", flat=True).first()
 
     def get_serializer_class(self):
         if self.action == "list":
@@ -4432,15 +4451,26 @@ class SurveyAttemptViewSet(viewsets.ReadOnlyModelViewSet):
                 selected_fields.extend([
                     "upstream_transaction_data", "is_verified", "exit_client_data",
                 ])
-            queryset = SurveyAttempt.objects.select_related(
+            select_relations = [
                 "survey", "survey__client", "survey__integration", "platform_user", "client",
-            ).only(*selected_fields)
+            ]
+            if (
+                STUDY_COLUMN_PERMISSIONS["status"] in permission_codes
+                or STUDY_COLUMN_PERMISSIONS["final_status"] in permission_codes
+            ):
+                selected_fields.extend([
+                    "final_id_status__id", "final_id_status__status",
+                    "final_id_status__accounting_month",
+                ])
+                select_relations.append("final_id_status")
+            queryset = SurveyAttempt.objects.select_related(*select_relations).only(*selected_fields)
         else:
             queryset = SurveyAttempt.objects.select_related(
                 "survey", "survey__client", "survey__integration", "platform_user", "platform_user__employee_profile", "platform_user__employee_profile__role",
                 "platform_user__employee_profile__organization_unit", "platform_user__employee_profile__organization_unit__parent",
                 "platform_user__employee_profile__organization_unit__parent__parent",
                 "vendor", "vendor__employee_profile", "client", "client_allocation", "survey_allocation",
+                "final_id_status",
             ).all()
         if self.request.user.is_superuser:
             return queryset
@@ -4922,6 +4952,7 @@ def _attempt_excel_rows(queryset, requesting_user=None):
             + ([27, 44, 22] if can_view_provider_status else [])
             + ([18] if can_view_status_source else []),
         ),
+        "final_status": (["Final status", "Invoice month"], [18, 15]),
         "country": (["Country"], [18]),
         "cpi": (
             ["Current Client CPI", "Client entry link CPI"]
@@ -4974,6 +5005,12 @@ def _attempt_excel_rows(queryset, requesting_user=None):
             })
         if can_view_status_source:
             selected_fields.add("status_source")
+    if set(ordered_columns) & {"status", "final_status"}:
+        selected_relations.add("final_id_status")
+        selected_fields.update({
+            "final_id_status__id", "final_id_status__status",
+            "final_id_status__accounting_month",
+        })
     if "country" in ordered_columns:
         selected_fields.update({"survey__country", "survey__country_code"})
     if "cpi" in ordered_columns:
@@ -5062,13 +5099,21 @@ def _attempt_excel_rows(queryset, requesting_user=None):
                     attempt.rid, attempt.prescreener_uid or "",
                 ]
             if "status" in ordered_columns:
-                status_label = (
-                    "Initiated"
-                    if attempt.status in {
-                        SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED,
-                    }
-                    else attempt.get_status_display()
-                )
+                final_status = getattr(attempt, "final_id_status", None)
+                if final_status:
+                    status_label = (
+                        "Client Accepted"
+                        if final_status.status == FinalIDUpload.Decision.ACCEPTED
+                        else "Client Rejected"
+                    )
+                else:
+                    status_label = (
+                        "Initiated"
+                        if attempt.status in {
+                            SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED,
+                        }
+                        else attempt.get_status_display()
+                    )
                 outcome = provider_outcome(attempt) if can_view_provider_status else {}
                 values_by_column["status"] = (
                     [status_label]
@@ -5079,6 +5124,12 @@ def _attempt_excel_rows(queryset, requesting_user=None):
                     ] if can_view_provider_status else [])
                     + ([attempt.status_source] if can_view_status_source else [])
                 )
+            if "final_status" in ordered_columns:
+                final_status = getattr(attempt, "final_id_status", None)
+                values_by_column["final_status"] = [
+                    final_status.get_status_display() if final_status else "",
+                    final_status.accounting_month if final_status else "",
+                ]
             if "country" in ordered_columns:
                 values_by_column["country"] = [
                     attempt.survey.country or attempt.survey.country_code

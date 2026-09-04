@@ -19,6 +19,7 @@ from vendors.services import organization_client_ids_for_user, survey_pricing_fo
 from .models import (
     CanonicalOption,
     CanonicalQuestion,
+    FinalIDUpload,
     ProviderOptionMapping,
     ProviderQuestionMapping,
     Survey,
@@ -751,6 +752,7 @@ ATTEMPT_API_FIELDS_BY_PERMISSION = {
     "studies.column.ip": {"entry_ip", "exit_ip", "initiation_ip", "callback_ip"},
     "studies.column.loi": {"loi_seconds"},
     "studies.column.status": {"status", "status_label"},
+    "studies.column.final_status": {"final_status", "final_status_label", "final_status_month"},
     "studies.field.provider_status": {"termination_reason", "termination_category"},
     "studies.field.status_source": {"status_source"},
     "studies.column.start": {"initiated_at", "submitted_at", "redirected_at", "created_at"},
@@ -784,6 +786,9 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
     username = serializers.CharField(source="platform_user.username", read_only=True, allow_null=True)
     user_email = serializers.EmailField(source="platform_user.email", read_only=True, allow_null=True)
     status_label = serializers.SerializerMethodField()
+    final_status = serializers.SerializerMethodField()
+    final_status_label = serializers.SerializerMethodField()
+    final_status_month = serializers.SerializerMethodField()
     entry_ip = serializers.IPAddressField(source="initiation_ip", read_only=True, allow_null=True)
     exit_ip = serializers.IPAddressField(source="callback_ip", read_only=True, allow_null=True)
     client_name = serializers.SerializerMethodField()
@@ -802,7 +807,8 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
             "language_code", "platform_user", "user_id", "user_name", "username", "user_email", "supplier",
             "supplier_name", "vendor", "vendor_name", "client", "client_name", "client_allocation", "survey_allocation", "supplier_code",
             "buyer_id", "source_cpi_snapshot", "cpi_snapshot_source", "cpi_cut_percent_snapshot", "payable_cpi_snapshot", "cpi_currency_snapshot",
-            "status_label", "termination_reason", "termination_category",
+            "status_label", "final_status", "final_status_label", "final_status_month",
+            "termination_reason", "termination_category",
             "status", "initiated_at", "submitted_at", "redirected_at", "callback_at", "last_callback_at",
             "loi_seconds", "entry_ip", "exit_ip", "initiation_ip", "callback_ip", "entry_user_agent",
             "exit_user_agent", "entry_browser", "exit_browser", "entry_device", "exit_device", "entry_os",
@@ -918,9 +924,26 @@ class SurveyAttemptSerializer(serializers.ModelSerializer):
         return viewer_attempt_cpi(obj, request.user) if request else obj.source_cpi_snapshot
 
     def get_status_label(self, obj) -> str:
-        if obj.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED}:
-            return "Initiated"
-        return obj.get_status_display()
+        final_status = getattr(obj, "final_id_status", None)
+        if final_status is None:
+            if obj.status in {SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED}:
+                return "Initiated"
+            return obj.get_status_display()
+        if final_status.status == FinalIDUpload.Decision.ACCEPTED:
+            return "Client Accepted"
+        return "Client Rejected"
+
+    def get_final_status(self, obj) -> str:
+        final_status = getattr(obj, "final_id_status", None)
+        return final_status.status if final_status else ""
+
+    def get_final_status_label(self, obj) -> str:
+        value = self.get_final_status(obj)
+        return value.title() if value else ""
+
+    def get_final_status_month(self, obj):
+        final_status = getattr(obj, "final_id_status", None)
+        return final_status.accounting_month if final_status else None
 
     @staticmethod
     def _provider_outcome_data(obj) -> dict:
@@ -984,7 +1007,8 @@ class SurveyAttemptListSerializer(SurveyAttemptSerializer):
             "country", "country_code", "user_id", "user_name", "username", "user_email",
             "client_name", "buyer_id",
             "source_cpi_snapshot", "cpi_snapshot_source", "cpi_currency_snapshot",
-            "status_label", "termination_reason", "termination_category", "status",
+            "status_label", "final_status", "final_status_label", "final_status_month",
+            "termination_reason", "termination_category", "status",
             "status_source",
             "initiated_at", "callback_at", "loi_seconds",
             "entry_ip", "exit_ip", "entry_device",
@@ -1008,6 +1032,7 @@ class SurveyAttemptSummarySerializer(serializers.Serializer):
     conversion_rate = serializers.FloatField(allow_null=True)
     incidence_rate = serializers.FloatField(allow_null=True)
     total_revenue = serializers.DecimalField(max_digits=18, decimal_places=2, allow_null=True)
+    invoiced_revenue = serializers.DecimalField(max_digits=18, decimal_places=2, allow_null=True)
     revenue_currency = serializers.CharField(allow_null=True)
     completed_devices = SurveyAttemptCompletedDeviceSummarySerializer()
 

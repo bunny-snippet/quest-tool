@@ -618,6 +618,7 @@ class FinalIDUpload(models.Model):
     not_found_count = models.PositiveIntegerField(default=0)
     client_mismatch_count = models.PositiveIntegerField(default=0)
     not_completed_count = models.PositiveIntegerField(default=0)
+    auto_rejected_count = models.PositiveIntegerField(default=0)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
 
     class Meta:

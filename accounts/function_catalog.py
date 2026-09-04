@@ -91,6 +91,7 @@ FUNCTION_CATALOG = (
     ("studies.column.ip", "Show IP address column", "Traffic Reports - Table columns", "Display captured entry and exit network IPs.", TRACKING_ROLES),
     ("studies.column.loi", "Show LOI column", "Traffic Reports - Table columns", "Display measured survey duration.", TRACKING_ROLES),
     ("studies.column.status", "Show Status column", "Traffic Reports - Table columns", "Display the normalized platform survey outcome (S1-S4).", TRACKING_ROLES),
+    ("studies.column.final_status", "Show Final Status column", "Traffic Reports - Table columns", "Display the latest client Accepted or Rejected decision and its invoice month in Traffic Reports, API rows and Excel export.", ADMIN_ROLES),
     ("studies.field.provider_status", "Show provider outcome under Status", "Traffic Reports - Row details", "Display the provider-reported status, term reason and category below the normalized S1-S4 status in Traffic Reports, its API rows and Excel export.", TRACKING_ROLES),
     ("studies.field.status_source", "Show status source in export", "Traffic Reports - Row details", "Include the internal callback/status source in the Traffic Reports Excel export.", TRACKING_ROLES),
     ("studies.detail.sensitive_audit", "View sensitive attempt audit payload", "Traffic Reports - Row details", "Read raw pre-screener answers, supplier URLs, callback payloads, browser fingerprints and internal relationship identifiers through the Traffic Reports detail API.", ADMIN_ROLES),
@@ -107,6 +108,7 @@ FUNCTION_CATALOG = (
     ("studies.card.mobile", "Show Mobile completes card", "Traffic Reports - Summary cards", "Display completed Mobile journeys.", TRACKING_ROLES),
     ("studies.card.tablet", "Show Tablet completes card", "Traffic Reports - Summary cards", "Display completed Tablet journeys.", TRACKING_ROLES),
     ("studies.card.revenue", "Show Total Revenue card", "Traffic Reports - Summary cards", "Display completed revenue using the CPI snapshot captured at hit time.", ADMIN_ROLES),
+    ("studies.card.invoiced_revenue", "Show Invoiced Revenue card", "Traffic Reports - Summary cards", "Display hit-time CPI revenue for journeys whose latest final-ID decision is Client Accepted.", ADMIN_ROLES),
     ("studies.card.ir", "Show IR card", "Traffic Reports - Summary cards", "Display completes divided by completes plus actual survey terminations.", TRACKING_ROLES),
 
     ("prescreener_data.view", "View Panelist Data page and sidebar", "Panelist Data - Page & navigation", "Open the isolated panelist profile vault.", ADMIN_ROLES),

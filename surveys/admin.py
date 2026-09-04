@@ -86,7 +86,7 @@ class FinalIDUploadAdmin(admin.ModelAdmin):
     list_display = [
         "id", "client", "decision", "accounting_month", "submitted_count",
         "invalid_count", "applied_count", "not_found_count", "client_mismatch_count",
-        "not_completed_count", "uploaded_by", "created_at",
+        "not_completed_count", "auto_rejected_count", "uploaded_by", "created_at",
     ]
     list_filter = ["client", "decision", "accounting_month", "created_at"]
     search_fields = ["original_filename", "file_sha256", "items__rid"]
