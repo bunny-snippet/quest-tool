@@ -2343,14 +2343,12 @@ class StudiesTrackingTests(TestCase):
         self.assertIn(".xlsx", response["Content-Disposition"])
         rows = xlsx_rows(response)
         self.assertEqual(rows[0], [
-            "Project id", "Client name", "Cleint survey id", "Country",
-            "Current Client CPI", "Client entry link CPI", "Vendor CPI", "Vendor name",
-            "RID", "UID", "PID", "User name", "Device", "OS", "Browser", "User agent",
-            "Entry IP", "Exit IP", "Actual LOI (minutes)", "Status",
-            "Provider status", "Term reason", "Term category", "Status source",
-            "Final status", "Invoice month",
+            "Project id", "UID", "RID", "PID", "Status", "Final status", "Invoice month",
+            "Client name", "Cleint survey id", "Cleint CPI", "Country",
+            "Device", "OS", "Browser", "User agent", "Entry IP", "Exit IP",
+            "Actual LOI (minutes)",
             "Inisitate at", "Presecreent at", "Redirect at", "entry date time",
-            "Exit date time",
+            "Exit date time", "Vendor name", "User name", "Vendor CPI",
         ])
         self.assertIn("Kanik Sharma", rows[1])
         self.assertIn(self.complete.pid, rows[1])
@@ -2462,11 +2460,7 @@ class StudiesTrackingTests(TestCase):
         self.assertNotIn("Vendor CPI", scoped_rows[0])
         self.assertNotIn("Vendor name", scoped_rows[0])
         self.assertEqual(
-            scoped_rows[1][scoped_rows[0].index("Current Client CPI")],
-            "1.75",
-        )
-        self.assertEqual(
-            scoped_rows[1][scoped_rows[0].index("Client entry link CPI")],
+            scoped_rows[1][scoped_rows[0].index("Cleint CPI")],
             "1.75",
         )
 
@@ -2474,11 +2468,7 @@ class StudiesTrackingTests(TestCase):
             "search": self.complete.rid,
         }))
         self.assertEqual(
-            admin_rows[1][admin_rows[0].index("Current Client CPI")],
-            "2.50",
-        )
-        self.assertEqual(
-            admin_rows[1][admin_rows[0].index("Client entry link CPI")],
+            admin_rows[1][admin_rows[0].index("Cleint CPI")],
             "2.50",
         )
         self.assertEqual(admin_rows[1][admin_rows[0].index("Vendor CPI")], "1.75")
@@ -2524,11 +2514,7 @@ class StudiesTrackingTests(TestCase):
         self.assertNotIn("Vendor CPI", external_rows[0])
         self.assertNotIn("Vendor name", external_rows[0])
         self.assertEqual(
-            external_rows[1][external_rows[0].index("Current Client CPI")],
-            "1.75",
-        )
-        self.assertEqual(
-            external_rows[1][external_rows[0].index("Client entry link CPI")],
+            external_rows[1][external_rows[0].index("Cleint CPI")],
             "1.75",
         )
 
@@ -2536,7 +2522,7 @@ class StudiesTrackingTests(TestCase):
             "search": external_attempt.rid,
         }))
         self.assertEqual(
-            admin_rows[1][admin_rows[0].index("Current Client CPI")],
+            admin_rows[1][admin_rows[0].index("Cleint CPI")],
             "2.50",
         )
         self.assertEqual(admin_rows[1][admin_rows[0].index("Vendor CPI")], "1.75")

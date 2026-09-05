@@ -4968,60 +4968,55 @@ def _survey_excel_rows(queryset, request, columns):
 def _attempt_excel_rows(queryset, requesting_user=None):
     """Build Traffic Report rows without leaking upstream commercial data.
 
-    Platform admins receive the source CPI, computed supplier CPI and supplier
-    identity. Scoped/cut users receive only their adjusted CPI in the two client
-    CPI columns; supplier commercial columns do not exist in their workbook.
+    Columns follow the operational reconciliation order requested for the
+    workbook. Platform admins additionally receive supplier identity and CPI;
+    scoped users receive only the client CPI visible to their role.
     """
 
     commercial_admin = can_view_report_commercials(requesting_user)
     can_view_client_name = has_function_access(
         requesting_user, STUDY_CLIENT_NAME_PERMISSION
     )
-    can_view_provider_status = has_function_access(
-        requesting_user, STUDY_PROVIDER_STATUS_PERMISSION
-    )
-    can_view_status_source = has_function_access(
-        requesting_user, STUDY_STATUS_SOURCE_PERMISSION
-    )
     permitted = set(_permitted_columns(
         effective_permission_codes(requesting_user), STUDY_COLUMN_PERMISSIONS
     ))
-    specs = {
-        "project_id": (
-            ["Project id"] + (["Client name"] if can_view_client_name else []),
-            [19] + ([21] if can_view_client_name else []),
-        ),
-        "survey_id": (["Cleint survey id"], [18]),
-        "pid": (["PID"], [12]),
-        "respondent_id": (["RID", "UID"], [14, 21]),
-        "status": (
-            ["Status"]
-            + (["Provider status", "Term reason", "Term category"] if can_view_provider_status else [])
-            + (["Status source"] if can_view_status_source else []),
-            [19]
-            + ([27, 44, 22] if can_view_provider_status else [])
-            + ([18] if can_view_status_source else []),
-        ),
-        "final_status": (["Final status", "Invoice month"], [18, 15]),
-        "country": (["Country"], [18]),
-        "cpi": (
-            ["Current Client CPI", "Client entry link CPI"]
-            + (["Vendor CPI", "Vendor name"] if commercial_admin else []),
-            [18, 20] + ([14, 20] if commercial_admin else []),
-        ),
-        "user": (["User name"], [22]),
-        "device": (["Device", "OS", "Browser", "User agent"], [13, 16, 18, 42]),
-        "ip": (["Entry IP", "Exit IP"], [16, 16]),
-        "loi": (["Actual LOI (minutes)"], [19]),
-        "start": (
-            ["Inisitate at", "Presecreent at", "Redirect at", "entry date time"],
-            [22, 22, 22, 22],
-        ),
-        "end": (["Exit date time"], [22]),
-    }
     ordered_columns = [column for column in STUDY_COLUMN_PERMISSIONS if column in permitted]
-    headers = [header for column in ordered_columns for header in specs[column][0]]
-    widths = [width for column in ordered_columns for width in specs[column][1]]
+    export_fields = []
+
+    def add(permission_column, value_key, header, width, *, allowed=True):
+        if permission_column in permitted and allowed:
+            export_fields.append((value_key, header, width))
+
+    add("project_id", "project_id", "Project id", 19)
+    add("respondent_id", "uid", "UID", 21)
+    add("respondent_id", "rid", "RID", 14)
+    add("pid", "pid", "PID", 12)
+    add("status", "status", "Status", 19)
+    add("final_status", "final_status", "Final status", 18)
+    add("final_status", "invoice_month", "Invoice month", 15)
+    add("project_id", "client_name", "Client name", 21, allowed=can_view_client_name)
+    add("survey_id", "survey_id", "Cleint survey id", 18)
+    add("cpi", "client_cpi", "Cleint CPI", 16)
+    add("country", "country", "Country", 18)
+    add("device", "device", "Device", 13)
+    add("device", "os", "OS", 16)
+    add("device", "browser", "Browser", 18)
+    add("device", "user_agent", "User agent", 42)
+    add("ip", "entry_ip", "Entry IP", 16)
+    add("ip", "exit_ip", "Exit IP", 16)
+    add("loi", "loi", "Actual LOI (minutes)", 19)
+    add("start", "initiated_at", "Inisitate at", 22)
+    add("start", "submitted_at", "Presecreent at", 22)
+    add("start", "redirected_at", "Redirect at", 22)
+    add("start", "entry_at", "entry date time", 22)
+    add("end", "exit_at", "Exit date time", 22)
+    add("cpi", "vendor_name", "Vendor name", 20, allowed=commercial_admin)
+    add("user", "user_name", "User name", 22)
+    add("cpi", "vendor_cpi", "Vendor CPI", 14, allowed=commercial_admin)
+
+    headers = [header for _, header, _ in export_fields]
+    widths = [width for _, _, width in export_fields]
+    value_keys = {value_key for value_key, _, _ in export_fields}
 
     selected_fields = {"id"}
     selected_relations = set()
@@ -5045,16 +5040,6 @@ def _attempt_excel_rows(queryset, requesting_user=None):
         selected_fields.update({"rid", "prescreener_uid"})
     if "status" in ordered_columns:
         selected_fields.add("status")
-        if can_view_provider_status:
-            selected_relations.update({"survey", "survey__integration"})
-            selected_fields.update({
-                "rid", "survey_id", "survey__id", "survey__integration_id",
-                "survey__integration__id", "survey__integration__provider_code",
-                "survey__integration__config", "survey__integration__field_mapping",
-                "upstream_transaction_data", "exit_client_data", "is_verified",
-            })
-        if can_view_status_source:
-            selected_fields.add("status_source")
     if set(ordered_columns) & {"status", "final_status"}:
         selected_relations.add("final_id_status")
         selected_fields.update({
@@ -5131,94 +5116,70 @@ def _attempt_excel_rows(queryset, requesting_user=None):
 
     def rows():
         for attempt in queryset.iterator(chunk_size=1000):
-            values_by_column = {}
-            if "project_id" in ordered_columns:
-                values = [attempt.survey.local_id]
-                if can_view_client_name:
-                    client = attempt.client or attempt.survey.client
-                    values.append(
-                        client.name if client else attempt.survey.company_name
-                    )
-                values_by_column["project_id"] = values
-            if "survey_id" in ordered_columns:
-                values_by_column["survey_id"] = [attempt.survey.source_identifier]
-            if "pid" in ordered_columns:
-                values_by_column["pid"] = [attempt.pid]
-            if "respondent_id" in ordered_columns:
-                values_by_column["respondent_id"] = [
-                    attempt.rid, attempt.prescreener_uid or "",
-                ]
-            if "status" in ordered_columns:
+            values = {}
+            if "project_id" in value_keys:
+                values["project_id"] = attempt.survey.local_id
+            if "uid" in value_keys:
+                values["uid"] = attempt.prescreener_uid or ""
+            if "rid" in value_keys:
+                values["rid"] = attempt.rid
+            if "pid" in value_keys:
+                values["pid"] = attempt.pid
+            if value_keys & {"status", "final_status", "invoice_month"}:
                 final_status = getattr(attempt, "final_id_status", None)
-                if final_status:
-                    status_label = (
+                if "status" in value_keys:
+                    values["status"] = (
                         "Client Accepted"
-                        if final_status.status == FinalIDUpload.Decision.ACCEPTED
+                        if final_status and final_status.status == FinalIDUpload.Decision.ACCEPTED
                         else "Client Rejected"
-                    )
-                else:
-                    status_label = (
-                        "Initiated"
+                        if final_status
+                        else "Initiated"
                         if attempt.status in {
                             SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED,
                         }
                         else attempt.get_status_display()
                     )
-                outcome = provider_outcome(attempt) if can_view_provider_status else {}
-                values_by_column["status"] = (
-                    [status_label]
-                    + ([
-                        outcome.get("status") or "",
-                        outcome.get("reason") or "",
-                        outcome.get("category") or "",
-                    ] if can_view_provider_status else [])
-                    + ([attempt.status_source] if can_view_status_source else [])
-                )
-            if "final_status" in ordered_columns:
-                final_status = getattr(attempt, "final_id_status", None)
-                values_by_column["final_status"] = [
-                    final_status.get_status_display() if final_status else "",
-                    final_status.accounting_month if final_status else "",
-                ]
-            if "country" in ordered_columns:
-                values_by_column["country"] = [
-                    attempt.survey.country or attempt.survey.country_code
-                ]
-            if "cpi" in ordered_columns:
-                values_by_column["cpi"] = [
-                    viewer_attempt_cpi(attempt, requesting_user, current=True),
-                    viewer_attempt_cpi(attempt, requesting_user),
-                    *(
-                        [supplier_cpi_for_admin(attempt), supplier_label_for_admin(attempt)]
-                        if commercial_admin else []
-                    ),
-                ]
-            if "user" in ordered_columns:
+                if "final_status" in value_keys:
+                    values["final_status"] = final_status.get_status_display() if final_status else ""
+                if "invoice_month" in value_keys:
+                    values["invoice_month"] = final_status.accounting_month if final_status else ""
+            if "client_name" in value_keys:
+                client = attempt.client or attempt.survey.client
+                values["client_name"] = client.name if client else attempt.survey.company_name
+            if "survey_id" in value_keys:
+                values["survey_id"] = attempt.survey.source_identifier
+            if "client_cpi" in value_keys:
+                values["client_cpi"] = viewer_attempt_cpi(attempt, requesting_user)
+            if "country" in value_keys:
+                values["country"] = attempt.survey.country or attempt.survey.country_code
+            if value_keys & {"device", "os", "browser", "user_agent"}:
+                values.update({
+                    "device": attempt.entry_device,
+                    "os": attempt.entry_os,
+                    "browser": attempt.entry_browser,
+                    "user_agent": attempt.entry_user_agent,
+                })
+            if value_keys & {"entry_ip", "exit_ip"}:
+                values.update({"entry_ip": attempt.initiation_ip, "exit_ip": attempt.callback_ip})
+            if "loi" in value_keys:
+                values["loi"] = round((attempt.loi_seconds or 0) / 60, 2)
+            if value_keys & {"initiated_at", "submitted_at", "redirected_at", "entry_at"}:
+                values.update({
+                    "initiated_at": _excel_datetime(attempt.initiated_at),
+                    "submitted_at": _excel_datetime(attempt.submitted_at),
+                    "redirected_at": _excel_datetime(attempt.redirected_at),
+                    "entry_at": _excel_datetime(attempt.created_at),
+                })
+            if "exit_at" in value_keys:
+                values["exit_at"] = _excel_datetime(attempt.callback_at or attempt.last_callback_at)
+            if "vendor_name" in value_keys:
+                values["vendor_name"] = supplier_label_for_admin(attempt)
+            if "user_name" in value_keys:
                 user = attempt.platform_user
-                values_by_column["user"] = [
-                    (user.get_full_name() or user.username) if user else "Deleted user"
-                ]
-            if "device" in ordered_columns:
-                values_by_column["device"] = [
-                    attempt.entry_device, attempt.entry_os, attempt.entry_browser,
-                    attempt.entry_user_agent,
-                ]
-            if "ip" in ordered_columns:
-                values_by_column["ip"] = [attempt.initiation_ip, attempt.callback_ip]
-            if "loi" in ordered_columns:
-                values_by_column["loi"] = [round((attempt.loi_seconds or 0) / 60, 2)]
-            if "start" in ordered_columns:
-                values_by_column["start"] = [
-                    _excel_datetime(attempt.initiated_at),
-                    _excel_datetime(attempt.submitted_at),
-                    _excel_datetime(attempt.redirected_at),
-                    _excel_datetime(attempt.created_at),
-                ]
-            if "end" in ordered_columns:
-                values_by_column["end"] = [
-                    _excel_datetime(attempt.callback_at or attempt.last_callback_at)
-                ]
-            yield [value for column in ordered_columns for value in values_by_column[column]]
+                values["user_name"] = (user.get_full_name() or user.username) if user else "Deleted user"
+            if "vendor_cpi" in value_keys:
+                values["vendor_cpi"] = supplier_cpi_for_admin(attempt)
+            yield [values[value_key] for value_key, _, _ in export_fields]
 
     return headers, rows(), widths
 
