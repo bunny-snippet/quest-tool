@@ -25,6 +25,7 @@
   let totalPages = 1;
   let requestController = null;
   let searchTimer = null;
+  let hasLoaded = false;
 
   const escapeHtml = (value) => String(value ?? '').replace(/[&<>'"]/g, (char) => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;',
@@ -192,6 +193,7 @@
   }
 
   async function load(page = currentPage) {
+    hasLoaded = true;
     currentPage = Math.max(1, page);
     if (requestController) requestController.abort();
     requestController = new AbortController();
@@ -256,5 +258,9 @@
   });
 
   updateHierarchyOptions();
-  load(1);
+  const activityPanel = panel.closest('[data-activity-panel]');
+  if (!activityPanel || !activityPanel.hidden) load(1);
+  else document.addEventListener('user-activity:change', (event) => {
+    if (!hasLoaded && event.detail?.panel === activityPanel.dataset.activityPanel) load(1);
+  });
 })();

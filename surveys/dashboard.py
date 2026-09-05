@@ -20,7 +20,7 @@ INITIATED = (SurveyAttempt.Status.INITIATED, SurveyAttempt.Status.REDIRECTED)
 DASHBOARD_RANGE_LABELS = {
     "24h": "Last 24 hours",
     "48h": "Last 48 hours",
-    "72h": "Last 72 hours",
+    "7d": "Last 7 days",
     "month": "Current month",
     "3m": "Last 3 months",
     "6m": "Last 6 months",
@@ -117,7 +117,7 @@ def dashboard_range_window(range_key, now=None, financial_year=None):
 
     key = str(range_key or "24h").strip().lower()
     if key not in DASHBOARD_RANGE_LABELS:
-        raise ValueError("Range must be one of: 24h, 48h, 72h, month, 3m, 6m or fy.")
+        raise ValueError("Range must be one of: 24h, 48h, 7d, month, 3m, 6m or fy.")
     end = now or timezone.now()
     if timezone.is_naive(end):
         end = timezone.make_aware(end, timezone.get_current_timezone())
@@ -125,7 +125,7 @@ def dashboard_range_window(range_key, now=None, financial_year=None):
     buckets = []
     bucket_label = ""
 
-    if key in {"24h", "48h", "72h"}:
+    if key in {"24h", "48h"}:
         hours = int(key[:-1])
         bucket_hours = hours // 12
         start = end - timedelta(hours=hours)
@@ -140,6 +140,19 @@ def dashboard_range_window(range_key, now=None, financial_year=None):
                 "upper": upper,
             })
         bucket_label = f"{bucket_hours}-hour intervals"
+    elif key == "7d":
+        start = end - timedelta(days=7)
+        for index in range(7):
+            lower = start + timedelta(days=index)
+            upper = min(end, lower + timedelta(days=1))
+            buckets.append({
+                "key": timezone.localtime(lower).date().isoformat(),
+                "label": timezone.localtime(lower).strftime("%d %b %Y"),
+                "short_label": timezone.localtime(lower).strftime("%d %b"),
+                "lower": lower,
+                "upper": upper,
+            })
+        bucket_label = "Daily intervals"
     elif key == "month":
         start = local_end.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
         lower = start
@@ -220,6 +233,28 @@ def dashboard_range_window(range_key, now=None, financial_year=None):
         "end": end,
         "buckets": buckets,
         "financial_year": selected_year if key == "fy" else None,
+    }
+
+
+def dashboard_comparison_window(range_window):
+    """Return the fair baseline window for the selected dashboard range."""
+
+    start = range_window["start"]
+    end = range_window["end"]
+    if range_window["key"] == "month":
+        previous_start = _month_shift(start, -1)
+        previous_month_end = start
+        previous_end = min(previous_month_end, previous_start + (end - start))
+        return {
+            "start": previous_start,
+            "end": previous_end,
+            "label": "Previous month to date",
+        }
+    duration = end - start
+    return {
+        "start": start - duration,
+        "end": start,
+        "label": "Previous equivalent period",
     }
 
 
@@ -312,10 +347,14 @@ def _client_distribution(queryset, user, card_access):
     return rows
 
 
-def _top_users(queryset, user, card_access, total_completes):
-    rows = queryset.exclude(platform_user_id=None).values(
-        "platform_user_id", "platform_user__first_name", "platform_user__last_name",
-        "platform_user__username",
+def _top_suppliers(queryset, user, card_access, total_completes):
+    rows = queryset.values(
+        "vendor_id", "vendor__first_name", "vendor__last_name", "vendor__username",
+        "vendor__employee_profile__company_name",
+        "platform_user__employee_profile__organization_unit__unit_type",
+        "platform_user__employee_profile__organization_unit__name",
+        "platform_user__employee_profile__organization_unit__parent__name",
+        "platform_user__employee_profile__organization_unit__parent__parent__name",
     ).annotate(
         hits=Count("id"),
         completes=Count("id", filter=Q(status=COMPLETED)),
@@ -324,25 +363,50 @@ def _top_users(queryset, user, card_access, total_completes):
             filter=Q(status=COMPLETED),
             default=Decimal("0.00"),
         ),
-    ).order_by("-completes", "-hits", "platform_user__first_name")[:8]
-    result = []
+    )
+    merged = {}
     for row in rows:
-        name = " ".join(filter(None, [row["platform_user__first_name"], row["platform_user__last_name"]])).strip()
-        result.append({
-            "user_id": row["platform_user_id"],
-            "name": name or row["platform_user__username"] or "Deleted user",
-            "hits": row["hits"],
-            "completes": row["completes"],
-            "conversion_rate": round(row["completes"] / row["hits"] * 100, 1) if row["hits"] else 0.0,
-            "contribution_percent": (
-                round(row["completes"] / total_completes * 100, 1)
-                if total_completes else 0.0
-            ),
-            "revenue": (
-                _visible_revenue(user, row["revenue"])
-                if card_access.get("revenue") else None
-            ),
+        supplier_name = row["vendor__employee_profile__company_name"] or " ".join(filter(None, [
+            row["vendor__first_name"], row["vendor__last_name"],
+        ])).strip() or row["vendor__username"] or "Direct traffic"
+        unit_type = row["platform_user__employee_profile__organization_unit__unit_type"]
+        if unit_type == "branch":
+            branch_name = row["platform_user__employee_profile__organization_unit__name"]
+        elif unit_type == "sub_branch":
+            branch_name = row["platform_user__employee_profile__organization_unit__parent__name"]
+        elif unit_type == "shift":
+            branch_name = row["platform_user__employee_profile__organization_unit__parent__parent__name"]
+        else:
+            branch_name = None
+        branch_name = branch_name or "Unassigned branch"
+        key = (row["vendor_id"], supplier_name, branch_name)
+        item = merged.setdefault(key, {
+            "supplier_id": row["vendor_id"],
+            "name": supplier_name,
+            "branch_name": branch_name,
+            "hits": 0,
+            "completes": 0,
+            "revenue": Decimal("0.00"),
         })
+        item["hits"] += row["hits"]
+        item["completes"] += row["completes"]
+        item["revenue"] += row["revenue"] or Decimal("0.00")
+    result = sorted(
+        merged.values(),
+        key=lambda item: (-item["completes"], -item["hits"], item["name"].casefold()),
+    )[:8]
+    for item in result:
+        item["conversion_rate"] = (
+            round(item["completes"] / item["hits"] * 100, 1) if item["hits"] else 0.0
+        )
+        item["contribution_percent"] = (
+            round(item["completes"] / total_completes * 100, 1)
+            if total_completes else 0.0
+        )
+        item["revenue"] = (
+            _visible_revenue(user, item["revenue"])
+            if card_access.get("revenue") else None
+        )
     return result
 
 
@@ -406,7 +470,7 @@ def _percent_change(current, previous):
     return round((current_value - previous_value) / abs(previous_value) * 100, 1)
 
 
-def _comparison_payload(queryset, user, card_access, current_values):
+def _comparison_payload(queryset, user, card_access, current_values, label):
     completed_filter = Q(status=COMPLETED)
     survey_termination_filter = Q(status=SurveyAttempt.Status.TERMINATED) & ~Q(
         status_source="local_prescreener"
@@ -449,7 +513,7 @@ def _comparison_payload(queryset, user, card_access, current_values):
         for key, value in values.items()
     }
     return {
-        "label": "Previous equivalent period",
+        "label": label,
         "values": visible_values,
         "deltas": {
             key: _percent_change(current_values.get(key), value)
@@ -474,6 +538,7 @@ def build_dashboard_payload(
     finance_client_id=None,
     client_options=None,
     comparison_queryset=None,
+    comparison_label="Previous equivalent period",
     financial_years=None,
 ):
     range_window = range_window or dashboard_range_window("24h")
@@ -484,9 +549,14 @@ def build_dashboard_payload(
     desktop_hit_filter = Q(entry_device__icontains="desktop") | Q(entry_device__icontains="laptop")
     mobile_hit_filter = Q(entry_device__icontains="mobile") | Q(entry_device__icontains="phone")
     tablet_hit_filter = Q(entry_device__icontains="tablet") | Q(entry_device__iexact="tab")
+    last_hour_start = range_window["end"] - timedelta(hours=1)
     totals = queryset.aggregate(
         hits=Count("id"),
         completes=Count("id", filter=completed_filter),
+        last_hour_completes=Count(
+            "id",
+            filter=completed_filter & Q(initiated_at__gte=last_hour_start),
+        ),
         initiated=Count("id", filter=Q(status__in=INITIATED)),
         terminated=Count("id", filter=Q(status=SurveyAttempt.Status.TERMINATED)),
         survey_terminated=Count("id", filter=survey_termination_filter),
@@ -527,6 +597,9 @@ def build_dashboard_payload(
         key: value if card_access.get(key, False) else None
         for key, value in summary_values.items()
     }
+    summary["last_hour_completes"] = (
+        totals["last_hour_completes"] if card_access.get("completes") else None
+    )
     summary["revenue_currency"] = (
         summary_values["revenue_currency"]
         if any(card_access.get(key) for key in ("revenue", "average_cpi", "rpc"))
@@ -573,7 +646,9 @@ def build_dashboard_payload(
         "range": _range_payload(range_window),
         "summary": summary,
         "comparison": (
-            _comparison_payload(comparison_queryset, user, card_access, summary_values)
+            _comparison_payload(
+                comparison_queryset, user, card_access, summary_values, comparison_label
+            )
             if comparison_queryset is not None else None
         ),
         "financial_years": financial_years or [],
@@ -609,8 +684,8 @@ def build_dashboard_payload(
                 ),
             )
         } if chart_access.get("device") else None,
-        "top_users": (
-            _top_users(queryset, user, card_access, totals["completes"])
+        "top_suppliers": (
+            _top_suppliers(queryset, user, card_access, totals["completes"])
             if chart_access.get("top_users") else None
         ),
         "generated_at": timezone.now(),
